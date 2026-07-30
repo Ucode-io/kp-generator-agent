@@ -14,10 +14,15 @@ ENV NODE_ENV=production \
     CODEX_PYTHON=python3 \
     KP_AGENT_HOST=0.0.0.0 \
     KP_AGENT_PORT=8787 \
-    KP_DISABLE_WEB_RESEARCH=1
-# NOTE: KP_AGENT_API_KEY is injected at deploy time via a k8s secret, never baked in.
+    KP_DISABLE_WEB_RESEARCH=1 \
+    DOTENV_CONFIG_PATH=/app/.env
+# NOTE: KP_AGENT_API_KEY is injected at deploy time via the cluster Vault Agent,
+# which writes /app/.env (annotation secret-volume-path-.env: /app). The app code
+# therefore MUST NOT live in /app or the injected volume would shadow it — every
+# other ucode node service keeps code in /usr/src/app for this exact reason.
+# DOTENV_CONFIG_PATH points `import "dotenv/config"` at the injected /app/.env.
 
-WORKDIR /app
+WORKDIR /usr/src/app
 
 # Install production dependencies first for better layer caching.
 COPY package.json package-lock.json ./
