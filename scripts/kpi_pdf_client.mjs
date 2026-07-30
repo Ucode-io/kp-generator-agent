@@ -8570,6 +8570,11 @@ async function buildKpiPdfReportV5(question = "KP PDF generation", progress = as
 
   // HTML-only mode: post-render PDF QA (G5/G6) and PDF promotion (G7) are skipped.
   // The proposal HTML is already built and validated by the DOM geometry gate (G4).
+  // The request state machine (kp_request_status.mjs) is linear and only allows
+  // rendering -> qa -> promoting -> ready, so we still walk those states. There is
+  // no PDF artifact to re-QA or promote, so these are status-only transitions.
+  status = await setStatus(workspace, status, "qa", { progress: 80 });
+  status = await setStatus(workspace, status, "promoting", { progress: 95 });
   status = await setStatus(workspace, status, "ready", { progress: 100 });
 
   return {
