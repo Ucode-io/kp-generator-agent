@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://udevs.local/schemas/kp/reference-session-store-v1.schema.json",
+  "title": "KP ReferenceSessionStore v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "sessionKey", "sessionKeyHash", "activeSetId", "sets", "assets", "updatedAt"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "sessionKey": { "type": "string", "minLength": 1 },
+    "sessionKeyHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "activeSetId": { "type": ["string", "null"] },
+    "sets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["setId", "status", "assetIds", "createdAt", "updatedAt"],
+        "properties": {
+          "setId": { "type": "string", "pattern": "^RSET-[A-Za-z0-9._-]+$" },
+          "status": { "enum": ["active", "cleared", "consumed", "expired"] },
+          "assetIds": { "type": "array", "items": { "type": "string" } },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["assetId", "kind", "role", "secondaryRoles", "status", "priority", "classificationConfidence", "classificationMethod", "origins", "createdAt", "updatedAt", "reservations", "consumptions", "warnings"],
+        "properties": {
+          "assetId": { "type": "string", "pattern": "^ASSET-[A-Za-z0-9._-]+$" },
+          "kind": { "enum": ["pdf", "image", "url", "logo", "font", "text", "audio", "data", "unknown"] },
+          "role": { "enum": ["brand_system", "visual_style", "product_analog", "logo_asset", "content_evidence", "data_source", "unknown"] },
+          "secondaryRoles": { "type": "array", "items": { "type": "string" } },
+          "status": { "enum": ["pending", "reserved", "consumed", "cleared", "expired"] },
+          "priority": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "classificationConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "classificationMethod": { "type": "string", "minLength": 1 },
+          "classificationRationale": { "type": ["string", "null"], "maxLength": 300 },
+          "aspectAllow": { "type": "array", "items": { "type": "string" } },
+          "aspectDeny": { "type": "array", "items": { "type": "string" } },
+          "origins": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "fileName": { "type": ["string", "null"] },
+          "mimeType": { "type": ["string", "null"] },
+          "storedPath": { "type": ["string", "null"] },
+          "url": { "type": ["string", "null"] },
+          "sha256": { "type": ["string", "null"], "pattern": "^(sha256:)?[0-9a-f]{64}$" },
+          "sizeBytes": { "type": "integer", "minimum": 0 },
+          "caption": { "type": ["string", "null"] },
+          "instruction": { "type": ["string", "null"] },
+          "autoSelectableUntil": { "type": ["string", "null"], "format": "date-time" },
+          "purgeAfter": { "type": ["string", "null"], "format": "date-time" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" },
+          "reservations": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "consumptions": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "warnings": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

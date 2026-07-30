@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://udevs.local/schemas/kp/evidence-manifest-v2.schema.json",
+  "title": "KP EvidenceManifest v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "manifestId", "requestId", "sessionKey", "intakeFingerprint", "createdAt", "referenceMode", "primaryVisualReferenceId", "selectionTrace", "items"],
+  "properties": {
+    "schemaVersion": { "const": "2.0" },
+    "manifestId": { "type": "string", "pattern": "^EMAN-[A-Za-z0-9._-]+$" },
+    "requestId": { "type": "string", "pattern": "^KP-[0-9]{8}-[A-Z0-9]{6,32}$" },
+    "sessionKey": { "type": "string", "minLength": 8 },
+    "intakeFingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "referenceMode": { "enum": ["explicit_full", "explicit_partial", "none"] },
+    "primaryVisualReferenceId": { "type": ["string", "null"], "pattern": "^REF-[A-Za-z0-9._-]+$" },
+    "userInstruction": { "type": ["string", "null"] },
+    "selectionTrace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["includedReferenceIds", "excluded", "rulesApplied"],
+      "properties": {
+        "includedReferenceIds": { "type": "array", "items": { "type": "string" } },
+        "excluded": { "type": "array", "items": { "type": "object" } },
+        "primaryReferenceId": { "type": ["string", "null"] },
+        "primaryReason": { "type": ["string", "null"] },
+        "rulesApplied": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "assetId", "kind", "role", "secondaryRoles", "classificationConfidence", "classificationMethod", "origins", "sha256", "sizeBytes", "explicit", "priority", "status", "warnings"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^REF-[A-Za-z0-9._-]+$" },
+          "assetId": { "type": "string", "pattern": "^ASSET-[A-Za-z0-9._-]+$" },
+          "kind": { "enum": ["pdf", "image", "url", "logo", "font", "text", "audio", "data", "unknown"] },
+          "role": { "enum": ["brand_system", "visual_style", "product_analog", "logo_asset", "content_evidence", "data_source", "unknown"] },
+          "secondaryRoles": { "type": "array", "items": { "enum": ["brand_system", "visual_style", "product_analog", "logo_asset", "content_evidence", "data_source", "unknown"] } },
+          "classificationConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "classificationMethod": { "type": "string", "minLength": 1 },
+          "aspectAllow": { "type": "array", "items": { "type": "string" } },
+          "aspectDeny": { "type": "array", "items": { "type": "string" } },
+          "origins": { "type": "array", "items": { "type": "object" } },
+          "replyDepth": { "type": "integer", "minimum": 0 },
+          "fileName": { "type": ["string", "null"] },
+          "mimeType": { "type": ["string", "null"] },
+          "localPath": { "type": ["string", "null"] },
+          "url": { "type": ["string", "null"], "format": "uri" },
+          "caption": { "type": ["string", "null"] },
+          "instruction": { "type": ["string", "null"] },
+          "sha256": { "type": "string", "pattern": "^(sha256:)?[0-9a-f]{64}$" },
+          "sizeBytes": { "type": "integer", "minimum": 0 },
+          "explicit": { "type": "boolean" },
+          "priority": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "status": { "enum": ["selected", "materialized"] },
+          "warnings": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "referenceMode": { "const": "explicit_full" } } },
+      "then": {
+        "properties": {
+          "primaryVisualReferenceId": { "type": "string", "pattern": "^REF-[A-Za-z0-9._-]+$" }
+        }
+      }
+    }
+  ]
+}

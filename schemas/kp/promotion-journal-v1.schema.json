@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://udevs.local/schemas/kp/promotion-journal-v1.schema.json",
+  "title": "KP PromotionJournal v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "requestId", "executionId", "executionVariant", "state", "promotionAttemptId", "createdFinalByThisAttempt", "candidateRelativePath", "finalRelativePath", "candidateSha256", "finalSha256", "finalFileIdentity", "qaReportSha256", "proposalRecordSha256", "previousProposalRecord", "history"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "requestId": { "type": "string" },
+    "executionId": { "type": "string", "minLength": 1 },
+    "executionVariant": { "type": "string", "minLength": 1 },
+    "state": { "enum": ["prepared", "file_promoted", "qa_finalized", "record_ready", "commit_intent", "committed", "rolled_back"] },
+    "promotionAttemptId": { "type": "string", "minLength": 1 },
+    "createdFinalByThisAttempt": { "type": "boolean" },
+    "candidateRelativePath": { "type": "string" },
+    "finalRelativePath": { "type": "string" },
+    "candidateSha256": { "type": ["string", "null"], "pattern": "^(sha256:)?[0-9a-f]{64}$" },
+    "finalSha256": { "type": ["string", "null"], "pattern": "^(sha256:)?[0-9a-f]{64}$" },
+    "finalFileIdentity": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["dev", "ino"],
+      "properties": {
+        "dev": { "type": "string", "minLength": 1 },
+        "ino": { "type": "string", "minLength": 1 }
+      }
+    },
+    "qaReportSha256": { "type": ["string", "null"], "pattern": "^(sha256:)?[0-9a-f]{64}$" },
+    "proposalRecordSha256": { "type": ["string", "null"], "pattern": "^(sha256:)?[0-9a-f]{64}$" },
+    "previousProposalRecord": { "type": ["object", "null"] },
+    "history": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["state", "at"],
+        "properties": {
+          "state": { "type": "string" },
+          "at": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  }
+}

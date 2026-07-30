@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://udevs.local/schemas/kp/candidate-evidence-bundle-v1.schema.json",
+  "title": "KP CandidateEvidenceBundle v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "sessionKeyHash", "intakeFingerprint", "items", "selectionTrace"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "sessionKeyHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "intakeFingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "items": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["assetId", "kind", "role", "selectionSource", "storedPath", "url", "sha256"],
+        "properties": {
+          "assetId": { "type": "string", "pattern": "^ASSET-[A-Za-z0-9._-]+$" },
+          "kind": { "enum": ["stored_file", "url", "inline_theme_tokens"] },
+          "role": { "enum": ["brand_system", "visual_style", "product_analog", "logo_asset", "content_evidence", "data_source", "unknown"] },
+          "selectionSource": { "enum": ["current", "reply", "pending", "history", "explicit_selector", "test"] },
+          "storedPath": { "type": ["string", "null"], "minLength": 1 },
+          "url": { "type": ["string", "null"], "format": "uri" },
+          "sha256": { "type": ["string", "null"], "pattern": "^(sha256:)?[0-9a-f]{64}$" },
+          "messageId": { "type": ["integer", "null"], "minimum": 0 },
+          "uploaderUserId": { "type": ["string", "null"], "maxLength": 120 },
+          "themeTokens": { "type": ["object", "null"], "additionalProperties": true }
+        }
+      }
+    },
+    "selectionTrace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "includedAssetIds", "excluded", "primaryAssetId", "primaryReason", "selector", "rulesApplied", "ordinalBase"],
+      "properties": {
+        "mode": { "enum": ["explicit_full", "explicit_partial", "none"] },
+        "includedAssetIds": { "type": "array", "items": { "type": "string" } },
+        "excluded": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["assetId", "reason"],
+            "properties": {
+              "assetId": { "type": "string" },
+              "reason": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "primaryAssetId": { "type": ["string", "null"] },
+        "primaryReason": { "type": ["string", "null"] },
+        "selector": { "type": ["string", "null"] },
+        "rulesApplied": { "type": "array", "items": { "type": "string" } },
+        "ordinalBase": { "const": 1 }
+      }
+    }
+  }
+}

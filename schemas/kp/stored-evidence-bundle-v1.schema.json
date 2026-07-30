@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://udevs.local/schemas/kp/stored-evidence-bundle-v1.schema.json",
+  "title": "KP StoredEvidenceBundle v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "requestId", "sessionKeyHash", "intakeFingerprint", "items", "selectionTrace"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "requestId": { "type": "string", "pattern": "^KP-[0-9]{8}-[A-Z0-9]{6,32}$" },
+    "sessionKeyHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "intakeFingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["assetId", "selectionSource"],
+        "properties": {
+          "assetId": { "type": "string", "pattern": "^ASSET-[A-Za-z0-9._-]+$" },
+          "selectionSource": { "enum": ["current", "reply", "pending", "history", "explicit_selector", "test"] },
+          "storedPath": { "type": ["string", "null"], "minLength": 1 },
+          "url": { "type": ["string", "null"], "format": "uri" },
+          "sha256": { "type": ["string", "null"], "pattern": "^(sha256:)?[0-9a-f]{64}$" },
+          "messageId": { "type": ["integer", "null"], "minimum": 0 },
+          "uploaderUserId": { "type": ["string", "null"], "maxLength": 120 }
+        }
+      }
+    },
+    "selectionTrace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "includedAssetIds", "excluded", "rulesApplied", "ordinalBase"],
+      "properties": {
+        "mode": { "enum": ["explicit_full", "explicit_partial", "none"] },
+        "includedAssetIds": { "type": "array", "items": { "type": "string" } },
+        "excluded": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["assetId", "reason"],
+            "properties": {
+              "assetId": { "type": "string" },
+              "reason": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "primaryAssetId": { "type": ["string", "null"] },
+        "primaryReason": { "type": ["string", "null"] },
+        "selector": { "type": ["string", "null"] },
+        "rulesApplied": { "type": "array", "items": { "type": "string" } },
+        "ordinalBase": { "const": 1 }
+      }
+    }
+  }
+}

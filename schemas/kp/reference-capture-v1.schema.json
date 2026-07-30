@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://udevs.local/schemas/kp/reference-capture-v1.schema.json",
+  "title": "KP ReferenceCapture v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "captureId", "referenceId", "captureVersion", "inputFingerprint", "status", "mediaKind", "samples", "metadata", "warnings", "failure"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "captureId": { "type": "string", "pattern": "^RCAP-[A-Za-z0-9._-]+$" },
+    "referenceId": { "type": "string", "pattern": "^REF-[A-Za-z0-9._-]+$" },
+    "captureVersion": { "const": "capture-v1" },
+    "inputFingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "status": { "enum": ["complete", "partial", "blocked", "failed"] },
+    "mediaKind": { "enum": ["pdf", "image", "url", "logo"] },
+    "pageCount": { "type": ["integer", "null"], "minimum": 0 },
+    "sampledPageIndexes": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+    "samples": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["frameId", "kind", "artifactPath", "sha256", "width", "height", "quality"],
+        "properties": {
+          "frameId": { "type": "string", "minLength": 1 },
+          "kind": { "enum": ["pdf_page", "image", "logo", "web_viewport", "web_element"] },
+          "pageIndex": { "type": ["integer", "null"], "minimum": 0 },
+          "pageNumber": { "type": ["integer", "null"], "minimum": 1 },
+          "viewportLabel": { "enum": ["top", "middle", "lower", "main_element", null] },
+          "artifactPath": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^(sha256:)?[0-9a-f]{64}$" },
+          "width": { "type": "integer", "minimum": 1 },
+          "height": { "type": "integer", "minimum": 1 },
+          "quality": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["blankRatio", "usefulContentRatio", "isInterstitial"],
+            "properties": {
+              "blankRatio": { "type": "number", "minimum": 0, "maximum": 1 },
+              "usefulContentRatio": { "type": "number", "minimum": 0, "maximum": 1 },
+              "isInterstitial": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mimeTypeVerified": { "type": ["string", "null"] },
+        "alpha": { "type": "boolean" },
+        "redirectCount": { "type": "integer", "minimum": 0 },
+        "finalUrl": { "type": ["string", "null"] }
+      }
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "failure": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

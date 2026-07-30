@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://udevs.local/schemas/kp/proposal-record-v1.schema.json",
+  "title": "KP ProposalRecord v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "requestId", "state", "rendererVersion", "packageRelativePath", "qaReportRelativePath", "artifact", "failure", "updatedAt"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "requestId": { "type": "string" },
+    "state": { "enum": ["created", "rendering", "ready", "failed"] },
+    "rendererVersion": { "type": "string", "minLength": 1 },
+    "packageRelativePath": { "type": ["string", "null"] },
+    "qaReportRelativePath": { "type": ["string", "null"] },
+    "artifact": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["relativePath", "sha256", "sizeBytes", "pageCount"],
+      "properties": {
+        "relativePath": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^(sha256:)?[0-9a-f]{64}$" },
+        "sizeBytes": { "type": "integer", "minimum": 1 },
+        "pageCount": { "type": "integer", "minimum": 2, "maximum": 50 }
+      }
+    },
+    "failure": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["code", "stage", "message"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "stage": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

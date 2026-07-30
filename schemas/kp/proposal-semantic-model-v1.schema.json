@@ -1,0 +1,292 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://udevs.local/schemas/kp/proposal-semantic-model-v1.schema.json",
+  "title": "KP ProposalSemanticModel v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "semanticModelId", "requestId", "status", "commercialLockHash", "project", "actors", "capabilities", "tasks", "scopeItems", "events", "states", "decisions", "integrations", "dataStores", "processes", "processRelations", "ownership", "primaryProcessId", "architecture", "market", "roadmap", "team", "commercial", "analogs", "swot", "risks", "sources", "warnings"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "semanticModelId": { "type": "string", "pattern": "^PSM-[A-Za-z0-9._-]+$" },
+    "requestId": { "type": "string" },
+    "status": { "enum": ["grounded", "grounded_with_recommendations", "pending"] },
+    "commercialLockHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "category", "durationMonths", "durationWeeks", "sourceIds"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "category": { "type": "string", "minLength": 1 },
+        "durationMonths": { "type": "number", "minimum": 0 },
+        "durationWeeks": { "type": "number", "minimum": 0 },
+        "durationTruthStatus": { "$ref": "#/$defs/truthStatus" },
+        "durationSourceIds": { "$ref": "#/$defs/stringArray" },
+        "durationDerivationRuleId": { "type": ["string", "null"] },
+        "sourceIds": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "actors": { "type": "array", "items": { "$ref": "#/$defs/actor" } },
+    "capabilities": { "type": "array", "items": { "$ref": "#/$defs/capability" } },
+    "tasks": { "type": "array", "items": { "$ref": "#/$defs/task" } },
+    "scopeItems": { "type": "array", "items": { "$ref": "#/$defs/scopeItem" } },
+    "events": { "type": "array", "items": { "$ref": "#/$defs/event" } },
+    "states": { "type": "array", "items": { "$ref": "#/$defs/state" } },
+    "decisions": { "type": "array", "items": { "$ref": "#/$defs/decision" } },
+    "integrations": { "type": "array", "items": { "$ref": "#/$defs/integration" } },
+    "dataStores": { "type": "array", "items": { "$ref": "#/$defs/dataStore" } },
+    "processes": { "type": "array", "items": { "$ref": "#/$defs/process" } },
+    "processRelations": { "type": "array", "items": { "$ref": "#/$defs/processRelation" } },
+    "ownership": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["ownedCapabilityIds", "partnerIntegrationIds", "deferredCapabilityIds"],
+      "properties": {
+        "ownedCapabilityIds": { "$ref": "#/$defs/stringArray" },
+        "partnerIntegrationIds": { "$ref": "#/$defs/stringArray" },
+        "deferredCapabilityIds": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "primaryProcessId": { "type": ["string", "null"] },
+    "architecture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["components", "relations", "boundaries"],
+      "properties": {
+        "components": { "type": "array", "items": { "$ref": "#/$defs/architectureComponent" } },
+        "relations": { "type": "array", "items": { "$ref": "#/$defs/architectureRelation" } },
+        "boundaries": { "type": "array", "items": { "$ref": "#/$defs/architectureBoundary" } }
+      }
+    },
+    "market": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "geography", "period", "currency", "tam", "sam", "somScenarios", "methodology", "sourceIds"],
+      "properties": {
+        "status": { "enum": ["unknown", "verified", "modeled", "conflicted"] },
+        "geography": { "type": ["string", "null"] },
+        "period": { "type": ["string", "null"] },
+        "currency": { "type": ["string", "null"] },
+        "tam": { "anyOf": [{ "$ref": "#/$defs/marketMetric" }, { "type": "null" }] },
+        "sam": { "anyOf": [{ "$ref": "#/$defs/marketMetric" }, { "type": "null" }] },
+        "somScenarios": { "type": "array", "items": { "$ref": "#/$defs/marketScenario" } },
+        "methodology": { "$ref": "#/$defs/stringArray" },
+        "sourceIds": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "roadmap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["durationMonths", "durationWeeks", "timeScale", "phases", "dependencies"],
+      "properties": {
+        "durationMonths": { "type": "number", "minimum": 0 },
+        "durationWeeks": { "type": "number", "minimum": 0 },
+        "timeScale": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["unit", "start", "end"],
+          "properties": {
+            "unit": { "enum": ["week", "month"] },
+            "start": { "type": "number" },
+            "end": { "type": "number" }
+          }
+        },
+        "phases": { "type": "array", "items": { "$ref": "#/$defs/roadmapPhase" } },
+        "dependencies": { "type": "array", "items": { "$ref": "#/$defs/roadmapDependency" } }
+      }
+    },
+    "team": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["people", "roles", "monthCount", "monthlyTotals", "peakMonth", "fteMonths", "peakFte", "sourceIds"],
+      "properties": {
+        "people": { "type": ["number", "null"], "minimum": 0 },
+        "roles": { "type": "array", "items": { "$ref": "#/$defs/teamRole" } },
+        "monthCount": { "type": "integer", "minimum": 0 },
+        "monthlyTotals": { "type": "array", "items": { "type": "number", "minimum": 0 } },
+        "peakMonth": { "type": ["integer", "null"], "minimum": 1 },
+        "fteMonths": { "type": ["number", "null"], "minimum": 0 },
+        "peakFte": { "type": ["number", "null"], "minimum": 0 },
+        "sourceIds": { "$ref": "#/$defs/stringArray" },
+        "truthStatus": { "$ref": "#/$defs/truthStatus" },
+        "derivationRuleId": { "type": ["string", "null"] }
+      }
+    },
+    "commercial": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commercialLockHash", "currency", "projectPrice", "functionPrice", "payments"],
+      "properties": {
+        "commercialLockHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "currency": { "type": "string", "minLength": 3 },
+        "projectPrice": { "type": "number", "minimum": 0 },
+        "projectAmountKind": { "enum": ["budget_constraint", "confirmed_quote", "planning_total", "unknown"] },
+        "projectPriceTruthStatus": { "$ref": "#/$defs/truthStatus" },
+        "projectPriceSourceIds": { "$ref": "#/$defs/stringArray" },
+        "projectPriceDerivationRuleId": { "type": ["string", "null"] },
+        "budgetAmount": { "type": "number", "minimum": 0 },
+        "budgetCurrency": { "type": ["string", "null"] },
+        "budgetAmountTruthStatus": { "$ref": "#/$defs/truthStatus" },
+        "budgetCurrencyTruthStatus": { "$ref": "#/$defs/truthStatus" },
+        "functionPrice": { "type": "array", "items": { "$ref": "#/$defs/commercialAmount" } },
+        "payments": { "type": "array", "items": { "$ref": "#/$defs/paymentAmount" } }
+      }
+    },
+    "analogs": { "type": "array", "items": { "$ref": "#/$defs/analog" } },
+    "swot": { "type": "array", "items": { "$ref": "#/$defs/swot" } },
+    "risks": { "type": "array", "items": { "$ref": "#/$defs/risk" } },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scopeItems", "capabilities"],
+      "properties": {
+        "scopeItems": { "type": "array", "items": { "$ref": "#/$defs/scopeItem" } },
+        "capabilities": { "type": "array", "items": { "$ref": "#/$defs/capability" } }
+      }
+    },
+    "sources": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  },
+  "$defs": {
+    "truthStatus": { "enum": ["explicit", "verified", "single_source", "recommended", "inferred", "assumed", "unknown"] },
+    "inclusion": { "enum": ["requested", "in_scope", "recommended", "deferred", "out_of_scope", "unknown"] },
+    "ownership": { "enum": ["owned", "partner_integrated", "deferred", "out_of_scope", "unknown"] },
+    "stringArray": { "type": "array", "items": { "type": "string" } },
+    "envelope": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "label", "truthStatus", "sourceIds", "derivationRuleId"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "truthStatus": { "$ref": "#/$defs/truthStatus" },
+        "sourceIds": { "$ref": "#/$defs/stringArray" },
+        "derivationRuleId": { "type": ["string", "null"] }
+      }
+    },
+    "actor": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["type"], "properties": { "type": { "enum": ["end_user", "internal_operator", "partner_actor", "system_actor", "unknown"] } } }] },
+    "capability": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["type"], "properties": { "type": { "enum": ["domain_capability", "product_surface", "control", "reporting", "support", "unknown"] } } }] },
+    "task": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["actorId", "type"], "properties": { "actorId": { "type": ["string", "null"] }, "type": { "enum": ["user_task", "service_task", "manual_task", "review", "unknown"] } } }] },
+    "event": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["type"], "properties": { "type": { "enum": ["start", "intermediate", "message", "error", "end"] } } }] },
+    "state": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["type"], "properties": { "type": { "enum": ["initial", "active", "terminal", "exception"] } } }] },
+    "decision": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["question", "branchLabels"], "properties": { "question": { "type": "string", "minLength": 1 }, "branchLabels": { "type": "array", "minItems": 2, "items": { "type": "string", "minLength": 1 } } } }] },
+    "integration": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["type", "providerName"], "properties": { "type": { "enum": ["payment", "fiscal", "delivery", "messaging", "identity", "analytics", "other", "unknown"] }, "providerName": { "type": ["string", "null"] } } }] },
+    "dataStore": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["kind"], "properties": { "kind": { "enum": ["relational_database", "operational_data", "cache", "search_index", "object_storage", "analytics_store", "unknown"] } } }] },
+    "process": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["nodeRefs", "relationIds", "actorIds", "type"], "properties": { "nodeRefs": { "$ref": "#/$defs/stringArray" }, "relationIds": { "$ref": "#/$defs/stringArray" }, "actorIds": { "$ref": "#/$defs/stringArray" }, "type": { "enum": ["primary", "supporting", "exception"] } } }] },
+    "processRelation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "fromRef", "toRef", "type", "label"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "fromRef": { "type": "string", "minLength": 1 },
+        "toRef": { "type": "string", "minLength": 1 },
+        "type": { "enum": ["sequence", "message", "yes", "no", "success", "failure", "retry", "exception"] },
+        "label": { "type": ["string", "null"] }
+      }
+    },
+    "scopeItem": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["capabilityIds", "inclusion", "ownership", "phaseId"], "properties": { "capabilityIds": { "$ref": "#/$defs/stringArray" }, "inclusion": { "$ref": "#/$defs/inclusion" }, "ownership": { "$ref": "#/$defs/ownership" }, "phaseId": { "type": ["string", "null"] }, "epic": { "type": "string" }, "feature": { "type": "string" }, "detail": { "type": "string" }, "priority": { "type": "string" } } }] },
+    "architectureComponent": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["kind", "entityRef", "semanticRole"], "properties": { "kind": { "enum": ["channel", "application", "service", "data_store", "external"] }, "entityRef": { "type": ["string", "null"] }, "semanticRole": { "enum": ["owned", "partner", "deferred", "risk", "positive", "neutral"] } } }] },
+    "architectureRelation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "from", "to", "type", "direction"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "from": { "type": "string", "minLength": 1 },
+        "to": { "type": "string", "minLength": 1 },
+        "type": { "enum": ["request", "callback", "message", "data_flow", "dependency", "reads_writes"] },
+        "direction": { "enum": ["forward", "both", "none"] }
+      }
+    },
+    "architectureBoundary": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["componentIds", "type"], "properties": { "componentIds": { "$ref": "#/$defs/stringArray" }, "type": { "enum": ["trusted_product", "external_partner", "data_zone"] } } }] },
+    "roadmapPhase": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["time", "inclusion"], "properties": { "time": { "$ref": "#/$defs/timeSpan" }, "inclusion": { "$ref": "#/$defs/inclusion" } } }] },
+    "roadmapDependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fromPhaseId", "toPhaseId", "type", "lag", "allowOverlap"],
+      "properties": {
+        "fromPhaseId": { "type": "string", "minLength": 1 },
+        "toPhaseId": { "type": "string", "minLength": 1 },
+        "type": { "enum": ["finish_to_start", "start_to_start", "finish_to_finish"] },
+        "lag": { "type": "number" },
+        "allowOverlap": { "type": "boolean" }
+      }
+    },
+    "teamRole": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "people", "fteMonths", "peakFte", "monthlyFte", "sourceIds"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "role": { "type": "string", "minLength": 1 },
+        "people": { "type": ["number", "null"], "minimum": 0 },
+        "fteMonths": { "type": ["number", "null"], "minimum": 0 },
+        "peakFte": { "type": ["number", "null"], "minimum": 0 },
+        "monthlyFte": { "type": "array", "items": { "type": "number", "minimum": 0 } },
+        "sourceIds": { "$ref": "#/$defs/stringArray" },
+        "truthStatus": { "$ref": "#/$defs/truthStatus" },
+        "derivationRuleId": { "type": ["string", "null"] }
+      }
+    },
+    "marketMetric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "currency", "period", "geography", "shareOfParent", "truthStatus", "sourceIds", "derivationRuleId"],
+      "properties": {
+        "value": { "type": "number", "exclusiveMinimum": 0 },
+        "currency": { "type": "string", "minLength": 3 },
+        "period": { "type": "string", "minLength": 1 },
+        "geography": { "type": "string", "minLength": 1 },
+        "shareOfParent": { "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1 },
+        "claimNature": { "enum": ["observed", "reported", "estimate", "forecast", "scenario", null] },
+        "evidenceExcerpt": { "type": ["string", "null"], "maxLength": 360 },
+        "truthStatus": { "$ref": "#/$defs/truthStatus" },
+        "sourceIds": { "$ref": "#/$defs/stringArray" },
+        "derivationRuleId": { "type": ["string", "null"] }
+      }
+    },
+    "marketScenario": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["value", "currency", "period", "geography", "shareOfParent"], "properties": { "value": { "type": "number", "exclusiveMinimum": 0 }, "currency": { "type": "string", "minLength": 3 }, "period": { "type": "string", "minLength": 1 }, "geography": { "type": "string", "minLength": 1 }, "shareOfParent": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 } } }] },
+    "analog": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["url", "learning", "scopeEffect"], "properties": { "url": { "type": ["string", "null"] }, "learning": { "type": "string", "minLength": 1 }, "scopeEffect": { "enum": ["benchmark_only", "validate", "do_not_copy"] } } }] },
+    "swot": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["quadrant", "response"], "properties": { "quadrant": { "enum": ["strength", "weakness", "opportunity", "threat"] }, "response": { "type": ["string", "null"] } } }] },
+    "risk": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["severity", "mitigation"], "properties": { "severity": { "enum": ["low", "medium", "high", "critical"] }, "mitigation": { "type": ["string", "null"] } } }] },
+    "commercialAmount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "amount"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "amount": { "type": "number", "minimum": 0 },
+        "truthStatus": { "$ref": "#/$defs/truthStatus" },
+        "sourceIds": { "$ref": "#/$defs/stringArray" },
+        "derivationRuleId": { "type": ["string", "null"] }
+      }
+    },
+    "paymentAmount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "amount", "percent"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "amount": { "type": "number", "minimum": 0 },
+        "percent": { "type": "number", "minimum": 0 },
+        "truthStatus": { "$ref": "#/$defs/truthStatus" },
+        "sourceIds": { "$ref": "#/$defs/stringArray" },
+        "derivationRuleId": { "type": ["string", "null"] }
+      }
+    },
+    "timeSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit", "start", "end"],
+      "properties": {
+        "unit": { "enum": ["week", "month"] },
+        "start": { "type": "number" },
+        "end": { "type": "number" }
+      }
+    }
+  }
+}

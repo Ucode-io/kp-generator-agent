@@ -1,0 +1,4481 @@
+import crypto from "node:crypto";
+import { layoutVisualization } from "./kp_diagram_layout.mjs";
+import { renderVisualization } from "./kp_diagram_renderer.mjs";
+import {
+  assertSafeRendererText,
+  escapeHtmlAttribute,
+  escapeHtmlText,
+  safeDomId,
+} from "./kp_render_safety.mjs";
+import {
+  formatRendererUnit,
+  localizeRendererText,
+  normalizeRendererLocale,
+  rendererIntlLocale,
+  rendererPageBadges,
+  rendererPageEyebrows,
+  rendererPageTitles,
+  rendererTimePrefix,
+  resolveProposalRendererLocale,
+} from "./kp_pdf_reference_locale.mjs";
+import { canonicalizeTeamPlan } from "./kp_team_capacity.mjs";
+
+export const KP_PDF_REFERENCE_RENDERER_VERSION = "reference-driven-v5";
+
+const DEFAULT_TOTAL_PAGES = 21;
+const LAYOUT_FAMILIES = new Set([
+  "cover_asymmetric",
+  "chapter_opener",
+  "editorial_split",
+  "value_thread",
+  "evidence_story",
+  "evidence_table",
+  "connected_graph",
+  "quadrant",
+  "proportional_series",
+  "capacity_matrix",
+  "timeline",
+  "commercial_hero",
+  "decision_close",
+]);
+const PAGE_KINDS = Object.freeze([
+  "cover",
+  "opening_manifesto",
+  "chapter_why_now",
+  "problem",
+  "market_research",
+  "market_sizing",
+  "analog_research",
+  "launch_boundary",
+  "chapter_product",
+  "product_map",
+  "design_project",
+  "primary_flow",
+  "architecture",
+  "org_structure",
+  "swot",
+  "client_dependencies",
+  "chapter_delivery",
+  "function_price",
+  "team",
+  "roadmap",
+  "project_price",
+  "payments",
+  "close",
+]);
+const PAGE_INTENTS = Object.freeze([
+  "cover",
+  "opening_thesis",
+  "why_now",
+  "problem",
+  "market",
+  "tam_sam_som",
+  "analog_research",
+  "ownership_boundary",
+  "product_system",
+  "product_mind_map",
+  "design_project",
+  "bpmn_flow",
+  "architecture",
+  "organization_structure",
+  "swot",
+  "client_dependencies",
+  "delivery_logic",
+  "function_price",
+  "team_size",
+  "roadmap",
+  "project_price",
+  "payment_stages",
+  "close",
+]);
+const PAGE_EYEBROWS = Object.freeze([
+  "COMMERCIAL PROPOSAL",
+  "DECISION SUMMARY",
+  "WHY NOW",
+  "PROBLEM",
+  "MARKET EVIDENCE",
+  "MARKET SIZING",
+  "ANALOG RESEARCH",
+  "LAUNCH BOUNDARY",
+  "PRODUCT SYSTEM",
+  "PRODUCT MAP",
+  "DESIGN DIRECTION",
+  "PRIMARY FLOW",
+  "ARCHITECTURE",
+  "ORGANIZATION STRUCTURE",
+  "SWOT",
+  "CLIENT DEPENDENCIES",
+  "DELIVERY LOGIC",
+  "FUNCTION ALLOCATION",
+  "TEAM CAPACITY",
+  "DEVELOPMENT STAGES",
+  "PROJECT PRICE",
+  "PAYMENT SCHEDULE",
+  "DECISION CLOSE",
+]);
+const DEFAULT_PAGE_TITLES = Object.freeze([
+  "Commercial proposal",
+  "Four decisions turn the brief into a launch plan.",
+  "Why this decision matters now.",
+  "Where value breaks at the handoffs.",
+  "Evidence before expansion.",
+  "Market sizing logic and assumptions.",
+  "What to learn, not copy.",
+  "Own the control state. Integrate the rails.",
+  "The product becomes one operating system.",
+  "One accountable product core.",
+  "A visual system with an approval path.",
+  "The primary journey must be explicit.",
+  "A trusted core with visible partner boundaries.",
+  "Organization structure.",
+  "Strategic advantages, constraints, and responses.",
+  "Client inputs that unlock delivery.",
+  "Delivery is a sequence of accepted outcomes.",
+  "Function allocation reconciled to the commercial baseline.",
+  "Capacity matched to the delivery window.",
+  "Time spans, dependencies, and acceptance gates.",
+  "One project price with explicit boundaries.",
+  "Payments tied to accepted outcomes.",
+  "Decisions, owners, and the next action.",
+]);
+const PRIVATE_TEXT_PATTERN = /(?:file|telegram|data):\/\/|(?:^|\s)(?:\/Users\/|\/home\/|\/private\/|[A-Za-z]:\\)|\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0)\b|\bSRC-[A-Za-z0-9._-]+\b/i;
+const BIDI_OVERRIDE_PATTERN = /[\u202A-\u202E\u2066-\u2069]/;
+const FORBIDDEN_OUTPUT_PATTERN = /\b(?:lorem ipsum|placeholder|brandbook-ready|internal note|todo|tbd)\b|\bvalidated\s+[a-z0-9 _-]+\s+page\b/i;
+const CURRENCY_PRICE_PATTERN = /(?:\b[A-Z]{3}\b|US\$|\$)\s*[0-9][0-9,]*(?:\.[0-9]{1,2})?/i;
+const FONT_BY_CLASS = Object.freeze({
+  neo_grotesk_sans: "Arial, Helvetica, sans-serif",
+  humanist_sans: "Trebuchet MS, Arial, sans-serif",
+  geometric_sans: "Avenir Next, Arial, sans-serif",
+  transitional_serif: "Georgia, Times New Roman, serif",
+  display_serif: "Georgia, Times New Roman, serif",
+  monospace: "SFMono-Regular, Menlo, Consolas, monospace",
+  mixed: "Arial, Helvetica, sans-serif",
+  unknown: "Arial, Helvetica, sans-serif",
+});
+
+export function resolveStyleTokens(styleProfile = {}) {
+  const canvas = styleProfile.canvas || {};
+  const accents = styleProfile.accents || {};
+  const typography = styleProfile.typography || {};
+  const displayFallback = resolveFontStack(typography.displayClass || typography.displayFontToken);
+  const bodyFallback = resolveFontStack(typography.bodyClass || typography.bodyFontToken || "humanist_sans");
+  const metadataFallback = resolveFontStack(typography.metadataClass || typography.metadataFontToken || "monospace");
+  const background = strictColor(canvas.background, "#0A0A10", "/canvas/background");
+  const surface = strictColor(canvas.surface1, "#17141F", "/canvas/surface1");
+  const surface2 = strictColor(canvas.surface2, "#241B3D", "/canvas/surface2");
+  const text = strictColor(canvas.textPrimary, "#F2EFE6", "/canvas/textPrimary");
+  const primary = strictColor(accents.primary, "#7C5CFF", "/accents/primary");
+  const textBackgrounds = [background, surface, surface2];
+  return Object.freeze({
+    background,
+    surface,
+    surface2,
+    text,
+    muted: ensureTextContrast(strictColor(canvas.textSecondary, "#A39CAD", "/canvas/textSecondary"), textBackgrounds, text),
+    rule: strictColor(canvas.rule, "#342D42", "/canvas/rule"),
+    primary,
+    brandDeep: ensureTextContrast(primary, textBackgrounds, text),
+    secondary: ensureTextContrast(strictColor(accents.secondary, "#A78BFA", "/accents/secondary"), textBackgrounds, primary),
+    warning: ensureTextContrast(strictColor(accents.warning, "#D9A94E", "/accents/warning"), textBackgrounds, primary),
+    critical: ensureTextContrast(strictColor(accents.critical, "#F0705A", "/accents/critical"), textBackgrounds, text),
+    positive: ensureTextContrast(strictColor(accents.positive, "#4ED9A4", "/accents/positive"), textBackgrounds, primary),
+    displayStack: safeCssFontStack(typography.displayStack, displayFallback),
+    bodyStack: safeCssFontStack(typography.bodyStack, bodyFallback),
+    metadataStack: safeCssFontStack(typography.metadataStack, metadataFallback),
+    // Reference URLs provide brand expression, not component geometry.
+    // These values stay renderer-owned even if an external profile contains
+    // padding/radius fields.
+    pagePaddingX: 64,
+    pagePaddingTop: 46,
+    pagePaddingBottom: 34,
+    radiusSm: 8,
+    radiusMd: 12,
+    radiusLg: 18,
+  });
+}
+
+export function buildReferenceDrivenProposalHtml(input = {}) {
+  const normalized = normalizeRendererInput(input);
+  validatePlan(normalized.presentationPlan);
+  const totalPages = normalized.presentationPlan.pageCount;
+  const tokens = resolveStyleTokens(normalized.visualStyleProfile);
+  const content = buildContentContext(normalized, tokens);
+  assertRendererLocaleCoherence(content, normalized.visualizationSpecs);
+  const safeStyleProfile = safeDiagramStyleProfile(normalized.visualStyleProfile, tokens);
+  const dynamicRules = [];
+  const specByPage = indexVisualizationSpecs(normalized.visualizationSpecs, normalized.presentationPlan);
+  const pages = normalized.presentationPlan.pages.map((pagePlan) => renderPageFromPlan(pagePlan, {
+    ...normalized,
+    tokens,
+    content,
+    safeStyleProfile,
+    dynamicRules,
+    totalPages,
+    visualizationSpec: specByPage.get(pagePlan.pageNumber) || null,
+  }));
+  if (pages.length !== totalPages) {
+    throw rendererError("DOM_PAGE_COUNT_MISMATCH", "The renderer did not create the planned page count");
+  }
+  const nonce = crypto.randomBytes(24).toString("base64");
+  const csp = [
+    "default-src 'none'",
+    "img-src data: blob:",
+    "font-src data:",
+    "style-src 'nonce-" + nonce + "'",
+    "script-src 'nonce-" + nonce + "'",
+    "connect-src 'none'",
+    "frame-src 'none'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+  ].join("; ");
+  const styles = referenceDrivenStyles(normalized.visualStyleProfile, dynamicRules);
+  const readinessScript = renderReadinessScript();
+  const description = l(content, "Commercial proposal prepared for client review.");
+  const html = [
+    "<!doctype html>",
+    '<html lang="' + escapeHtmlAttribute(content.locale) + '">',
+    "<head>",
+    '<meta charset="utf-8">',
+    '<meta name="author" content="Udevs">',
+    '<meta name="description" content="' + escapeHtmlAttribute(description) + '">',
+    "<title>" + e(content.projectTitle) + "</title>",
+    '<meta http-equiv="Content-Security-Policy" content="' + escapeHtmlAttribute(csp) + '">',
+    '<style nonce="' + escapeHtmlAttribute(nonce) + '">' + styles + "</style>",
+    "</head>",
+    "<body>",
+    '<main class="proposal" data-renderer-version="' + KP_PDF_REFERENCE_RENDERER_VERSION + '">',
+    pages.join("\n"),
+    "</main>",
+    '<script nonce="' + escapeHtmlAttribute(nonce) + '">' + readinessScript + "</script>",
+    "</body>",
+    "</html>",
+  ].join("");
+  if (FORBIDDEN_OUTPUT_PATTERN.test(extractVisibleText(html))) {
+    throw rendererError("CONTENT_RENDER_PLACEHOLDER_FORBIDDEN", "The rendered proposal contains forbidden placeholder copy");
+  }
+  return html;
+}
+
+export function renderPageFromPlan(pagePlan, inputs = {}) {
+  validatePagePlan(pagePlan, inputs.presentationPlan?.pageCount || DEFAULT_TOTAL_PAGES);
+  const pageNumber = pagePlan.pageNumber;
+  const totalPages = Number(inputs.totalPages || inputs.presentationPlan?.pageCount || DEFAULT_TOTAL_PAGES);
+  const content = inputs.content || buildContentContext(normalizeRendererInput(inputs), inputs.tokens || resolveStyleTokens(inputs.visualStyleProfile || {}));
+  const tokens = inputs.tokens || resolveStyleTokens(inputs.visualStyleProfile || {});
+  const dynamicRules = inputs.dynamicRules || [];
+  const visualizationSpec = inputs.visualizationSpec || findVisualizationSpec(inputs.visualizationSpecs, pageNumber);
+  const isVisualizationPage = Boolean(pagePlan.visualizationSpecId || pagePlan.visualizationId);
+  if (isVisualizationPage && !visualizationSpec) {
+    throw rendererError("CONTRACT_VISUALIZATION_SPEC_INVALID", "Missing VisualizationSpec for page " + pageNumber);
+  }
+  if (!isVisualizationPage && visualizationSpec) {
+    throw rendererError("CONTRACT_VISUALIZATION_SPEC_INVALID", "Unexpected VisualizationSpec for page " + pageNumber);
+  }
+  if (visualizationSpec && visualizationSpec.pageNumber !== pageNumber) {
+    throw rendererError("CONTRACT_VISUALIZATION_SPEC_INVALID", "VisualizationSpec page does not match PresentationPlan");
+  }
+  const plannedSpecId = pagePlan.visualizationSpecId || pagePlan.visualizationId || null;
+  const actualSpecId = visualizationSpec ? (visualizationSpec.visualizationSpecId || visualizationSpec.id) : null;
+  if (plannedSpecId && actualSpecId !== plannedSpecId) {
+    throw rendererError("CONTRACT_VISUALIZATION_SPEC_INVALID", "VisualizationSpec identity does not match PresentationPlan");
+  }
+
+  const title = resolvePageTitle(pagePlan, content, visualizationSpec);
+  const badge = resolvePageBadge(pagePlan, content, visualizationSpec);
+  const body = isVisualizationPage
+    ? renderSemanticPage(visualizationSpec, pagePlan, inputs.safeStyleProfile || safeDiagramStyleProfile(inputs.visualStyleProfile || {}, tokens), dynamicRules, content)
+    : renderContentPage(pagePlan, content, tokens, dynamicRules);
+  const family = strictLayoutFamily(pagePlan.layoutFamily);
+  const storyIndex = pageKindIndex(pagePlan.kind);
+  const intentClass = safeDomId(pagePlan.intent || pagePlan.kind || PAGE_INTENTS[storyIndex]);
+  const explicitlyRequested = array(pagePlan.selectionReasons).includes("explicitly_requested_in_prompt");
+  const pageEyebrow = rendererPageEyebrows(content.locale)[storyIndex];
+  const pageKickerHtml = pagePlan.kind === "cover" ? "" : '<span class="page-kicker">' + e(pageEyebrow) + "</span>";
+  const coverTitleClass = pagePlan.kind === "cover"
+    ? title.length > 112
+      ? " cover-title-extra-long"
+      : title.length > 72
+        ? " cover-title-long"
+        : title.length > 42
+        ? " cover-title-medium"
+        : " cover-title-short"
+    : "";
+  const pageHtml = [
+    '<section class="page kp-page layout-' + family + " intent-" + intentClass + '" data-page-number="' + pageNumber + '" data-page-kind="' + escapeHtmlAttribute(pagePlan.kind) + '" data-explicitly-requested="' + String(explicitlyRequested) + '" data-layout-family="' + family + '">',
+    '<header class="page-header"><span>' + e(pageEyebrow) + '</span><strong>' + padPage(pageNumber) + " / " + totalPages + "</strong></header>",
+    '<div class="page-title-row"><div>' + pageKickerHtml + '<h1 class="page-title' + coverTitleClass + '">' + renderTitleMarkup(title) + '</h1></div><span class="page-badge">' + e(badge) + "</span></div>",
+    '<div class="page-body">' + body + "</div>",
+    '<div class="page-footer"><span>' + e(content.projectTitle) + '</span><strong>' + padPage(pageNumber) + "</strong></div>",
+    "</section>",
+  ].join("");
+  assertRenderedPageContent(pagePlan, pageHtml, {
+    content,
+    visualizationSpec,
+    pageTitle: title,
+  });
+  return pageHtml;
+}
+
+export function assertRenderedPageContent(pagePlan, pageHtml, { content = {}, visualizationSpec = null, pageTitle = "" } = {}) {
+  const pageNumber = Number(pagePlan?.pageNumber || 0);
+  const pageKind = String(pagePlan?.kind || "");
+  const isVisualizationPage = Boolean(pagePlan?.visualizationSpecId || pagePlan?.visualizationId);
+  const visible = extractVisibleText(pageHtml);
+  if (FORBIDDEN_OUTPUT_PATTERN.test(visible)) {
+    throw rendererError("CONTENT_RENDER_PLACEHOLDER_FORBIDDEN", "Page " + pageNumber + " contains placeholder copy");
+  }
+  if (visible.length < (isVisualizationPage ? 70 : 140)) {
+    throw rendererError("CONTENT_PAGE_REQUIRED_PAYLOAD_MISSING", "Page " + pageNumber + " does not contain enough client-visible content");
+  }
+  if (!pageTitle || !visible.includes(normalizeVisible(pageTitle))) {
+    throw rendererError("CONTENT_PAGE_TITLE_MISSING", "Page " + pageNumber + " does not contain its required title");
+  }
+  if (isVisualizationPage) {
+    if (!visualizationSpec || !/class="viz-canvas/.test(pageHtml)) {
+      throw rendererError("CONTENT_PAGE_REQUIRED_PAYLOAD_MISSING", "Page " + pageNumber + " is missing its semantic visualization");
+    }
+  }
+  if (visualizationSpec?.kind === "nested_market") {
+    const levelCount = (level) => (pageHtml.match(new RegExp('data-market-level="' + level + '"', "g")) || []).length;
+    const methodologyCount = (pageHtml.match(/data-market-methodology="true"/g) || []).length;
+    const disclosureCount = (pageHtml.match(/data-market-scenario-disclosure="true"/g) || []).length;
+    if (!/class="market-sizing-layout(?:\s|")/.test(pageHtml)
+      || !/class="viz-canvas market-sizing-funnel/.test(pageHtml)
+      || ["tam", "sam", "som"].some((level) => levelCount(level) !== 1)
+      || methodologyCount !== 1
+      || disclosureCount !== 1
+      || /class="sizing-worksheet/.test(pageHtml)) {
+      throw rendererError("CONTENT_MARKET_SIZING_STRUCTURE_INVALID", "The TAM/SAM/SOM page requires one three-level model, one methodology block, and one transparent disclosure");
+    }
+    const pending = visualizationSpec.variant === "formula_pending" || visualizationSpec.dataState === "pending";
+    if (pending) {
+      const formulaNodeCount = (pageHtml.match(/data-node-id="FORMULA-(?:TAM|SAM|SOM)"/g) || []).length;
+      const missingDisclosureCount = (pageHtml.match(/data-market-missing-inputs="true"/g) || []).length;
+      if (formulaNodeCount !== 3 || missingDisclosureCount !== 1 || /data-market-value=/.test(pageHtml)) {
+        throw rendererError("CONTENT_MARKET_SIZING_PENDING_INVALID", "Pending market sizing must show three formulas and one missing-input disclosure without invented values");
+      }
+    } else {
+      const tam = array(visualizationSpec.nodes).find((node) => node.id === "MARKET-TAM");
+      const sam = array(visualizationSpec.nodes).find((node) => node.id === "MARKET-SAM");
+      const scenarios = array(visualizationSpec.nodes).filter((node) => String(node.id || "").startsWith("MARKET-SOM-"));
+      const scenarioCount = (pageHtml.match(/class="market-scenario(?:\s|")/g) || []).length;
+      if (!tam?.metric || !sam?.metric || !scenarios.length || scenarioCount !== scenarios.length || scenarioCount > 3) {
+        throw rendererError("CONTENT_MARKET_SIZING_NUMERIC_INVALID", "Numeric market sizing requires TAM, SAM, and one to three SOM scenarios");
+      }
+      for (const node of [tam, sam, ...scenarios]) {
+        if (!visible.includes(normalizeVisible(formatMarketValue(node.metric, content)))) {
+          throw rendererError("CONTENT_MARKET_SIZING_NUMERIC_INVALID", "A market metric was omitted from the rendered page");
+        }
+      }
+    }
+  }
+  const visibleWithoutCoverBudget = pageKind === "cover"
+    ? extractVisibleText(pageHtml.replace(/<div class="metric cover-budget"[\s\S]*?<\/div>/i, ""))
+    : visible;
+  if (pageNumber === 1 && CURRENCY_PRICE_PATTERN.test(visibleWithoutCoverBudget)) {
+    throw rendererError("PDF_COVER_PRICE_FORBIDDEN", "The cover must not display a project price");
+  }
+  if (content.hasProjectPrice && !["function_price", "project_price", "payments", "close"].includes(pageKind)) {
+    const lockedPrice = normalizeVisible(formatMinor(content.projectPriceMinor, content.currency, content.currencyExponent, content));
+    if (visibleWithoutCoverBudget.includes(lockedPrice)) {
+      throw rendererError("CONTENT_PROJECT_PRICE_EARLY", "The locked project total is visible before the commercial section");
+    }
+  }
+  if (pageKind === "function_price") {
+    const rows = array(content.functionPrice);
+    const renderedRowCount = (pageHtml.match(/class="function-price-row"/g) || []).length;
+    const renderedCostCount = (pageHtml.match(/class="function-price-cost function-price-cost-/g) || []).length;
+    const renderedHeaderCount = (pageHtml.match(/class="function-price-head"/g) || []).length;
+    const uniqueIds = new Set(rows.map((row) => row.id));
+    if (!rows.length) {
+      if (!/class="missing-state panel-soft"/.test(pageHtml)
+        || !/class="function-price-total"/.test(pageHtml)
+        || /class="function-price-table|class="function-price-head|class="function-price-row/.test(pageHtml)
+        || !visible.includes(l(content, "Allocated subtotal"))
+        || !visible.includes(l(content, "Not supplied"))) {
+        throw rendererError("CONTENT_FUNCTION_PRICE_STRUCTURE_INVALID", "An unavailable Function Price requires one honest missing state and an undisclosed subtotal");
+      }
+    } else {
+    if (rows.length > 12 || renderedRowCount !== rows.length || renderedCostCount !== rows.length || renderedHeaderCount !== 1 || uniqueIds.size !== rows.length || /class="allocation-bar/.test(pageHtml)) {
+      throw rendererError("CONTENT_FUNCTION_PRICE_STRUCTURE_INVALID", "The Function Price page requires one bounded seven-column table row per locked function");
+    }
+    const knownCostRows = rows.filter((row) => row.amountMinor > 0 && functionPriceCostState(row, content) !== "to_confirm");
+    const unknownCostRows = rows.filter((row) => row.amountMinor <= 0 || functionPriceCostState(row, content) === "to_confirm");
+    if (rows.length && (!rows.every((row) => visible.includes(normalizeVisible(row.name)))
+      || !knownCostRows.every((row) => visible.includes(normalizeVisible(formatMinor(row.amountMinor, content.currency, content.currencyExponent, content))))
+      || (pageHtml.match(/class="function-price-cost function-price-cost-to_confirm"[^>]*data-value-status="unknown"/g) || []).length !== unknownCostRows.length)) {
+      throw rendererError("CONTENT_FUNCTION_PRICE_MISSING", "The Function Price page omitted a function label, known amount, or explicit unknown-cost state");
+    }
+    const structuralCellCounts = ["function-price-index", "function-price-epic", "function-price-task", "function-price-subtask", "function-price-deadline", "function-price-scope"]
+      .map((className) => (pageHtml.match(new RegExp('class="' + className + '(?:\\s|\")', "g")) || []).length);
+    if (structuralCellCounts.some((count) => count !== rows.length)) {
+      throw rendererError("CONTENT_FUNCTION_PRICE_STRUCTURE_INVALID", "Every Function Price row requires index, epic, task, subtask, deadline, scope status, and cost");
+    }
+    const subtotal = rows.reduce((sum, row) => sum + row.amountMinor, 0);
+    const expected = Number.isSafeInteger(content.functionPriceSubtotalMinor) ? content.functionPriceSubtotalMinor : content.projectPriceMinor;
+    if (!visible.includes(l(content, "Allocated subtotal"))
+      || (knownCostRows.length
+        ? (!visible.includes(normalizeVisible(formatMinor(subtotal, content.currency, content.currencyExponent, content))) || (Number.isSafeInteger(expected) && subtotal !== expected))
+        : !visible.includes(l(content, "Not supplied")))) {
+      throw rendererError("CONTENT_FUNCTION_PRICE_RECONCILIATION_INVALID", "Known Function Price amounts must reconcile; otherwise the subtotal must remain undisclosed");
+    }
+    const expectedConfirmed = rows.filter((row) => functionPriceCostState(row, content) === "confirmed").length;
+    const expectedPlanning = rows.filter((row) => functionPriceCostState(row, content) === "planning").length;
+    const renderedConfirmed = (pageHtml.match(/class="function-price-cost function-price-cost-confirmed"/g) || []).length;
+    const renderedPlanning = (pageHtml.match(/class="function-price-cost function-price-cost-planning"/g) || []).length;
+    if (renderedConfirmed !== expectedConfirmed || renderedPlanning !== expectedPlanning || (expectedConfirmed < rows.length && !/data-warning-status="scenario"/.test(pageHtml))) {
+      throw rendererError("CONTENT_FUNCTION_PRICE_TRUTH_STATUS_INVALID", "Function costs must visibly distinguish confirmed values from planning allocations");
+    }
+    }
+  }
+  if (pageKind === "team") {
+    const allocatedRoles = content.team?.roles || [];
+    const hasBreakdown = allocatedRoles.some((row) => row.peakFte !== null || row.fteMonths !== null);
+    if (hasBreakdown && allocatedRoles.some((row) => row.peakFte === null || row.fteMonths === null)) {
+      throw rendererError("CONTENT_TEAM_CAPACITY_MISMATCH", "Page 17 contains a partial role-capacity breakdown");
+    }
+    const capacityPlan = teamCapacityPlan(content);
+    if (hasBreakdown && !capacityPlan) {
+      throw rendererError("CONTENT_TEAM_CAPACITY_MISMATCH", "The Team Size page requires a complete time-phased capacity plan");
+    }
+    if (capacityPlan) {
+      const renderedMetrics = (pageHtml.match(/data-team-metric="(?:people|roles|duration|peak_month)"/g) || []).length;
+      const renderedRows = (pageHtml.match(/data-geometry-role="team_role_row"/g) || []).length;
+      const renderedFocusCells = (pageHtml.match(/data-geometry-role="team_role_focus"/g) || []).length;
+      const renderedMonthCells = (pageHtml.match(/data-geometry-role="team_month_cell"/g) || []).length;
+      const renderedMonthTotals = (pageHtml.match(/data-geometry-role="team_month_total"/g) || []).length;
+      const renderedPeakTotals = (pageHtml.match(/data-geometry-role="team_month_total"[^>]*data-peak="true"/g) || []).length;
+      const renderedScenarioWarnings = (pageHtml.match(/data-warning-status="scenario"/g) || []).length;
+      if (renderedMetrics !== 4 || renderedRows !== capacityPlan.rows.length || renderedFocusCells !== capacityPlan.rows.length || renderedMonthCells !== capacityPlan.rows.length * capacityPlan.monthCount || renderedMonthTotals !== capacityPlan.monthCount || renderedPeakTotals !== 1 || renderedScenarioWarnings !== 1) {
+        throw rendererError("CONTENT_TEAM_CAPACITY_STRUCTURE_INVALID", "The Team Size page requires four summary metrics, one role/focus row per locked role, a complete month matrix, one monthly-total row, one peak, and one scenario disclosure");
+      }
+      const rowMonths = capacityPlan.rows.flatMap((row) => row.months);
+      const rowCapacityValid = capacityPlan.rows.every((row) => nearlyEqual(row.months.reduce((sum, value) => sum + value, 0), row.fteMonths)
+        && nearlyEqual(Math.max(...row.months), row.peakFte)
+        && row.months.every((value) => value >= 0));
+      const monthlyTotal = capacityPlan.monthlyTotals.reduce((sum, value) => sum + value, 0);
+      const expectedTotal = nullableNumber(content.team.fteMonths) ?? capacityPlan.rows.reduce((sum, row) => sum + row.fteMonths, 0);
+      if (!rowCapacityValid || !nearlyEqual(rowMonths.reduce((sum, value) => sum + value, 0), monthlyTotal) || !nearlyEqual(monthlyTotal, expectedTotal)
+        || !nearlyEqual(Math.max(...capacityPlan.monthlyTotals), content.team.peakFte)) {
+        throw rendererError("CONTENT_TEAM_CAPACITY_RECONCILIATION_INVALID", "The Team Size monthly matrix must reconcile role peaks, FTE-months, monthly totals and the aggregate peak");
+      }
+    }
+  }
+  if (pageKind === "org_structure") {
+    const rootCount = (pageHtml.match(/class="org-node org-root"/g) || []).length;
+    if (/class="org-chart org-chart-people/.test(pageHtml)) {
+      const managerCount = (pageHtml.match(/class="org-node org-manager-node"/g) || []).length;
+      const personCount = (pageHtml.match(/class="org-person"(?:\s|>)/g) || []).length;
+      const personConnectorCount = (pageHtml.match(/class="org-connector org-person-connector"/g) || []).length;
+      if (rootCount !== 1 || managerCount !== 1 || personCount < 2 || personCount > 8 || personConnectorCount !== personCount) {
+        throw rendererError("CONTENT_ORG_STRUCTURE_INVALID", "The delivery people chain requires one root, one manager, bounded role cards, and explicit connectors");
+      }
+    } else {
+      const branchCount = (pageHtml.match(/class="org-branch"/g) || []).length;
+      const childCount = (pageHtml.match(/class="org-child"/g) || []).length;
+      const branchConnectorCount = (pageHtml.match(/class="org-connector org-branch-connector"/g) || []).length;
+      const childConnectorCount = (pageHtml.match(/class="org-connector org-child-connector"/g) || []).length;
+      if (rootCount !== 1 || branchCount !== 3 || childCount < 3 || branchConnectorCount !== branchCount || childConnectorCount !== childCount) {
+        throw rendererError("CONTENT_ORG_STRUCTURE_INVALID", "The organization page requires one root, three branches, visible leaves, and explicit connectors");
+      }
+    }
+  }
+  if (pageKind === "client_dependencies") {
+    const rows = array(content.clientDependencies);
+    const renderedRowCount = (pageHtml.match(/class="client-dependency-row"/g) || []).length;
+    const renderedStatusCount = (pageHtml.match(/class="client-dependency-checkbox/g) || []).length;
+    const renderedGroupCount = (pageHtml.match(/class="client-dependency-group"/g) || []).length;
+    const unsupportedRows = rows.filter((row) => !row.sourceIds?.length && !row.derivationRuleId);
+    if (!rows.length) {
+      if (!/class="client-dependencies-empty panel"/.test(pageHtml)
+        || /class="client-dependencies-table|class="client-dependency-row|class="client-dependency-checkbox/.test(pageHtml)) {
+        throw rendererError("CONTENT_CLIENT_DEPENDENCIES_INVALID", "Unavailable client dependencies require one honest empty state without invented rows");
+      }
+    } else if (rows.length < 3 || rows.length > 8 || renderedRowCount !== rows.length || renderedStatusCount !== rows.length || renderedGroupCount < 2) {
+      throw rendererError("CONTENT_CLIENT_DEPENDENCIES_INVALID", "The client-dependencies page requires a bounded grouped dependency/status table");
+    }
+    if (unsupportedRows.length) {
+      throw rendererError("CONTENT_CLIENT_DEPENDENCIES_UNGROUNDED", "Every client dependency requires source provenance or a transparent derivation rule");
+    }
+    if ((rows.length && (!visible.includes(l(content, "Dependency")) || !visible.includes(l(content, "Ready")))) || /\bNot done\b|Не\s+сделано|Bajarilmagan/iu.test(visible)) {
+      throw rendererError("CONTENT_CLIENT_DEPENDENCIES_STATUS_INVALID", "Client-dependency statuses must be explicit without inventing a blanket not-done state");
+    }
+  }
+  if (pageKind === "product_map" && visualizationSpec?.variant !== "pending") {
+    const rootCount = (pageHtml.match(/data-node-type="core"/g) || []).length;
+    const domainCount = (pageHtml.match(/data-node-type="domain"/g) || []).length;
+    const capabilityCount = (pageHtml.match(/data-node-type="capability"/g) || []).length;
+    const subfunctionCount = (pageHtml.match(/data-node-type="subfunction"/g) || []).length;
+    const expectedSubfunctions = (visualizationSpec.nodes || []).filter((node) => node.type === "subfunction").length;
+    const connectorCount = (pageHtml.match(/data-geometry-role="edge"/g) || []).length;
+    if (visualizationSpec.variant !== "left_to_right_tree" || rootCount !== 1 || domainCount < 1 || capabilityCount < 1
+      || subfunctionCount !== expectedSubfunctions || connectorCount !== Math.max(0, (visualizationSpec.nodes || []).length - 1)) {
+      throw rendererError("CONTENT_PRODUCT_MAP_INVALID", "The mind-map page requires one left-hand root and a connected direction/function/subfunction hierarchy");
+    }
+  }
+  if (pageKind === "roadmap" && visualizationSpec?.variant === "gantt") {
+    const scale = visualizationSpec.timeScale;
+    const firstTick = scale ? timeAxisTickLabel(scale.unit, scale.start, content.locale) : "";
+    const lastTick = scale ? timeAxisTickLabel(scale.unit, scale.end, content.locale) : "";
+    const expectedPhases = array(visualizationSpec.nodes).length;
+    const phaseBands = (pageHtml.match(/class="roadmap-phase-band(?:\s|")/g) || []).length;
+    const workstreamRows = (pageHtml.match(/class="roadmap-workstream-row(?:\s|")/g) || []).length;
+    const workstreamBars = (pageHtml.match(/class="roadmap-workstream-bar(?:\s|")/g) || []).length;
+    const gateLines = (pageHtml.match(/class="roadmap-gate-line(?:\s|")/g) || []).length;
+    const gateCards = (pageHtml.match(/class="roadmap-gate-card(?:\s|")/g) || []).length;
+    if (!/class="viz-gantt-axis roadmap-week-track"/.test(pageHtml) || !visible.includes(firstTick) || !visible.includes(lastTick)) {
+      throw rendererError("CONTENT_ROADMAP_SCALE_MISSING", "Page 18 is missing its visible Gantt time scale");
+    }
+    if (!/class="viz-canvas viz-roadmap roadmap-stage-chart"/.test(pageHtml)
+      || phaseBands !== expectedPhases
+      || workstreamRows !== 7
+      || workstreamBars !== 7
+      || gateLines !== expectedPhases
+      || gateCards !== expectedPhases
+      || /<svg\b/i.test(pageHtml)
+      || /class="viz-gantt-label(?:\s|")/.test(pageHtml)) {
+      throw rendererError("CONTENT_ROADMAP_STRUCTURE_INVALID", "The Development Stages page requires stage bands, seven parallel workstreams, and one planning gate per stage");
+    }
+    if (!/data-warning-status="scenario"/.test(pageHtml)) {
+      throw rendererError("CONTENT_ROADMAP_TRUTH_STATUS_INVALID", "Modeled roadmap workstreams and gates require one visible planning-scenario disclosure");
+    }
+  }
+  if (pageKind === "project_price") {
+    if (content.hasProjectPrice && !visible.includes(normalizeVisible(formatMinor(content.projectPriceMinor, content.currency, content.currencyExponent, content)))) {
+      throw rendererError("CONTENT_PROJECT_PRICE_MISSING", "Page 19 omitted the locked project total");
+    }
+    const capacityPlan = teamCapacityPlan(content);
+    const expectedRows = capacityPlan && capacityPlan.rows.length >= 4 && capacityPlan.rows.length <= 8 ? capacityPlan.rows.length : 1;
+    const ledgerCount = (pageHtml.match(/data-project-price-table="true"/g) || []).length;
+    const headCount = (pageHtml.match(/class="project-price-head"/g) || []).length;
+    const rowCount = (pageHtml.match(/data-price-row="true"/g) || []).length;
+    const totalCount = (pageHtml.match(/data-project-price-total="true"/g) || []).length;
+    const scenarioCount = (pageHtml.match(/data-price-scenario-disclosure="true"/g) || []).length;
+    const fieldCounts = ["item", "quantity", "duration", "unit_rate", "amount"]
+      .map((field) => (pageHtml.match(new RegExp('data-price-field="' + field + '"', "g")) || []).length);
+    const unknownRateCount = (pageHtml.match(/data-price-field="unit_rate" data-value-status="unknown"/g) || []).length;
+    const unknownAmountCount = (pageHtml.match(/data-price-field="amount" data-value-status="unknown"/g) || []).length;
+    const renderedTotalMinor = pageHtml.match(/data-project-price-total-minor="([0-9]*)"/)?.[1] || "";
+    const rendersRoleCapacityRows = capacityPlan && capacityPlan.rows.length >= 4 && capacityPlan.rows.length <= 8;
+    const roleCapacityMetadataValid = !rendersRoleCapacityRows || capacityPlan.rows.every((row, index) => pageHtml.includes(
+      'data-role-index="' + (index + 1) + '" data-role-peak-fte="' + formatTeamDataValue(row.peakFte) + '" data-role-fte-months="' + formatTeamDataValue(row.fteMonths) + '"',
+    ));
+    if (ledgerCount !== 1 || headCount !== 1 || rowCount !== expectedRows || totalCount !== 1 || scenarioCount !== 1
+      || fieldCounts.some((count) => count !== expectedRows + 1)
+      || unknownRateCount !== expectedRows || unknownAmountCount !== expectedRows
+      || !roleCapacityMetadataValid
+      || /class="(?:price-hero|boundary-list)(?:\s|")/.test(pageHtml)) {
+      throw rendererError("CONTENT_PROJECT_PRICE_STRUCTURE_INVALID", "The Project Price page requires the same canonical role capacity used by Team Size, one planning disclosure, unknown per-role rates and amounts, and one clearly classified total");
+    }
+    if (content.hasProjectPrice && renderedTotalMinor !== String(content.projectPriceMinor)) {
+      throw rendererError("CONTENT_PROJECT_PRICE_RECONCILIATION_INVALID", "The Project Price total must equal the CommercialLock project total");
+    }
+    const renderedBudgetMinor = pageHtml.match(/data-client-budget-minor="([0-9]*)"/)?.[1] || "";
+    if (!content.hasProjectPrice && content.hasClientBudget && (renderedBudgetMinor !== String(content.clientBudgetMinor)
+      || !visible.includes(normalizeVisible(formatMinor(content.clientBudgetMinor, content.currency, content.currencyExponent, content))))) {
+      throw rendererError("CONTENT_BUDGET_TOTAL_MISSING", "The client budget must remain visible as a separate brief input when no project quote exists");
+    }
+    const amountCopy = projectPriceCopy(content.locale);
+    if (!visible.includes(normalizeVisible(projectPriceTotalLabel(content, amountCopy)))
+      || (content.projectAmountKind !== "confirmed_quote" && visible.includes(normalizeVisible(amountCopy.confirmedTotal)))) {
+      throw rendererError("CONTENT_PROJECT_TOTAL_KIND_MISMATCH", "The rendered total label must match the classified amount kind and must not confirm a budget as a quote");
+    }
+    if (capacityPlan && !capacityPlan.rows.every((row) => visible.includes(normalizeVisible(row.role)))) {
+      throw rendererError("CONTENT_PROJECT_PRICE_STRUCTURE_INVALID", "The Project Price page omitted a locked planning role");
+    }
+    const currencyUnknown = content.currencyStatus === "unknown" || content.currency === "XXX";
+    if (currencyUnknown && (!visible.toLocaleLowerCase().includes(normalizeVisible(projectPriceCopy(content.locale).currencyNotSupplied).toLocaleLowerCase()) || /\bXXX\b/.test(visible) || !/data-currency-status="unknown"/.test(pageHtml))) {
+      throw rendererError("CONTENT_PROJECT_PRICE_CURRENCY_INVALID", "Unknown currency must remain visibly undisclosed without rendering a currency code");
+    }
+  }
+  if (pageKind === "payments") {
+    for (const row of content.payments) {
+      if (!visible.includes(normalizeVisible(formatMinor(row.amountMinor, content.currency, content.currencyExponent, content))) || !visible.includes(formatBasisPoints(row.percentBasisPoints, content))) {
+        throw rendererError("CONTENT_PAYMENT_SCHEDULE_MISSING", "Page 20 omitted a locked payment amount or percentage");
+      }
+    }
+    if (!visible.includes(l(content, "Scheduled total"))) {
+      throw rendererError("CONTENT_PAYMENT_SCHEDULE_MISSING", "Page 20 is missing the scheduled total");
+    }
+  }
+  if (pageKind === "close" && (!visible.includes(l(content, "Decision")) || !visible.includes(l(content, "Owner")) || !visible.includes(l(content, "Status")) || (!visible.includes(l(content, "Next action")) && !visible.includes(l(content, "NEXT ACTION"))) || (pageHtml.match(/class="decision-status"/g) || []).length !== 3)) {
+    throw rendererError("CONTENT_CLOSE_REQUIRED_PAYLOAD_MISSING", "The close page requires decisions, owners, explicit statuses, and a next action");
+  }
+  return true;
+}
+
+function timeAxisTickLabel(unit, value, locale = "en") {
+  const prefix = rendererTimePrefix(unit, locale);
+  return prefix + value;
+}
+
+export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
+  const t = resolveStyleTokens(styleProfile);
+  const css = [
+    "@page{size:15in 10in;margin:0}",
+    "*{box-sizing:border-box}",
+    "html,body{margin:0;padding:0;width:1440px;background:" + t.background + ";color:" + t.text + ";font-family:" + t.bodyStack + "}",
+    ".proposal{width:1440px}",
+    ".page,.kp-page{box-sizing:border-box;position:relative;overflow:hidden;width:1440px;height:960px;padding:" + t.pagePaddingTop + "px " + t.pagePaddingX + "px " + t.pagePaddingBottom + "px;background:" + t.background + ";break-after:page;page-break-after:always}",
+    ".page:last-child,.kp-page:last-child{break-after:auto;page-break-after:auto}",
+    ".page::before{content:'';position:absolute;right:-160px;top:-220px;width:580px;height:580px;border-radius:50%;background:radial-gradient(circle," + alphaHex(t.primary, 0.18) + " 0%,transparent 68%);pointer-events:none}",
+    ".page-header{height:34px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid " + t.rule + ";color:" + t.muted + ";font:700 10px/1 " + t.metadataStack + ";letter-spacing:.13em}",
+    ".page-title-row{min-height:154px;display:flex;justify-content:space-between;gap:40px;align-items:flex-start;padding-top:24px}",
+    ".page-title-row>div{max-width:1030px}",
+    ".page-kicker{display:block;margin-bottom:10px;color:" + t.secondary + ";font:700 10px/1 " + t.metadataStack + ";letter-spacing:.14em}",
+    ".page-title{margin:0;font-family:" + t.displayStack + ";font-size:45px;line-height:1.04;letter-spacing:-.035em;font-weight:700;text-wrap:balance}",
+    ".page-title-token{white-space:nowrap}",
+    ".page-badge{max-width:270px;padding:8px 11px;border:1px solid " + t.rule + ";border-radius:" + t.radiusSm + "px;color:" + t.muted + ";font:700 10px/1.25 " + t.metadataStack + ";text-align:right}",
+    ".page-body{position:relative;height:670px;min-height:0}",
+    ".page-footer{position:absolute;left:" + t.pagePaddingX + "px;right:" + t.pagePaddingX + "px;bottom:22px;display:flex;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid " + t.rule + ";color:" + t.muted + ";font:700 9px/1 " + t.metadataStack + ";letter-spacing:.08em}",
+    ".panel{border:1px solid " + t.rule + ";border-radius:" + t.radiusMd + "px;background:" + t.surface + "}",
+    ".panel-soft{border:1px solid " + t.rule + ";border-radius:" + t.radiusMd + "px;background:" + t.surface2 + "}",
+    ".eyebrow{color:" + t.secondary + ";font:700 10px/1.1 " + t.metadataStack + ";letter-spacing:.12em}",
+    ".muted{color:" + t.muted + "}",
+    ".status{width:max-content;padding:5px 8px;border:1px solid " + t.rule + ";border-radius:999px;color:" + t.muted + ";font:700 9px/1 " + t.metadataStack + "}",
+    ".status-positive{color:" + t.positive + ";border-color:" + alphaHex(t.positive, .45) + "}",
+    ".status-warning{color:" + t.warning + ";border-color:" + alphaHex(t.warning, .45) + "}",
+    ".status-critical{color:" + t.critical + ";border-color:" + alphaHex(t.critical, .45) + "}",
+    ".inline-sources{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:12px}",
+    ".inline-sources>.inline-source-label{color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.06em}",
+    ".source-chip{display:inline-flex;align-items:center;max-width:310px;padding:5px 8px;border:1px solid " + t.rule + ";border-radius:999px;color:" + t.secondary + ";font:700 8px/1.15 " + t.metadataStack + ";overflow-wrap:anywhere;text-decoration:none}",
+    ".inline-sources.compact{margin-top:6px;gap:4px}",
+    ".inline-sources.compact>.inline-source-label{display:none}",
+    ".inline-sources.compact>.source-chip{display:inline-flex;padding:4px 7px;font-size:8px}",
+    ".missing-state{height:100%;display:grid;grid-template-columns:.82fr 1.18fr;gap:42px;align-items:center;padding:38px}",
+    ".missing-state>div:first-child strong{display:block;font:700 30px/1.08 " + t.displayStack + "}",
+    ".missing-state>div:first-child p{margin:16px 0 0;color:" + t.muted + ";font-size:15px;line-height:1.5}",
+    ".question-list{display:grid;gap:10px}",
+    ".question-row{display:grid;grid-template-columns:32px 1fr;gap:12px;padding:13px 0;border-top:1px solid " + t.rule + "}",
+    ".question-row span{color:" + t.warning + ";font:700 10px/1 " + t.metadataStack + "}",
+    ".question-row strong{font-size:13px;line-height:1.35}",
+    ".cover-grid{height:100%;display:grid;grid-template-columns:minmax(0,1.3fr) minmax(300px,.7fr);grid-template-rows:minmax(0,1fr) 146px;gap:18px;align-items:stretch}",
+    ".cover-main{position:relative;isolation:isolate;overflow:hidden;padding:40px;display:flex;flex-direction:column;justify-content:space-between;border:1px solid " + t.rule + ";border-radius:" + t.radiusLg + "px;background:linear-gradient(145deg," + t.surface2 + " 0%," + t.surface + " 100%)}",
+    ".cover-main::after{content:'';position:absolute;z-index:-1;right:-116px;bottom:-182px;width:420px;height:420px;border:1px solid " + alphaHex(t.primary, .28) + ";border-radius:50%;box-shadow:0 0 0 48px " + alphaHex(t.primary, .06) + ",0 0 0 96px " + alphaHex(t.primary, .035) + "}",
+    ".cover-main-head{display:flex;align-items:center;justify-content:space-between;gap:24px}",
+    ".cover-sequence{display:grid;place-items:center;width:42px;height:42px;border:1px solid " + alphaHex(t.primary, .5) + ";border-radius:50%;color:" + t.secondary + ";font:700 10px/1 " + t.metadataStack + "}",
+    ".cover-promise{max-width:750px;margin:26px 0;color:" + t.text + ";font:700 31px/1.2 " + t.displayStack + ";letter-spacing:-.025em;text-wrap:balance}",
+    ".cover-main-copy{max-width:680px;display:grid;grid-template-columns:34px 1fr;gap:16px;align-items:start}",
+    ".cover-main-copy::before{content:'';display:block;height:2px;margin-top:9px;background:" + t.primary + "}",
+    ".cover-main-copy p{margin:0;color:" + t.muted + ";font-size:13px;line-height:1.5}",
+    ".cover-meta{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}",
+    ".cover-meta.has-budget{grid-template-columns:repeat(4,minmax(0,1fr))}",
+    ".cover-meta .metric{position:relative;min-height:146px;padding:20px 20px 16px;border:1px solid " + t.rule + ";border-top:3px solid " + t.primary + ";border-radius:" + t.radiusMd + "px;background:" + t.surface + "}",
+    ".cover-meta .metric::before{position:absolute;right:16px;top:14px;color:" + alphaHex(t.secondary, .7) + ";font:700 9px/1 " + t.metadataStack + ";letter-spacing:.08em}",
+    ".cover-meta .metric:nth-child(1)::before{content:'01'}",
+    ".cover-meta .metric:nth-child(2)::before{content:'02'}",
+    ".cover-meta .metric:nth-child(3)::before{content:'03'}",
+    ".cover-meta .metric:nth-child(4)::before{content:'04'}",
+    ".cover-meta .metric strong{max-width:90%;margin-top:17px;font-size:23px;overflow-wrap:anywhere}",
+    ".cover-meta.has-budget .metric strong{font-size:21px}",
+    ".cover-budget-currency{display:block;margin-top:5px;color:" + t.warning + ";font:700 8px/1.2 " + t.metadataStack + ";letter-spacing:.03em}",
+    ".cover-meta .inline-sources{margin-top:7px}",
+    ".metric{min-height:106px;padding:17px;border-top:2px solid " + t.primary + ";background:" + alphaHex(t.surface, .78) + "}",
+    ".metric span{display:block;color:" + t.muted + ";font:700 9px/1.2 " + t.metadataStack + ";letter-spacing:.08em}",
+    ".metric strong{display:block;margin-top:15px;font:700 22px/1.12 " + t.displayStack + "}",
+    ".cover-side{position:relative;overflow:hidden;min-height:0;padding:30px;display:flex;flex-direction:column;justify-content:space-between;background:" + t.surface + "}",
+    // Watermark numerals use the deep brand tone: a vivid light accent (e.g.
+    // bright yellow) at 30% alpha would be nearly invisible on the canvas.
+    ".cover-side-index{margin:-10px 0 8px;color:" + alphaHex(t.brandDeep, .3) + ";font:700 104px/.9 " + t.displayStack + ";letter-spacing:-.07em}",
+    ".cover-side strong{display:block;margin-top:13px;font:700 29px/1.12 " + t.displayStack + ";overflow-wrap:anywhere}",
+    ".cover-side-copy{margin:20px 0 0;color:" + t.muted + ";font-size:12px;line-height:1.48}",
+    ".cover-side-signal{display:flex;gap:7px;align-items:center;padding-top:18px;border-top:1px solid " + t.rule + "}",
+    ".cover-side-signal span{width:8px;height:8px;border:1px solid " + t.primary + ";border-radius:50%}",
+    ".cover-side-signal span:first-child{width:28px;border-radius:999px;background:" + t.primary + "}",
+    ".thread-layout{height:100%;display:flex;flex-direction:column;justify-content:center}",
+    ".thread-line{position:relative;display:grid;grid-template-columns:repeat(4,1fr);gap:18px}",
+    ".thread-line::before{content:'';position:absolute;left:8%;right:8%;top:34px;height:2px;background:" + t.rule + "}",
+    ".thread-item{position:relative;padding-top:64px}",
+    ".thread-item::before{content:'';position:absolute;top:25px;left:0;width:18px;height:18px;border:3px solid " + t.primary + ";border-radius:50%;background:" + t.background + "}",
+    ".thread-item span{color:" + t.secondary + ";font:700 9px/1 " + t.metadataStack + "}",
+    ".thread-item strong{display:block;margin-top:10px;font-size:17px;line-height:1.2}",
+    ".thread-item p{margin:9px 0 0;color:" + t.muted + ";font-size:12px;line-height:1.42}",
+    ".chapter-layout{height:100%;display:grid;grid-template-columns:260px 1fr;gap:64px;align-items:center}",
+    ".chapter-index{font:700 154px/.8 " + t.displayStack + ";color:" + alphaHex(t.primary, .45) + "}",
+    ".chapter-copy strong{display:block;max-width:850px;font:700 34px/1.14 " + t.displayStack + "}",
+    ".chapter-copy p{max-width:830px;margin:24px 0 0;color:" + t.muted + ";font-size:16px;line-height:1.55}",
+    ".driver-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:34px}",
+    ".driver{padding-top:14px;border-top:1px solid " + t.rule + "}",
+    ".driver span{color:" + t.secondary + ";font:700 9px/1 " + t.metadataStack + "}",
+    ".driver strong{display:block;margin-top:10px;font-size:13px;line-height:1.38}",
+    ".handoff-layout{height:100%;display:grid;grid-template-columns:.72fr 1.28fr;gap:48px;align-items:center}",
+    ".handoff-thesis{padding:28px}",
+    ".handoff-thesis strong{font:700 25px/1.18 " + t.displayStack + "}",
+    ".handoff-thesis p{margin:18px 0 0;color:" + t.muted + ";font-size:14px;line-height:1.5}",
+    ".handoff-list{display:grid;gap:10px}",
+    ".handoff-row{display:grid;grid-template-columns:56px 1fr 130px;gap:16px;align-items:center;padding:15px 0;border-top:1px solid " + t.rule + "}",
+    ".handoff-row span{color:" + t.secondary + ";font:700 10px/1 " + t.metadataStack + "}",
+    ".handoff-row strong{font-size:14px}",
+    ".handoff-row p{margin:5px 0 0;color:" + t.muted + ";font-size:11px;line-height:1.35}",
+    ".handoff-row small{color:" + t.warning + ";font:700 9px/1.2 " + t.metadataStack + ";text-align:right}",
+    ".evidence-layout{height:100%;display:grid;grid-template-columns:1.05fr .95fr;gap:24px}",
+    ".evidence-hero{padding:30px;display:flex;flex-direction:column;justify-content:space-between}",
+    ".evidence-hero strong{font:700 30px/1.14 " + t.displayStack + "}",
+    ".evidence-hero p{color:" + t.muted + ";font-size:14px;line-height:1.52}",
+    ".evidence-metrics{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}",
+    ".evidence-list{display:grid;align-content:start}",
+    ".evidence-row{padding:18px;border-top:1px solid " + t.rule + "}",
+    ".evidence-row:first-child{border-top:0}",
+    ".evidence-row span{color:" + t.secondary + ";font:700 9px/1 " + t.metadataStack + "}",
+    ".evidence-row strong{display:block;margin-top:7px;font-size:14px;line-height:1.35}",
+    ".evidence-row p{margin:7px 0 0;color:" + t.muted + ";font-size:11px;line-height:1.38}",
+    ".evidence-detail{margin-top:7px;color:" + t.muted + ";font-size:11px;line-height:1.38}",
+    ".analog-layout{height:100%;display:grid;grid-template-columns:.95fr 1.05fr;gap:18px}",
+    ".analog-panel{padding:22px;overflow:hidden}",
+    ".analog-list{display:grid;align-content:start;margin-top:12px}",
+    ".analog-source,.analog-learning{padding:10px 0;border-top:1px solid " + t.rule + "}",
+    ".analog-source:first-child,.analog-learning:first-child{border-top:0}",
+    ".analog-source strong{display:block;font-size:11px}",
+    ".analog-source p{margin:4px 0;color:" + t.muted + ";font:700 9px/1.25 " + t.metadataStack + ";overflow-wrap:anywhere}",
+    ".analog-source span{color:" + t.positive + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.06em}",
+    ".analog-learning{display:grid;grid-template-columns:30px 1fr;gap:8px 12px}",
+    ".analog-learning>span{grid-row:1/3;color:" + t.secondary + ";font:700 9px/1 " + t.metadataStack + "}",
+    ".analog-learning strong{font-size:11px;line-height:1.25}",
+    ".analog-learning p{margin:0;color:" + t.muted + ";font-size:9px;line-height:1.25}",
+    ".analog-learning .inline-sources{grid-column:2;margin-top:0}",
+    ".analog-title{display:block;margin-top:24px;font:700 28px/1.12 " + t.displayStack + "}",
+    ".analog-summary{margin:18px 0;color:" + t.muted + ";font-size:13px;line-height:1.5}",
+    ".analog-disclosure{margin:14px 0 0;padding-top:12px;border-top:1px solid " + t.rule + ";color:" + t.muted + ";font-size:10px;line-height:1.35}",
+    ".table-layout{height:100%;display:flex;flex-direction:column}",
+    ".table-head,.table-row{display:grid;grid-template-columns:.85fr 1.15fr 1.15fr .55fr;gap:18px;align-items:center}",
+    ".table-head{padding:11px 16px;color:" + t.muted + ";font:700 9px/1 " + t.metadataStack + ";letter-spacing:.08em}",
+    ".table-row{min-height:91px;padding:14px 16px;border-top:1px solid " + t.rule + "}",
+    ".table-row strong{font-size:13px;line-height:1.3}",
+    ".table-row p{margin:0;color:" + t.muted + ";font-size:11px;line-height:1.38}",
+    ".table-row span{font:700 9px/1.25 " + t.metadataStack + ";color:" + t.secondary + "}",
+    ".design-layout{height:100%;display:grid;grid-template-columns:.92fr 1.08fr;gap:24px}",
+    ".style-specimen{padding:30px;display:flex;flex-direction:column;justify-content:space-between}",
+    ".style-specimen strong{font:700 34px/1 " + t.displayStack + "}",
+    ".style-specimen p{color:" + t.muted + ";font-size:13px;line-height:1.5}",
+    ".swatches{display:flex;gap:10px}",
+    ".swatch{width:70px;height:70px;border:1px solid " + t.rule + ";border-radius:" + t.radiusSm + "px}",
+    ".approval-list{display:grid;align-content:center}",
+    ".approval-row{display:grid;grid-template-columns:42px 1fr;gap:16px;padding:18px;border-top:1px solid " + t.rule + "}",
+    ".approval-row span{color:" + t.secondary + ";font:700 10px/1 " + t.metadataStack + "}",
+    ".approval-row strong{font-size:14px}",
+    ".approval-row p{margin:7px 0 0;color:" + t.muted + ";font-size:11px;line-height:1.38}",
+    ".semantic-layout{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}",
+    ".semantic-note{width:1120px;display:grid;grid-template-columns:180px 1fr auto;gap:16px;align-items:center;padding:10px 14px;border-left:3px solid " + t.secondary + ";background:" + alphaHex(t.surface2, .72) + "}",
+    ".semantic-note span{color:" + t.secondary + ";font:700 9px/1 " + t.metadataStack + ";letter-spacing:.08em}",
+    ".semantic-note p{margin:0;color:" + t.muted + ";font-size:11px;line-height:1.35}",
+    ".market-sizing-layout{height:100%;display:grid;grid-template-columns:minmax(0,.76fr) minmax(0,1.24fr);gap:42px;align-items:stretch}",
+    ".market-story{min-width:0;display:flex;flex-direction:column;justify-content:space-between;padding:18px 0 14px}",
+    ".market-thesis{max-width:390px;padding-left:18px;border-left:3px solid " + t.primary + "}",
+    ".market-thesis>span,.market-discipline>span,.market-context>span,.market-methodology>span{display:block;color:" + t.secondary + ";font:700 9px/1 " + t.metadataStack + ";letter-spacing:.11em;text-transform:uppercase}",
+    ".market-thesis>strong{display:block;margin-top:16px;font:700 25px/1.12 " + t.displayStack + ";letter-spacing:-.025em;text-wrap:balance}",
+    ".market-thesis>p{margin:14px 0 0;color:" + t.muted + ";font-size:12px;line-height:1.48}",
+    ".market-discipline{max-width:410px;padding:18px 20px;border:1px solid " + t.rule + ";border-radius:" + t.radiusMd + "px;background:" + alphaHex(t.surface2, .82) + "}",
+    ".market-discipline>strong{display:block;margin-top:12px;font:700 18px/1.18 " + t.displayStack + ";letter-spacing:-.015em}",
+    ".market-discipline>p{margin:10px 0 0;color:" + t.muted + ";font-size:10px;line-height:1.42}",
+    ".market-missing-inputs{display:grid;gap:7px;margin-top:13px;padding-top:10px;border-top:1px solid " + t.rule + "}",
+    ".market-missing-input{display:grid;grid-template-columns:22px 1fr;gap:8px;align-items:start}",
+    ".market-missing-input>span{color:" + t.warning + ";font:700 8px/1.3 " + t.metadataStack + "}",
+    ".market-missing-input>p{margin:0;color:" + t.text + ";font-size:9px;line-height:1.28}",
+    ".market-model{min-width:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:12px;padding:17px 18px 15px;border:1px solid " + t.rule + ";border-radius:" + t.radiusLg + "px;background:linear-gradient(145deg," + alphaHex(t.surface2, .92) + "," + alphaHex(t.surface, .84) + ")}",
+    ".market-context{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding-bottom:10px;border-bottom:1px solid " + t.rule + "}",
+    ".market-context>strong{max-width:68%;font-size:11px;line-height:1.35;text-align:right}",
+    ".market-sizing-funnel{width:100%!important;height:100%!important;min-height:0;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:11px;background:transparent!important;color:" + t.text + "!important}",
+    ".market-level{position:relative;isolation:isolate;min-height:92px;display:flex;align-items:center;justify-content:center;padding:16px 42px;color:" + t.text + ";text-align:center}",
+    ".market-level::before{content:'';position:absolute;z-index:-1;inset:0;clip-path:polygon(4% 0,96% 0,100% 100%,0 100%);background:" + alphaHex(t.primary, .16) + ";box-shadow:inset 0 0 0 1px " + alphaHex(t.primary, .42) + "}",
+    ".market-level-tam{width:100%}",
+    ".market-level-sam{width:78%}",
+    ".market-level-sam::before{background:" + alphaHex(t.secondary, .14) + ";box-shadow:inset 0 0 0 1px " + alphaHex(t.secondary, .48) + "}",
+    ".market-level-som{width:58%;min-height:102px}",
+    ".market-level-som::before{background:" + alphaHex(t.warning, .11) + ";box-shadow:inset 0 0 0 1px " + alphaHex(t.warning, .46) + "}",
+    ".market-level-copy{min-width:0;max-width:100%}",
+    ".market-level-copy>span{display:block;color:" + t.secondary + ";font:700 9px/1 " + t.metadataStack + ";letter-spacing:.12em}",
+    ".market-level-copy>strong{display:block;margin-top:8px;font:700 24px/.98 " + t.displayStack + ";letter-spacing:-.025em;overflow-wrap:anywhere}",
+    ".market-level-copy>p{margin:7px 0 0;color:" + t.muted + ";font-size:8.5px;line-height:1.3;overflow-wrap:anywhere}",
+    ".market-sizing-layout[data-market-state='pending'] .market-level-copy>strong{font-size:14px;line-height:1.2;letter-spacing:-.01em}",
+    ".market-scenarios{display:grid;gap:5px;margin-top:8px}",
+    ".market-scenario{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding-top:5px;border-top:1px solid " + alphaHex(t.warning, .28) + ";text-align:left}",
+    ".market-scenario:first-child{padding-top:0;border-top:0}",
+    ".market-scenario>span{min-width:0;color:" + t.muted + ";font:700 8px/1.2 " + t.metadataStack + ";overflow-wrap:anywhere}",
+    ".market-scenario>strong{font:700 10px/1 " + t.displayStack + ";white-space:nowrap}",
+    ".market-methodology{display:grid;grid-template-columns:150px minmax(0,1fr);gap:10px 16px;align-items:start;padding-top:11px;border-top:1px solid " + t.rule + "}",
+    ".market-methodology>p{margin:0;color:" + t.muted + ";font-size:9px;line-height:1.35}",
+    ".market-methodology .inline-sources{grid-column:2;margin-top:0}",
+    ".market-scenario-disclosure{grid-column:1/-1;display:grid;grid-template-columns:180px 1fr;gap:18px;align-items:center;padding:10px 14px;border-left:3px solid " + t.warning + ";background:" + alphaHex(t.surface2, .72) + "}",
+    ".market-scenario-disclosure>span{color:" + t.warning + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.08em}",
+    ".market-scenario-disclosure>p{margin:0;color:" + t.muted + ";font-size:9px;line-height:1.35}",
+    ".org-layout{height:100%;display:grid;grid-template-rows:minmax(0,1fr) 58px;gap:12px}",
+    ".org-chart{position:relative;min-height:0;overflow:hidden;padding:20px 28px 18px;background:" + alphaHex(t.surface, .84) + "}",
+    ".org-root-wrap{position:relative;height:116px;display:flex;justify-content:center;align-items:flex-start}",
+    ".org-connector{position:absolute;display:block;pointer-events:none}",
+    ".org-root-connector{left:50%;bottom:0;height:34px;border-left:2px solid " + alphaHex(t.primary, .78) + "}",
+    ".org-node{position:relative;z-index:2;display:flex;min-width:0;flex-direction:column;justify-content:center;border:1px solid " + alphaHex(t.primary, .58) + ";border-radius:" + t.radiusMd + "px;background:" + alphaHex(t.background, .97) + ";box-shadow:0 12px 30px " + alphaHex(t.background, .2) + "}",
+    ".org-node small{color:" + t.secondary + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.1em;text-transform:uppercase}",
+    ".org-node strong{display:block;margin-top:8px;color:" + t.text + ";font-size:14px;line-height:1.18;overflow-wrap:anywhere}",
+    ".org-node p{margin:6px 0 0;color:" + t.muted + ";font-size:9px;line-height:1.25;overflow-wrap:anywhere}",
+    ".org-root{width:390px;min-height:82px;padding:15px 22px;text-align:center;border-width:2px;background:" + alphaHex(t.surface2, .96) + "}",
+    ".org-root strong{font:700 22px/1.08 " + t.displayStack + ";letter-spacing:-.025em}",
+    ".org-branches{position:relative;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:28px;padding-top:34px}",
+    ".org-branches::before{content:'';position:absolute;left:16.666%;right:16.666%;top:0;border-top:2px solid " + alphaHex(t.primary, .78) + "}",
+    ".org-branch{position:relative;min-width:0}",
+    ".org-branch-connector{left:50%;top:-34px;height:34px;border-left:2px solid " + alphaHex(t.primary, .78) + "}",
+    ".org-branch-node{min-height:78px;padding:13px 16px;border-top-width:3px}",
+    ".org-branch-node::after{content:'';position:absolute;left:50%;bottom:-23px;height:23px;border-left:1px solid " + alphaHex(t.rule, .95) + "}",
+    ".org-children{position:relative;display:grid;gap:10px;margin-top:46px}",
+    ".org-children-count-1{grid-template-columns:1fr}",
+    ".org-children-count-2{grid-template-columns:repeat(2,minmax(0,1fr))}",
+    ".org-children-count-3{grid-template-columns:repeat(3,minmax(0,1fr))}",
+    ".org-children::before{content:'';position:absolute;top:-23px;border-top:1px solid " + alphaHex(t.rule, .95) + "}",
+    ".org-children-count-1::before{left:50%;right:50%}",
+    ".org-children-count-2::before{left:25%;right:25%}",
+    ".org-children-count-3::before{left:16.666%;right:16.666%}",
+    ".org-child{position:relative;min-width:0}",
+    ".org-child-connector{left:50%;top:-23px;height:23px;border-left:1px solid " + alphaHex(t.rule, .95) + "}",
+    ".org-child-node{min-height:88px;height:100%;padding:12px 11px;text-align:center;border-color:" + alphaHex(t.rule, .95) + ";box-shadow:none}",
+    ".org-child-node strong{font-size:11px;line-height:1.2}",
+    ".org-child-node p{font-size:8px;line-height:1.22}",
+    ".org-node-pending{border-style:dashed;border-color:" + alphaHex(t.warning, .68) + "}",
+    // Delivery people chain: CEO -> project manager -> execution roles.
+    ".org-chart-people{display:flex;flex-direction:column;justify-content:center}",
+    ".org-chart-people .org-root-wrap{height:118px}",
+    ".org-chart-people .org-root{width:340px;min-height:80px}",
+    ".org-manager-wrap{position:relative;height:122px;display:flex;justify-content:center;align-items:flex-start}",
+    ".org-manager-node{width:340px;min-height:84px;padding:14px 20px;text-align:center;border-top-width:3px;background:" + alphaHex(t.surface2, .9) + "}",
+    ".org-manager-node strong{font-size:16px}",
+    ".org-manager-connector{left:50%;bottom:0;height:34px;border-left:2px solid " + alphaHex(t.primary, .78) + "}",
+    ".org-people-grid{position:relative;display:grid;gap:12px;padding-top:30px}",
+    ".org-people-grid::before{content:'';position:absolute;top:0;border-top:2px solid " + alphaHex(t.primary, .5) + "}",
+    ".org-people-count-2{grid-template-columns:repeat(2,minmax(0,1fr))}",
+    ".org-people-count-2::before{left:25%;right:25%}",
+    ".org-people-count-3{grid-template-columns:repeat(3,minmax(0,1fr))}",
+    ".org-people-count-3::before{left:16.666%;right:16.666%}",
+    ".org-people-count-4{grid-template-columns:repeat(4,minmax(0,1fr))}",
+    ".org-people-count-4::before{left:12.5%;right:12.5%}",
+    ".org-people-count-5{grid-template-columns:repeat(5,minmax(0,1fr))}",
+    ".org-people-count-5::before{left:10%;right:10%}",
+    ".org-people-count-6{grid-template-columns:repeat(6,minmax(0,1fr))}",
+    ".org-people-count-6::before{left:8.333%;right:8.333%}",
+    ".org-people-count-7{grid-template-columns:repeat(7,minmax(0,1fr))}",
+    ".org-people-count-7::before{left:7.142%;right:7.142%}",
+    ".org-people-count-8{grid-template-columns:repeat(8,minmax(0,1fr))}",
+    ".org-people-count-8::before{left:6.25%;right:6.25%}",
+    ".org-person{position:relative;min-width:0}",
+    ".org-person-connector{left:50%;top:-30px;height:30px;border-left:1px solid " + alphaHex(t.rule, .95) + "}",
+    ".org-person-node{min-height:118px;height:100%;padding:13px 11px;text-align:center;border-color:" + alphaHex(t.rule, .95) + ";box-shadow:none}",
+    ".org-person-node strong{font-size:11.5px;line-height:1.2;overflow-wrap:normal;word-break:keep-all;hyphens:none}",
+    ".org-person-node p{font-size:8.5px;line-height:1.25}",
+    ".org-manager-node strong{overflow-wrap:normal;word-break:keep-all;hyphens:none}",
+    ".org-evidence{display:grid;grid-template-columns:190px 1fr auto;gap:16px;align-items:center;padding:10px 14px;border-left:3px solid " + t.primary + ";background:" + alphaHex(t.surface2, .76) + "}",
+    ".org-evidence>span{color:" + t.secondary + ";font:700 9px/1 " + t.metadataStack + ";letter-spacing:.08em}",
+    ".org-evidence>p{margin:0;color:" + t.muted + ";font-size:10.5px;line-height:1.3}",
+    ".org-evidence .inline-sources{margin:0;justify-content:flex-end}",
+    ".viz-canvas{position:relative;border:1px solid " + t.rule + ";border-radius:" + t.radiusMd + "px;overflow:hidden}",
+    ".viz-groups{position:absolute;inset:0;z-index:1}",
+    ".viz-edges{position:absolute;left:0;top:0;z-index:2}",
+    ".viz-edge-labels{position:absolute;left:0;top:0;z-index:3}",
+    ".viz-nodes{position:absolute;left:0;top:0;z-index:4}",
+    ".viz-node{position:absolute;display:flex;flex-direction:column;justify-content:center;gap:5px;padding:11px 13px;border:2px solid;border-radius:" + t.radiusSm + "px;background:" + alphaHex(t.background, .94) + ";font-size:13px;line-height:1.18}",
+    ".viz-node span{overflow-wrap:normal;word-break:normal;hyphens:none}",
+    ".viz-node small{font:700 9px/1 " + t.metadataStack + ";color:" + t.muted + "}",
+    ".viz-mindmap{background:linear-gradient(90deg," + alphaHex(t.surface2, .34) + " 0," + alphaHex(t.background, .96) + " 38%," + alphaHex(t.background, .99) + " 100%)!important}",
+    ".viz-mindmap .viz-edges path{stroke-linecap:round;stroke-linejoin:round;opacity:.92}",
+    // Infographic mind map: each branch carries its own accent color through
+    // node tint, border, and connector; depth is read through fill weight.
+    ".viz-mindmap-node{padding:6px 10px;border-width:1.5px;border-radius:" + Math.max(10, t.radiusSm + 2) + "px;background:" + alphaHex(t.background, .97) + ";font-size:14px;line-height:1.12;box-shadow:none;overflow:hidden}",
+    ".viz-mindmap-node span{display:block;overflow-wrap:normal;word-break:normal;hyphens:none}",
+    ".viz-mindmap-node small{display:none}",
+    ".viz-mindmap .viz-node-core{padding-left:14px;border-width:2.5px;background:var(--viz-node-tint," + alphaHex(t.surface2, .96) + ");font-size:15px;font-weight:800;box-shadow:0 0 0 5px var(--viz-node-tint," + alphaHex(t.surface2, .5) + ")}",
+    ".viz-mindmap .viz-node-domain{border-left-width:5px;background:var(--viz-node-tint," + alphaHex(t.surface2, .8) + ");font-weight:700}",
+    ".viz-mindmap .viz-node-capability{border-color:var(--viz-node-soft,var(--viz-node-color));background:" + alphaHex(t.background, .98) + ";font-weight:650}",
+    ".viz-mindmap .viz-node-subfunction{border-width:1px;border-color:var(--viz-node-soft,var(--viz-node-color));background:var(--viz-node-tint," + alphaHex(t.surface2, .46) + ");color:" + t.muted + "}",
+    // Compact (zoomed-out) scale keeps a 12-row decomposition on one page.
+    ".viz-mindmap-dense .viz-mindmap-node{padding:4px 8px;border-radius:8px;font-size:11px;line-height:1.16}",
+    ".viz-mindmap-dense .viz-node-core{padding-left:11px;font-size:12.5px;box-shadow:0 0 0 4px var(--viz-node-tint," + alphaHex(t.surface2, .5) + ")}",
+    ".viz-bpmn{background:linear-gradient(90deg," + alphaHex(t.surface2, .52) + " 0," + alphaHex(t.background, .98) + " 22%," + alphaHex(t.background, .99) + " 100%)!important}",
+    ".viz-bpmn .viz-groups{z-index:1}",
+    ".viz-bpmn-lanes{position:absolute;inset:0}",
+    ".viz-bpmn-lane{position:absolute;border-top:1px solid " + alphaHex(t.rule, .88) + ";border-bottom:1px solid " + alphaHex(t.rule, .45) + ";background:" + alphaHex(t.surface, .18) + "}",
+    ".viz-bpmn-lane:nth-child(even){background:" + alphaHex(t.surface2, .25) + "}",
+    ".viz-bpmn-lane::after{content:'';position:absolute;left:var(--viz-lane-label-width);top:0;bottom:0;border-left:2px solid var(--viz-lane-color);opacity:.52}",
+    ".viz-bpmn-lane-label{position:absolute;left:0;top:0;bottom:0;width:var(--viz-lane-label-width);display:flex;flex-direction:column;justify-content:center;gap:8px;padding:0 16px;background:" + alphaHex(t.surface2, .7) + "}",
+    ".viz-bpmn-lane-label small{color:" + t.text + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.1em}",
+    ".viz-bpmn-lane-label strong{color:" + t.text + ";font-size:11px;line-height:1.18;overflow-wrap:normal;word-break:normal;hyphens:none}",
+    ".viz-bpmn .viz-edges{z-index:2;overflow:visible}",
+    ".viz-bpmn .viz-edges path{stroke-linecap:round;stroke-linejoin:round}",
+    ".viz-bpmn .viz-edge-risk{stroke-width:2.4}",
+    ".viz-bpmn .viz-edge-labels{z-index:3}",
+    ".viz-bpmn-edge-label{position:absolute;display:flex;align-items:center;justify-content:center;padding:2px 7px;border:1px solid;border-radius:999px;background:" + alphaHex(t.background, .98) + ";font:700 12px/1 " + t.metadataStack + ";white-space:nowrap}",
+    ".viz-bpmn .viz-nodes{z-index:4}",
+    ".viz-bpmn-node{padding:8px 9px;border-width:1.5px;border-radius:" + Math.max(8, t.radiusSm) + "px;background:" + alphaHex(t.background, .98) + ";font-size:12.5px;line-height:1.18;text-align:center;box-shadow:none;overflow:hidden}",
+    ".viz-bpmn-node span{display:block;overflow-wrap:normal;word-break:normal;hyphens:none}",
+    ".viz-bpmn-node-risk{background:" + alphaHex(t.surface2, .76) + "}",
+    ".viz-bpmn .viz-node-start_event,.viz-bpmn .viz-node-end_event,.viz-bpmn .viz-node-gateway{display:grid;grid-template-rows:40px minmax(0,1fr);align-items:start;justify-items:center;gap:2px;padding:0 3px;border:0!important;border-radius:0;background:transparent;overflow:hidden}",
+    ".viz-bpmn .viz-node-start_event::before,.viz-bpmn .viz-node-end_event::before{content:'';grid-row:1;width:34px;height:34px;align-self:center;border:2px solid var(--viz-node-color);border-radius:50%;background:" + alphaHex(t.background, .98) + "}",
+    ".viz-bpmn .viz-node-end_event::before{border:4px double var(--viz-node-color)}",
+    ".viz-bpmn .viz-node-gateway::before{content:'';grid-row:1;width:34px;height:34px;align-self:center;border:2px solid var(--viz-node-color);background:" + alphaHex(t.background, .98) + ";transform:rotate(45deg)}",
+    ".viz-bpmn .viz-node-start_event span,.viz-bpmn .viz-node-end_event span,.viz-bpmn .viz-node-gateway span{grid-row:2;align-self:start;font-size:12px;line-height:1.08;text-align:center}",
+    ".viz-architecture .viz-groups{z-index:1}",
+    ".viz-architecture-legend{position:absolute;left:0;top:0;right:0;height:72px;display:grid;grid-template-columns:184px repeat(5,1fr);background:" + alphaHex(t.surface2, .92) + ";border-bottom:1px solid " + t.rule + "}",
+    ".viz-architecture-legend-title{display:flex;flex-direction:column;justify-content:center;padding:0 18px;border-right:1px solid " + t.rule + "}",
+    ".viz-architecture-legend-title small{color:" + t.secondary + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.1em}",
+    ".viz-architecture-legend-title strong{margin-top:7px;font-size:12px;line-height:1.1}",
+    ".viz-architecture-legend-item{display:flex;flex-direction:column;justify-content:center;margin:13px 9px;padding:0 11px;border-top:2px solid}",
+    ".viz-architecture-legend-item small{color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + "}",
+    ".viz-architecture-legend-item strong{margin-top:7px;font-size:10px;line-height:1.15}",
+    ".viz-architecture-layers{position:absolute;inset:0}",
+    ".viz-architecture-layer{position:absolute;left:0;display:grid;grid-template-columns:184px 1fr;border-top:1px solid " + alphaHex(t.rule, .82) + "}",
+    ".viz-architecture-layer:nth-child(even){background:" + alphaHex(t.surface2, .28) + "}",
+    ".viz-architecture-layer-label{display:flex;flex-direction:column;justify-content:center;padding:0 18px;border-right:1px solid " + alphaHex(t.rule, .82) + "}",
+    ".viz-architecture-layer-label small{color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + "}",
+    ".viz-architecture-layer-label strong{margin-top:8px;color:" + t.text + ";font-size:11px;line-height:1.15}",
+    ".viz-architecture .viz-edges{z-index:3}",
+    ".viz-architecture .viz-nodes{z-index:4}",
+    ".viz-architecture .viz-node{padding:7px 10px;border-width:1.5px;background:" + alphaHex(t.background, .97) + ";font-size:12px;line-height:1.12;box-shadow:0 7px 18px " + alphaHex(t.background, .24) + ";overflow:hidden}",
+    ".viz-architecture .viz-node small{font-size:8px}",
+    ".viz-gantt-axis,.viz-gantt-labels,.viz-gantt-grid{position:absolute;inset:0;pointer-events:none}",
+    ".viz-gantt-axis{z-index:2}",
+    ".viz-gantt-axis span{position:absolute;top:10px;color:" + t.muted + ";font:700 9px/1 " + t.metadataStack + ";text-align:center}",
+    ".viz-gantt-grid{z-index:1}",
+    ".viz-gantt-grid span{position:absolute;top:34px;border-left:1px solid " + alphaHex(t.rule, .72) + "}",
+    ".viz-gantt-labels{z-index:5}",
+    ".viz-gantt-label{position:absolute;display:flex;flex-direction:column;justify-content:center;padding-right:16px}",
+    ".viz-gantt-label strong{font-size:12px;line-height:1.2}",
+    ".viz-gantt-label small{margin-top:5px;color:" + t.muted + ";font:700 9px/1 " + t.metadataStack + "}",
+    ".roadmap-stage-layout{width:100%;display:grid;grid-template-rows:58px 494px 54px;gap:10px;align-content:center;align-items:stretch;justify-content:stretch}",
+    ".roadmap-stage-intro{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:14px;align-items:stretch}",
+    ".roadmap-stage-thesis{display:flex;align-items:center;gap:16px;padding:0 18px;border-left:3px solid " + t.primary + ";background:" + alphaHex(t.surface2, .62) + "}",
+    ".roadmap-stage-thesis span{flex:0 0 auto;color:" + t.secondary + ";font:700 9px/1 " + t.metadataStack + ";letter-spacing:.1em}",
+    ".roadmap-stage-thesis p{margin:0;color:" + t.text + ";font-size:12px;line-height:1.35}",
+    ".roadmap-duration-fact{display:grid;grid-template-columns:116px minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 12px;border:1px solid " + t.rule + ";border-top:3px solid " + t.primary + ";border-radius:" + t.radiusSm + "px;background:" + alphaHex(t.surface, .9) + "}",
+    ".roadmap-duration-fact>span{color:" + t.muted + ";font:700 8px/1.1 " + t.metadataStack + ";letter-spacing:.08em}",
+    ".roadmap-duration-fact>strong{font:700 18px/1 " + t.displayStack + ";white-space:nowrap}",
+    ".roadmap-duration-fact .inline-sources{justify-content:flex-end;margin:0}",
+    ".roadmap-stage-chart{width:100%;height:494px;display:grid;grid-template-columns:244px minmax(0,1fr);border-radius:" + t.radiusMd + "px;background:" + alphaHex(t.surface, .9) + "}",
+    ".roadmap-label-column,.roadmap-timeline-column{display:grid;grid-template-rows:54px 30px repeat(7,45px) 91px;min-width:0;min-height:0}",
+    ".roadmap-label-column{border-right:1px solid " + t.rule + ";background:" + alphaHex(t.surface2, .34) + "}",
+    ".roadmap-label-cell{display:flex;min-width:0;flex-direction:column;justify-content:center;padding:0 15px;border-bottom:1px solid " + alphaHex(t.rule, .78) + "}",
+    ".roadmap-label-cell>span{color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.08em}",
+    ".roadmap-label-cell>strong{margin-top:4px;color:" + t.text + ";font-size:10.5px;line-height:1.16;overflow-wrap:anywhere}",
+    ".roadmap-label-cell>small{margin-top:3px;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + "}",
+    ".roadmap-label-heading{background:" + alphaHex(t.surface2, .76) + "}",
+    ".roadmap-label-heading>strong{margin-top:0;color:" + t.secondary + ";font:700 9px/1.2 " + t.metadataStack + ";letter-spacing:.08em}",
+    ".roadmap-label-gates{justify-content:flex-start;padding-top:20px;border-bottom:0;background:" + alphaHex(t.surface2, .54) + "}",
+    ".roadmap-timeline-column{position:relative;overflow:hidden}",
+    ".roadmap-phase-track{position:relative;border-bottom:1px solid " + t.rule + ";background:" + alphaHex(t.surface2, .42) + "}",
+    ".roadmap-phase-band{position:absolute;top:6px;height:42px;display:flex;min-width:0;flex-direction:column;justify-content:center;padding:6px 10px;border:1px solid;border-top-width:3px;border-radius:" + t.radiusSm + "px;background:" + alphaHex(t.background, .96) + ";overflow:hidden}",
+    ".roadmap-phase-band strong{display:block;min-width:0;color:" + t.text + ";font-size:9.5px;line-height:1.08;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+    ".roadmap-phase-band small{margin-top:4px;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";white-space:nowrap}",
+    ".roadmap-week-track.viz-gantt-axis{position:relative;inset:auto;z-index:3;display:flex;border-bottom:1px solid " + t.rule + ";background:" + alphaHex(t.surface, .74) + "}",
+    ".roadmap-week-track.viz-gantt-axis span{position:static;top:auto;display:flex;min-width:0;flex:1 1 0;align-items:center;justify-content:center;border-left:1px solid " + alphaHex(t.rule, .6) + ";color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";text-align:center}",
+    ".roadmap-week-track.viz-gantt-axis span:first-child{border-left:0}",
+    ".roadmap-workstream-row{position:relative;min-width:0;border-bottom:1px solid " + alphaHex(t.rule, .76) + ";background:" + alphaHex(t.surface, .46) + "}",
+    ".roadmap-workstream-row:nth-child(even){background:" + alphaHex(t.surface2, .2) + "}",
+    ".roadmap-week-grid{position:absolute;inset:0;z-index:1;display:flex;pointer-events:none}",
+    ".roadmap-grid-cell{flex:1 1 0;border-left:1px solid " + alphaHex(t.rule, .5) + "}",
+    ".roadmap-grid-cell:first-child{border-left:0}",
+    ".roadmap-workstream-bar{position:absolute;z-index:2;top:10px;height:24px;display:flex;align-items:center;justify-content:flex-end;padding:0 9px;border:1px solid;border-radius:999px;color:" + t.background + ";overflow:hidden}",
+    ".roadmap-workstream-bar small{font:700 8px/1 " + t.metadataStack + ";white-space:nowrap}",
+    ".roadmap-gate-outcomes{position:relative;border-bottom:0;background:" + alphaHex(t.surface2, .42) + "}",
+    ".roadmap-gate-card{position:absolute;top:0;height:91px;display:flex;align-items:flex-start;justify-content:center;padding:40px 8px 7px;text-align:center}",
+    ".roadmap-gate-card p{max-width:190px;margin:0;color:" + t.muted + ";font-size:8px;line-height:1.18;overflow-wrap:anywhere}",
+    ".roadmap-gate-layer{position:absolute;inset:0;z-index:4;pointer-events:none}",
+    ".roadmap-gate-line{position:absolute;top:54px;bottom:68px;border-left:1px solid}",
+    ".roadmap-gate-line strong{position:absolute;left:-14px;bottom:-15px;display:grid;width:29px;height:29px;place-items:center;border:2px solid;border-color:inherit;border-radius:50%;background:" + t.background + ";color:" + t.text + ";font:700 8px/1 " + t.metadataStack + "}",
+    ".roadmap-gate-line:last-child strong{left:-28px}",
+    ".roadmap-stage-disclosure{display:grid;grid-template-columns:270px minmax(0,1fr);gap:18px;align-items:center;padding:9px 14px;border-left:3px solid " + t.warning + ";background:" + alphaHex(t.warning, .08) + "}",
+    ".roadmap-stage-disclosure>span{color:" + t.warning + ";font:700 8px/1.12 " + t.metadataStack + ";letter-spacing:.075em}",
+    ".roadmap-stage-disclosure>p{margin:0;color:" + t.muted + ";font-size:9.5px;line-height:1.28}",
+    ".quadrant-grid{height:100%;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:12px}",
+    ".quadrant{padding:22px;border-top:3px solid " + t.primary + "}",
+    ".quadrant:nth-child(2){border-top-color:" + t.warning + "}",
+    ".quadrant:nth-child(3){border-top-color:" + t.positive + "}",
+    ".quadrant:nth-child(4){border-top-color:" + t.critical + "}",
+    ".quadrant span{color:" + t.muted + ";font:700 9px/1 " + t.metadataStack + "}",
+    ".quadrant strong{display:block;margin-top:10px;font:700 19px/1.15 " + t.displayStack + "}",
+    ".quadrant p{margin:12px 0 0;color:" + t.muted + ";font-size:11px;line-height:1.4}",
+    ".client-dependencies-layout{height:100%;display:grid;grid-template-rows:92px minmax(0,1fr);gap:12px}",
+    ".client-dependencies-summary{display:grid;grid-template-columns:116px 146px 146px minmax(0,1fr);gap:10px}",
+    ".client-dependency-metric{display:flex;min-width:0;flex-direction:column;justify-content:space-between;padding:13px 14px;border:1px solid " + t.rule + ";border-top:3px solid " + t.primary + ";border-radius:" + t.radiusSm + "px;background:" + alphaHex(t.surface, .86) + "}",
+    ".client-dependency-metric:nth-child(2){border-top-color:" + t.warning + "}",
+    ".client-dependency-metric:nth-child(3){border-top-color:" + t.secondary + "}",
+    ".client-dependency-metric span{color:" + t.muted + ";font:700 8px/1.15 " + t.metadataStack + ";letter-spacing:.04em}",
+    ".client-dependency-metric strong{font:700 27px/.95 " + t.displayStack + "}",
+    ".client-dependencies-principle{display:flex;min-width:0;flex-direction:column;justify-content:center;padding:14px 18px;border-left:3px solid " + t.primary + ";background:" + alphaHex(t.surface2, .72) + "}",
+    ".client-dependencies-principle strong{font-size:11.5px;line-height:1.28}",
+    ".client-dependencies-principle p{margin:6px 0 0;color:" + t.muted + ";font-size:9.5px;line-height:1.3}",
+    ".client-dependencies-table{min-height:0;overflow:hidden;display:grid;align-content:start;background:" + alphaHex(t.surface, .88) + "}",
+    ".client-dependencies-head,.client-dependency-row,.client-dependency-group{display:grid;grid-template-columns:minmax(0,1fr) 210px 280px;align-items:center}",
+    ".client-dependencies-head{min-height:37px;padding:0 16px;border-bottom:1px solid " + t.rule + ";color:" + t.muted + ";font:700 8.5px/1 " + t.metadataStack + ";letter-spacing:.1em;text-transform:uppercase}",
+    ".client-dependencies-head span:nth-child(2){padding-left:12px}",
+    ".client-dependencies-head span:last-child{text-align:right}",
+    ".client-dependency-group{min-height:27px;padding:0 16px;border-top:1px solid " + alphaHex(t.primary, .38) + ";border-bottom:1px solid " + t.rule + ";background:" + alphaHex(t.surface2, .78) + "}",
+    ".client-dependency-group:first-of-type{border-top:0}",
+    ".client-dependency-group strong{grid-column:1/3;color:" + t.secondary + ";font:700 8.5px/1 " + t.metadataStack + ";letter-spacing:.09em}",
+    ".client-dependency-group span{justify-self:end;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + "}",
+    ".client-dependency-row{min-height:50px;padding:6px 16px;border-bottom:1px solid " + t.rule + "}",
+    ".client-dependency-row:last-child{border-bottom:0}",
+    ".client-dependency-name{min-width:0;padding-right:20px}",
+    ".client-dependency-name>strong{display:block;font-size:11.5px;line-height:1.22;overflow-wrap:anywhere}",
+    ".client-dependency-detail{margin:3px 0 0;color:" + t.muted + ";font-size:8.5px;line-height:1.2}",
+    ".client-dependency-name .inline-sources{margin-top:3px}",
+    // Checklist box in the status column: every row is a client-side input by
+    // definition, so the state reads as an unchecked/checked box.
+    ".client-dependency-checkbox{position:relative;display:block;width:16px;height:16px;border:1.5px solid " + alphaHex(t.secondary, .55) + ";border-radius:4px;background:" + alphaHex(t.surface2, .5) + "}",
+    ".client-dependency-checkbox.is-checked{border-color:" + t.positive + ";background:" + t.positive + "}",
+    ".client-dependency-checkbox.is-checked::after{content:'';position:absolute;left:5px;top:2px;width:4px;height:8px;border:solid " + t.background + ";border-width:0 2px 2px 0;transform:rotate(45deg)}",
+    ".client-dependency-owner{min-width:0;padding:0 12px;display:flex;align-items:center}",
+    ".client-dependency-owner strong{display:block;font-size:9.5px;line-height:1.2;overflow-wrap:anywhere}",
+    ".client-dependency-state{display:flex;align-items:center;justify-content:flex-end}",
+    ".client-dependencies-empty{display:flex;height:100%;flex-direction:column;align-items:center;justify-content:center;padding:40px;text-align:center}",
+    ".client-dependencies-empty strong{font:700 25px/1.15 " + t.displayStack + "}",
+    ".client-dependencies-empty p{max-width:620px;margin:14px 0 0;color:" + t.muted + ";font-size:12px;line-height:1.45}",
+    ".function-price-layout{height:100%;display:grid;grid-template-rows:minmax(0,1fr) 66px;gap:12px}",
+    ".function-price-table{min-height:0;overflow:hidden;display:grid;align-content:start;background:" + alphaHex(t.surface, .9) + "}",
+    ".scenario-banner{padding:9px 12px;border-bottom:1px solid " + t.rule + ";color:" + t.warning + ";font:700 9px/1.2 " + t.metadataStack + ";letter-spacing:.02em}",
+    ".currency-note{padding:9px 12px;border-bottom:1px solid " + t.rule + ";color:" + t.muted + ";font:700 9px/1.2 " + t.metadataStack + "}",
+    ".function-price-head,.function-price-row{display:grid;grid-template-columns:40px 150px 215px minmax(240px,1fr) 94px 118px 146px;gap:10px;align-items:center;padding:0 16px}",
+    ".function-price-head{min-height:38px;border-bottom:1px solid " + t.rule + ";background:" + alphaHex(t.surface2, .72) + ";color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.08em;text-transform:uppercase}",
+    ".function-price-head span:last-child{text-align:right}",
+    ".function-price-row{min-height:58px;border-bottom:1px solid " + t.rule + "}",
+    ".function-price-row:last-child{border-bottom:0}",
+    ".function-price-index{color:" + t.secondary + ";font:700 9px/1 " + t.metadataStack + ";letter-spacing:.04em}",
+    ".function-price-epic{min-width:0;color:" + t.muted + ";font:700 8.5px/1.24 " + t.metadataStack + ";overflow-wrap:anywhere}",
+    ".function-price-task{min-width:0;font-size:10.5px;line-height:1.22;overflow-wrap:anywhere}",
+    ".function-price-subtask{min-width:0;color:" + t.muted + ";font-size:8.75px;line-height:1.25;overflow-wrap:anywhere}",
+    ".function-price-deadline{color:" + t.secondary + ";font:700 8.5px/1.2 " + t.metadataStack + ";letter-spacing:.02em}",
+    ".function-price-scope{display:inline-flex;justify-self:start;align-items:center;min-height:23px;padding:5px 8px;border:1px solid " + t.rule + ";border-radius:999px;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";white-space:nowrap}",
+    ".function-price-scope-requested,.function-price-scope-in_scope{color:" + t.positive + ";border-color:" + alphaHex(t.positive, .48) + ";background:" + alphaHex(t.positive, .07) + "}",
+    ".function-price-scope-recommended{color:" + t.secondary + ";border-color:" + alphaHex(t.secondary, .48) + ";background:" + alphaHex(t.secondary, .07) + "}",
+    ".function-price-scope-deferred,.function-price-scope-out_of_scope{color:" + t.critical + ";border-color:" + alphaHex(t.critical, .45) + ";background:" + alphaHex(t.critical, .07) + "}",
+    ".function-price-cost{display:flex;min-width:0;flex-direction:column;align-items:flex-end;gap:4px;text-align:right}",
+    ".function-price-cost strong{font:700 11px/1 " + t.metadataStack + ";white-space:nowrap}",
+    ".function-price-cost small{color:" + t.muted + ";font:700 8px/1.1 " + t.metadataStack + ";letter-spacing:.03em;text-transform:uppercase}",
+    ".function-price-cost-confirmed strong{color:" + t.positive + "}",
+    ".function-price-cost-planning strong{color:" + t.warning + "}",
+    ".function-price-table-compact .function-price-head{min-height:32px}",
+    ".function-price-table-compact .function-price-row{min-height:42px}",
+    ".function-price-table-compact .function-price-task{font-size:9.5px}",
+    ".function-price-table-compact .function-price-subtask{font-size:8px;line-height:1.15}",
+    ".function-price-total{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(292px,auto);gap:20px;align-items:center;padding:12px 16px;border:1px solid " + t.rule + ";border-top:3px solid " + t.primary + ";border-radius:" + t.radiusSm + "px;background:" + alphaHex(t.surface, .9) + "}",
+    ".function-price-total>div{min-width:0}",
+    ".function-price-total>div span{display:block;color:" + t.text + ";font:700 9.5px/1.15 " + t.metadataStack + "}",
+    ".function-price-total>div small{display:block;margin-top:5px;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + "}",
+    ".function-price-total>strong{font:700 19px/1 " + t.displayStack + ";white-space:nowrap}",
+    ".function-price-total-status{justify-self:end;padding:7px 10px;border:1px solid " + t.rule + ";border-radius:999px;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";white-space:nowrap}",
+    ".function-price-total-status.is-confirmed{color:" + t.positive + ";border-color:" + alphaHex(t.positive, .48) + ";background:" + alphaHex(t.positive, .07) + "}",
+    ".function-price-total-status.is-planning{color:" + t.warning + ";border-color:" + alphaHex(t.warning, .48) + ";background:" + alphaHex(t.warning, .07) + "}",
+    ".team-capacity-layout{height:100%;display:grid;grid-template-rows:88px minmax(0,1fr) 58px;gap:12px}",
+    ".team-capacity-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}",
+    ".team-capacity-metric{position:relative;overflow:hidden;padding:13px 16px 11px;border:1px solid " + t.rule + ";border-top:3px solid " + t.primary + ";border-radius:" + t.radiusSm + "px;background:" + alphaHex(t.surface, .88) + "}",
+    ".team-capacity-metric::after{content:'';position:absolute;right:-24px;bottom:-36px;width:92px;height:92px;border:1px solid " + alphaHex(t.primary, .16) + ";border-radius:50%}",
+    ".team-capacity-metric span{position:relative;z-index:1;display:block;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.08em;text-transform:uppercase}",
+    ".team-capacity-metric strong{position:relative;z-index:1;display:block;margin-top:11px;font:700 25px/1 " + t.displayStack + ";letter-spacing:-.025em}",
+    ".team-capacity-metric small{position:relative;z-index:1;display:block;margin-top:5px;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.04em}",
+    ".team-capacity-metric.is-peak{border-top-color:" + t.secondary + ";background:" + alphaHex(t.primary, .08) + "}",
+    ".team-capacity-metric.is-peak strong{color:" + t.secondary + "}",
+    ".team-capacity-table{min-height:0;overflow:hidden;display:flex;flex-direction:column}",
+    ".team-month-count-2{--team-month-count:2}",
+    ".team-month-count-3{--team-month-count:3}",
+    ".team-month-count-4{--team-month-count:4}",
+    ".team-month-count-5{--team-month-count:5}",
+    ".team-month-count-6{--team-month-count:6}",
+    ".team-capacity-disclosure{flex:0 0 29px;display:flex;align-items:center;padding:0 14px;border-bottom:1px solid " + t.rule + ";color:" + t.secondary + ";background:" + alphaHex(t.primary, .055) + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.075em;text-transform:uppercase}",
+    ".team-capacity-head,.team-capacity-row,.team-capacity-total{display:grid;grid-template-columns:190px minmax(300px,1fr) repeat(var(--team-month-count),minmax(66px,86px));column-gap:10px;align-items:center;padding:0 14px}",
+    ".team-capacity-head{flex:0 0 35px;border-bottom:1px solid " + t.rule + ";color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.08em;text-transform:uppercase}",
+    ".team-month-head{height:100%;display:flex;align-items:center;justify-content:center;gap:4px;border-left:1px solid " + alphaHex(t.rule, .7) + "}",
+    ".team-month-head small{color:" + t.secondary + ";font-size:8px;letter-spacing:.04em}",
+    ".team-month-head.is-peak{color:" + t.secondary + ";background:" + alphaHex(t.primary, .07) + "}",
+    ".team-capacity-row{flex:1 1 0;min-height:49px;border-bottom:1px solid " + t.rule + "}",
+    ".team-capacity-role{min-width:0}",
+    ".team-capacity-role strong{display:block;font-size:10.5px;line-height:1.16;overflow-wrap:anywhere}",
+    ".team-capacity-role small{display:block;margin-top:4px;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.03em}",
+    ".team-capacity-focus{min-width:0;color:" + t.muted + ";font-size:8.75px;line-height:1.22;overflow-wrap:anywhere}",
+    ".team-month-cell{height:28px;display:flex;align-items:center;justify-content:center;border:1px solid " + alphaHex(t.rule, .95) + ";border-radius:" + Math.max(4, t.radiusSm - 2) + "px;background:" + alphaHex(t.surface2, .42) + "}",
+    ".team-month-cell strong{font:700 8.5px/1 " + t.metadataStack + "}",
+    ".team-month-cell.is-zero strong{color:" + t.muted + "}",
+    // FTE heat map: emphasis follows the cell value, not just the peak month.
+    // Chromium's PDF export rasterizes box-shadow blur into opaque rectangles,
+    // so intensity is carried by background/border alpha only.
+    ".team-month-cell.team-fte-level-1{border-color:" + alphaHex(t.primary, .16) + ";background:" + alphaHex(t.primary, .06) + "}",
+    ".team-month-cell.team-fte-level-2{border-color:" + alphaHex(t.primary, .3) + ";background:" + alphaHex(t.primary, .14) + "}",
+    ".team-month-cell.team-fte-level-3{border-color:" + alphaHex(t.primary, .5) + ";background:" + alphaHex(t.primary, .26) + "}",
+    ".team-month-cell.team-fte-level-4{border-color:" + alphaHex(t.primary, .8) + ";background:" + alphaHex(t.primary, .4) + "}",
+    ".team-month-cell.is-peak-month{border-color:" + alphaHex(t.secondary, .5) + "}",
+    ".team-capacity-total{flex:0 0 48px;background:" + alphaHex(t.surface2, .7) + "}",
+    ".team-capacity-total-label strong{display:block;font:700 8.5px/1 " + t.metadataStack + ";letter-spacing:.045em;text-transform:uppercase}",
+    ".team-capacity-total-label small{display:block;margin-top:4px;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + "}",
+    ".team-month-total{height:30px;display:flex;align-items:center;justify-content:center;border:1px solid " + t.rule + ";border-radius:" + Math.max(4, t.radiusSm - 2) + "px;font:700 9px/1 " + t.metadataStack + "}",
+    ".team-month-total.is-peak{border-color:" + t.secondary + ";color:" + t.secondary + ";background:" + alphaHex(t.primary, .13) + "}",
+    ".team-capacity-note{display:grid;grid-template-columns:180px 1fr auto;gap:16px;align-items:center;padding:10px 14px;border-left:3px solid " + t.primary + ";background:" + alphaHex(t.surface2, .76) + "}",
+    ".team-capacity-note>span{color:" + t.secondary + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.09em}",
+    ".team-capacity-note>strong{font-size:9px;line-height:1.25}",
+    ".team-capacity-note>small{color:" + t.muted + ";font:700 8px/1.2 " + t.metadataStack + ";text-align:right}",
+    ".project-price-layout{height:100%;display:grid;grid-template-rows:minmax(0,1fr) 82px;gap:12px}",
+    ".project-price-ledger{min-height:0;overflow:hidden;display:flex;flex-direction:column;border:1px solid " + t.rule + ";border-radius:" + t.radiusMd + "px;background:" + alphaHex(t.surface, .94) + "}",
+    ".project-price-summary{flex:0 0 68px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px;align-items:center;padding:0 18px;border-bottom:1px solid " + t.rule + ";background:linear-gradient(90deg," + alphaHex(t.primary, .18) + "," + alphaHex(t.surface2, .76) + ")}",
+    ".project-price-summary-copy{min-width:0}",
+    ".project-price-summary-copy span{display:block;color:" + t.secondary + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.1em;text-transform:uppercase}",
+    ".project-price-summary-copy strong{display:block;margin-top:7px;font:700 20px/1.05 " + t.displayStack + ";letter-spacing:-.02em}",
+    ".project-price-summary-meta{display:flex;align-items:center;gap:10px;color:" + t.muted + ";font:700 8.5px/1 " + t.metadataStack + ";white-space:nowrap}",
+    ".project-price-summary-meta span{padding:7px 10px;border:1px solid " + alphaHex(t.primary, .24) + ";border-radius:999px;background:" + alphaHex(t.background, .72) + "}",
+    ".project-price-scenario{flex:0 0 30px;display:flex;align-items:center;padding:0 16px;border-bottom:1px solid " + t.rule + ";border-left:3px solid " + t.warning + ";color:" + t.warning + ";background:" + alphaHex(t.warning, .055) + ";font:700 8px/1.2 " + t.metadataStack + ";letter-spacing:.035em}",
+    ".project-price-head,.project-price-row,.project-price-total{display:grid;grid-template-columns:minmax(0,38fr) minmax(80px,10fr) minmax(105px,13fr) minmax(150px,20fr) minmax(155px,19fr);column-gap:0;align-items:stretch}",
+    ".project-price-head{flex:0 0 40px;border-bottom:1px solid " + t.rule + ";background:" + alphaHex(t.surface2, .7) + ";color:" + t.muted + ";font:700 8px/1.15 " + t.metadataStack + ";letter-spacing:.07em;text-transform:uppercase}",
+    ".project-price-cell{min-width:0;display:flex;align-items:center;padding:0 13px;border-left:1px solid " + alphaHex(t.rule, .82) + ";overflow-wrap:anywhere}",
+    ".project-price-cell:first-child{border-left:0}",
+    ".project-price-head .project-price-cell:nth-child(n+2){justify-content:flex-end;text-align:right}",
+    ".project-price-rows{min-height:0;flex:1 1 auto;display:flex;flex-direction:column}",
+    ".project-price-row{flex:1 1 0;min-height:47px;border-bottom:1px solid " + t.rule + ";font-size:9.5px;line-height:1.2}",
+    ".project-price-row:nth-child(even){background:" + alphaHex(t.surface2, .22) + "}",
+    ".project-price-rows-single .project-price-row{flex:0 0 82px}",
+    ".project-price-item{gap:10px;font-weight:700}",
+    ".project-price-item-index{flex:0 0 24px;color:" + t.secondary + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.04em}",
+    ".project-price-number{justify-content:flex-end;text-align:right;font:700 9px/1 " + t.metadataStack + ";font-variant-numeric:tabular-nums}",
+    ".project-price-unknown{justify-content:flex-end;color:" + t.muted + ";font-size:8px;line-height:1.15;text-align:right}",
+    ".project-price-total{flex:0 0 60px;border-top:2px solid " + t.primary + ";background:" + alphaHex(t.primary, .095) + "}",
+    ".project-price-total-label{grid-column:1/5;display:flex;min-width:0;align-items:center;justify-content:space-between;gap:18px;padding:0 16px}",
+    ".project-price-total-label strong{font:700 11px/1.1 " + t.displayStack + "}",
+    ".project-price-total-label .inline-sources{margin:0}",
+    ".project-price-total-value{grid-column:5;display:flex;min-width:0;flex-direction:column;align-items:flex-end;justify-content:center;padding:0 13px;border-left:1px solid " + alphaHex(t.rule, .82) + ";text-align:right}",
+    ".project-price-total-value strong{font:700 21px/1 " + t.displayStack + ";letter-spacing:-.025em;white-space:nowrap;font-variant-numeric:tabular-nums}",
+    ".project-price-total-value small{margin-top:5px;color:" + t.warning + ";font:700 8px/1 " + t.metadataStack + ";white-space:nowrap}",
+    ".project-price-disclosure{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));overflow:hidden;border:1px solid " + t.rule + ";border-radius:" + t.radiusSm + "px;background:" + alphaHex(t.surface2, .64) + "}",
+    ".project-price-term{min-width:0;display:flex;flex-direction:column;justify-content:center;padding:10px 14px;border-left:1px solid " + t.rule + "}",
+    ".project-price-term:first-child{border-left:0}",
+    ".project-price-term span{color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.075em;text-transform:uppercase}",
+    ".project-price-term strong{margin-top:7px;font-size:8.5px;line-height:1.2;overflow-wrap:anywhere}",
+    ".project-price-term.is-warning strong{color:" + t.warning + "}",
+    ".payment-layout{height:100%;display:grid;grid-template-rows:1fr auto;gap:14px}",
+    ".payment-head,.payment-row{display:grid;grid-template-columns:.9fr 1fr .55fr .7fr;gap:18px;align-items:center}",
+    ".payment-head{padding:10px 16px;color:" + t.muted + ";font:700 9px/1 " + t.metadataStack + "}",
+    ".payment-row{min-height:85px;padding:13px 16px;border-top:1px solid " + t.rule + "}",
+    ".payment-row strong{font-size:13px}",
+    ".payment-row p{margin:5px 0 0;color:" + t.muted + ";font-size:10px;line-height:1.32}",
+    ".payment-row>span{font:700 11px/1.25 " + t.metadataStack + ";text-align:right}",
+    // Cumulative indicator: a strip under each stage fills further after
+    // every accepted payment and reaches 100% on the final one.
+    ".payment-progress{grid-column:1/-1;height:5px;margin-top:10px;border-radius:999px;background:" + alphaHex(t.primary, .12) + ";overflow:hidden}",
+    ".payment-progress>span{display:block;height:100%;border-radius:999px;background:" + alphaHex(t.primary, .78) + "}",
+    ".payment-total{display:grid;grid-template-columns:1fr auto auto;gap:24px;align-items:center;padding:16px 18px;border:1px solid " + t.rule + ";border-radius:" + t.radiusSm + "px}",
+    ".payment-total span{color:" + t.muted + ";font-size:11px}",
+    ".payment-total strong{font:700 18px/1 " + t.displayStack + "}",
+    ".decision-layout{height:100%;display:grid;grid-template-columns:1.25fr .75fr;gap:22px}",
+    ".decision-list{display:grid;align-content:start}",
+    ".decision-row{display:grid;grid-template-columns:.85fr 1.15fr 1.15fr .55fr;gap:18px;align-items:center;min-height:92px;padding:14px 16px;border-top:1px solid " + t.rule + "}",
+    ".decision-row:first-child{border-top:0}",
+    ".decision-row span{color:" + t.secondary + ";font:700 9px/1 " + t.metadataStack + "}",
+    ".decision-row strong{font-size:13px;line-height:1.35}",
+    ".decision-row p{margin:0;color:" + t.muted + ";font-size:11px;line-height:1.35}",
+    ".next-action{min-height:0;padding:24px;display:flex;flex-direction:column}",
+    ".next-action strong{font:700 28px/1.14 " + t.displayStack + "}",
+    ".next-action>p{margin:14px 0 16px;color:" + t.muted + ";font-size:11px;line-height:1.42}",
+    ".next-action .status{border-color:" + t.primary + ";color:" + t.secondary + "}",
+    ".close-blockers{min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:6px;align-content:start;padding-top:12px;border-top:1px solid " + t.rule + "}",
+    ".close-blocker{min-width:0;padding:7px 8px;border-left:2px solid " + t.warning + ";background:" + alphaHex(t.warning, .06) + "}",
+    ".close-blocker>span{display:block;color:" + t.warning + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.06em}",
+    ".close-blocker>strong{display:block;margin-top:4px;font:700 8.5px/1.2 " + t.bodyStack + ";overflow-wrap:anywhere}",
+    ".close-assumptions{padding-top:12px;border-top:1px solid " + t.rule + "}",
+    ".close-assumptions>span{color:" + t.secondary + ";font:700 9px/1 " + t.metadataStack + ";letter-spacing:.08em}",
+    ".close-assumptions p{margin:7px 0 0;font-size:10px;line-height:1.2}",
+    ".layout-cover_asymmetric{display:flex;flex-direction:column}",
+    ".layout-cover_asymmetric .page-header{flex:0 0 34px}",
+    ".layout-cover_asymmetric .page-title-row{flex:0 0 auto;min-height:146px;padding-top:30px}",
+    ".layout-cover_asymmetric .page-kicker{display:none}",
+    ".layout-cover_asymmetric .page-body{flex:1 1 auto;height:auto;min-height:0;margin-bottom:42px}",
+    ".layout-cover_asymmetric .page-title{max-width:1040px;font-size:68px;line-height:1;letter-spacing:-.045em}",
+    ".layout-cover_asymmetric .page-title.cover-title-medium{font-size:54px;line-height:1.02}",
+    ".layout-cover_asymmetric .page-title.cover-title-long{font-size:43px;line-height:1.05;letter-spacing:-.035em}",
+    ".layout-cover_asymmetric .page-title.cover-title-extra-long{font-size:34px;line-height:1.08;letter-spacing:-.025em}",
+    ".layout-chapter_opener .page-title-row{min-height:128px}",
+    ".layout-chapter_opener .page-title{font-size:34px;color:" + t.muted + "}",
+    ".layout-evidence_table .page-title{max-width:900px}",
+    ".layout-commercial_hero .page-title{font-size:40px}",
+    ".layout-decision_close::before{background:radial-gradient(circle," + alphaHex(t.warning, .16) + " 0%,transparent 68%)}",
+    ...dynamicRules,
+  ];
+  return css.join("\n");
+}
+
+function normalizeRendererInput(input) {
+  const proposalPackage = input.proposalPackage || null;
+  return {
+    proposalModel: input.proposalModel || proposalPackage?.proposalModel || {},
+    semanticModel: input.semanticModel || proposalPackage?.semanticModel || {},
+    commercialLock: input.commercialLock || proposalPackage?.commercialLock || null,
+    visualStyleProfile: input.visualStyleProfile || input.styleProfile || proposalPackage?.visualStyleProfile || {},
+    presentationPlan: input.presentationPlan || proposalPackage?.presentationPlan || null,
+    visualizationSpecs: input.visualizationSpecs || proposalPackage?.visualizationSpecs || [],
+  };
+}
+
+function validatePlan(plan) {
+  if (!plan || !Number.isInteger(plan.pageCount) || plan.pageCount < 2 || plan.pageCount > 50 || !Array.isArray(plan.pages) || plan.pages.length !== plan.pageCount) {
+    throw rendererError("CONTRACT_PRESENTATION_PLAN_INVALID", "v5 renderer requires a validated adaptive PresentationPlan");
+  }
+  const numbers = plan.pages.map((page) => page.pageNumber);
+  if (numbers.some((number, index) => number !== index + 1) || new Set(numbers).size !== plan.pageCount) {
+    throw rendererError("CONTRACT_PRESENTATION_PLAN_INVALID", "PresentationPlan page numbers must be sequential from 1");
+  }
+  plan.pages.forEach((page) => validatePagePlan(page, plan.pageCount));
+}
+
+function validatePagePlan(pagePlan, totalPages = DEFAULT_TOTAL_PAGES) {
+  const pageNumber = Number(pagePlan?.pageNumber);
+  if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > totalPages) {
+    throw rendererError("CONTRACT_PRESENTATION_PLAN_INVALID", "Page number is outside the planned story contract");
+  }
+  const kind = pagePlan.kind || pagePlan.pageKind;
+  const storyIndex = pageKindIndex(kind);
+  if (storyIndex < 0) {
+    throw rendererError("CONTRACT_PRESENTATION_PLAN_INVALID", "Page " + pagePlan.pageNumber + " has an unknown page kind");
+  }
+  if (pagePlan.intent && pagePlan.intent !== PAGE_INTENTS[storyIndex]) {
+    throw rendererError("CONTRACT_PRESENTATION_PLAN_INVALID", "Page " + pagePlan.pageNumber + " has an incompatible page intent");
+  }
+  strictLayoutFamily(pagePlan.layoutFamily);
+}
+
+function indexVisualizationSpecs(specs, presentationPlan) {
+  const map = new Map();
+  for (const spec of Array.isArray(specs) ? specs : []) {
+    const pageNumber = Number(spec?.pageNumber);
+    if (map.has(pageNumber)) {
+      throw rendererError("CONTRACT_VISUALIZATION_SPEC_INVALID", "Duplicate VisualizationSpec for page " + pageNumber);
+    }
+    map.set(pageNumber, spec);
+  }
+  const planned = new Map((presentationPlan?.pages || []).filter((page) => page.visualizationSpecId).map((page) => [Number(page.pageNumber), page.visualizationSpecId]));
+  for (const [pageNumber, specId] of planned) {
+    if (!map.has(pageNumber) || (map.get(pageNumber).visualizationSpecId || map.get(pageNumber).id) !== specId) {
+      throw rendererError("CONTRACT_VISUALIZATION_SPEC_INVALID", "Missing VisualizationSpec for page " + pageNumber);
+    }
+  }
+  for (const pageNumber of map.keys()) {
+    if (!planned.has(pageNumber)) {
+      throw rendererError("CONTRACT_VISUALIZATION_SPEC_INVALID", "VisualizationSpec is not permitted on page " + pageNumber);
+    }
+  }
+  return map;
+}
+
+function pageKindIndex(kind = "") {
+  const index = PAGE_KINDS.indexOf(String(kind || ""));
+  if (index < 0) throw rendererError("CONTRACT_PRESENTATION_PLAN_INVALID", "Unknown page kind: " + kind);
+  return index;
+}
+
+function findVisualizationSpec(specs, pageNumber) {
+  return (Array.isArray(specs) ? specs : []).find((spec) => Number(spec?.pageNumber) === Number(pageNumber)) || null;
+}
+
+function referenceHostLabel(value = "") {
+  try {
+    return new URL(String(value)).hostname.replace(/^www\./i, "");
+  } catch {
+    return "";
+  }
+}
+
+function buildContentContext({ proposalModel = {}, semanticModel = {}, commercialLock = null, visualStyleProfile = {}, presentationPlan = null }, tokens) {
+  const isLockedModel = proposalModel.commercialLockState === "locked" || Boolean(proposalModel.commercialLockHash);
+  if (isLockedModel && !commercialLock) {
+    throw rendererError("CONTRACT_COMMERCIAL_LOCK_INVALID", "A locked proposal must be rendered with its CommercialLock");
+  }
+  if (commercialLock && proposalModel.commercialLockHash && commercialLock.lockHash !== proposalModel.commercialLockHash) {
+    throw rendererError("COMMERCIAL_LOCK_CHANGED", "CommercialLock does not match the proposal model");
+  }
+  const locale = resolveProposalRendererLocale(proposalModel, semanticModel);
+  // A named analog ("... как Shopify") is a product benchmark; a bare client
+  // site URL ("КП для <url>") is only a brand reference and must not be
+  // presented as a product analog anywhere in the deck.
+  const hasNamedAnalog = array(semanticModel.analogs).length > 0
+    || array(proposalModel.analogs).length > 0
+    || Boolean(proposalModel.groundedBrief?.analog?.name?.value);
+  const brandReferenceHost = referenceHostLabel(
+    proposalModel.brandProfile?.themeSource?.reference
+    || proposalModel.groundedBrief?.brandReference?.url?.value
+    || "",
+  );
+  const projectNameStatus = String(proposalModel.groundedBrief?.projectName?.status || "").toLowerCase();
+  const groundedProjectTitle = projectNameStatus === "explicit" ? proposalModel.groundedBrief?.projectName?.value : "";
+  const rawProjectTitle = groundedProjectTitle || semanticModel.project?.name || proposalModel.title || proposalModel.brief?.projectName || localizeRendererText("Commercial proposal", locale);
+  const explicitProjectTitle = projectNameStatus === "explicit" || (!projectNameStatus && Boolean(proposalModel.brief?.projectName));
+  const projectTitle = clientText(explicitProjectTitle ? rawProjectTitle : localizeKnown(rawProjectTitle, locale),
+    160,
+  );
+  if (CURRENCY_PRICE_PATTERN.test(projectTitle)) {
+    throw rendererError("CONTENT_CLIENT_VALUE_MUTATED", "Project title must not contain a commercial price");
+  }
+  const currency = resolveCurrency(commercialLock?.currency || semanticModel.commercial?.currency || proposalModel.pricing?.currency || "XXX");
+  const currencyExponent = Number.isInteger(commercialLock?.currencyExponent) ? commercialLock.currencyExponent : 2;
+  const projectPriceMinor = commercialLock
+    ? safeMinor(commercialLock.projectPriceMinor, "projectPriceMinor")
+    : majorToMinor(semanticModel.commercial?.projectPrice ?? proposalModel.pricing?.projectPrice ?? proposalModel.pricing?.total, currencyExponent);
+  const clientBudgetMinor = majorToMinor(
+    proposalModel.pricing?.budgetAmount ?? semanticModel.commercial?.budgetAmount ?? proposalModel.groundedBrief?.budget?.amount?.value,
+    currencyExponent,
+  );
+  const hasProjectPrice = Number.isSafeInteger(projectPriceMinor) && projectPriceMinor > 0;
+  const hasClientBudget = Number.isSafeInteger(clientBudgetMinor) && clientBudgetMinor > 0;
+  const functionPrice = normalizeFunctionPrice(commercialLock, semanticModel, proposalModel, currencyExponent, locale);
+  const functionPriceSubtotalMinor = commercialLock
+    ? safeMinor(commercialLock.functionPriceSubtotalMinor, "functionPriceSubtotalMinor")
+    : functionPrice.length
+      ? functionPrice.reduce((sum, row) => sum + row.amountMinor, 0)
+      : null;
+  // Payments reconcile against the locked project price when one exists, or
+  // against the client's explicitly stated budget (planning-scenario basis).
+  const paymentBasisMinor = Number(commercialLock?.pricing?.paymentBasisMinor) > 0
+    ? safeMinor(commercialLock.pricing.paymentBasisMinor, "paymentBasisMinor")
+    : hasProjectPrice
+      ? projectPriceMinor
+      : hasClientBudget
+        ? clientBudgetMinor
+        : 0;
+  const payments = normalizePayments(commercialLock, semanticModel, proposalModel, currencyExponent, paymentBasisMinor, locale);
+  const durationMonths = finitePositive(commercialLock?.durationMonths ?? semanticModel.project?.durationMonths ?? proposalModel.durationMonths ?? proposalModel.timeline?.durationMonths);
+  const durationWeeks = finitePositive(commercialLock?.durationWeeks ?? semanticModel.project?.durationWeeks ?? proposalModel.durationWeeks ?? proposalModel.timeline?.durationWeeks);
+  const scope = normalizeScope(semanticModel, proposalModel, locale);
+  const team = normalizeTeam(commercialLock, semanticModel, proposalModel, locale, durationMonths);
+  const organizationStructure = normalizeOrganizationStructure(proposalModel, semanticModel, locale, projectTitle);
+  const sources = normalizeSources(proposalModel.sources || semanticModel.sources || [], locale);
+  const claims = normalizeClaims(proposalModel.claimLedger || [], locale);
+  const marketResearch = proposalModel.marketResearch || {};
+  const analogs = normalizeAnalogs(semanticModel, proposalModel, locale);
+  const swot = normalizeSwot(semanticModel, proposalModel, locale);
+  const currencyStatus = String(proposalModel.groundedBrief?.budget?.currency?.status || proposalModel.pricing?.currencyStatus || "unknown");
+  const projectAmountTruthStatus = normalizeTruthStatus(
+    proposalModel.pricing?.amountTruthStatus,
+    proposalModel.groundedBrief?.budget?.amount?.status,
+    semanticModel.commercial?.truthStatus,
+  );
+  const projectAmountKind = normalizeProjectAmountKind(
+    proposalModel.pricing?.amountKind || semanticModel.commercial?.projectAmountKind,
+  );
+  const displayAmountKind = hasProjectPrice
+    ? projectAmountKind
+    : hasClientBudget
+      ? "budget_constraint"
+      : "unknown";
+  const commercialTerms = normalizeCommercialTerms(proposalModel, locale);
+  const decisionOwners = normalizeDecisionOwners(proposalModel, semanticModel, locale);
+  const clientDependencies = normalizeClientDependencies(proposalModel, semanticModel, locale, {
+    commercialTerms,
+    currencyStatus,
+    projectAmountTruthStatus,
+    projectAmountKind,
+    decisionOwners,
+    isMarketplace: /marketplace/i.test([proposalModel.brief?.type, semanticModel.project?.category, proposalModel.title].filter(Boolean).join(" ")),
+  });
+  const narrative = normalizeNarrative(proposalModel, locale);
+  const exclusions = normalizeStringRows(proposalModel.pricing?.exclusions, 8, 150).map((row) => localizeKnown(row, locale));
+  const externalCosts = normalizeExternalCosts(commercialLock, proposalModel, currency, currencyExponent, locale);
+  const analogPalette = visualStyleProfile.status === "fallback_partial"
+    && (visualStyleProfile.provenance || []).some((row) => row?.sourceKind === "analog_url");
+  const referenceMode = analogPalette ? "analog_palette" : (proposalModel.visualReferences?.mode || "none");
+  const content = {
+    locale,
+    intlLocale: rendererIntlLocale(locale),
+    projectTitle,
+    hasNamedAnalog,
+    brandReferenceHost,
+    projectType: clientText(localizeKnown(proposalModel.brief?.type || semanticModel.project?.category || "Digital product", locale), 90),
+    currency,
+    currencyExponent,
+    projectPriceMinor,
+    paymentBasisMinor,
+    hasProjectPrice,
+    clientBudgetMinor,
+    hasClientBudget,
+    functionPrice,
+    functionPriceSubtotalMinor,
+    payments,
+    scope,
+    team,
+    organizationStructure,
+    durationMonths,
+    durationWeeks,
+    sources,
+    claims,
+    marketResearch,
+    market: semanticModel.market || {},
+    analogs,
+    swot,
+    clientDependencies,
+    narrative,
+    exclusions,
+    externalCosts,
+    currencyStatus,
+    projectAmountTruthStatus,
+    projectAmountKind: displayAmountKind,
+    commercialTerms,
+    decisionOwners,
+    isMarketplace: /marketplace/i.test([proposalModel.brief?.type, semanticModel.project?.category, proposalModel.title].filter(Boolean).join(" ")),
+    referenceMode,
+    presentationKinds: new Set((presentationPlan?.pages || []).map((page) => page.kind)),
+    styleProfile: visualStyleProfile,
+    tokens,
+  };
+  return content;
+}
+
+function renderContentPage(pagePlan, content, tokens, dynamicRules) {
+  const renderers = {
+    cover: renderCover,
+    opening_manifesto: renderOpeningDecisionThesis,
+    chapter_why_now: renderWhyNow,
+    problem: renderProblem,
+    market_research: renderMarketEvidence,
+    analog_research: renderAnalogs,
+    chapter_product: renderProductChapter,
+    design_project: renderDesignDirection,
+    org_structure: renderOrganizationStructure,
+    swot: renderSwot,
+    client_dependencies: renderClientDependencies,
+    chapter_delivery: renderDeliveryChapter,
+    function_price: renderFunctionPrice,
+    team: renderTeam,
+    project_price: renderProjectPrice,
+    payments: renderPayments,
+    close: renderClose,
+  };
+  const renderer = renderers[pagePlan.kind];
+  if (!renderer) {
+    throw rendererError("CONTENT_PAGE_INTENT_UNSUPPORTED", "No content renderer exists for page " + pagePlan.pageNumber);
+  }
+  return renderer(content, tokens, dynamicRules, pagePlan);
+}
+
+function renderCover(content, _tokens, _dynamicRules, pagePlan = {}) {
+  const promise = l(content, "A focused plan for the product launch, core functions, delivery schedule, and commercial decision.");
+  const duration = content.durationMonths ? formatRendererUnit(content.durationMonths, "month", content.locale) : content.durationWeeks ? formatRendererUnit(content.durationWeeks, "week", content.locale) : l(content, "Schedule to confirm");
+  const scope = content.scope.length ? String(content.scope.length) : l(content, "To confirm");
+  const clientSiteReference = !content.hasNamedAnalog && content.brandReferenceHost;
+  const referenceMetricLabel = clientSiteReference ? l(content, "Client site") : l(content, "Reference product");
+  const reference = content.hasNamedAnalog
+    ? content.analogs[0]?.label || l(content, "Not supplied")
+    : content.brandReferenceHost || content.analogs[0]?.label || l(content, "Not supplied");
+  const confirmedScopeStatuses = new Set(["explicit", "verified", "confirmed", "single_source", "multi_source"]);
+  const scopeLabel = content.scope.length && content.scope.every((row) => confirmedScopeStatuses.has(String(row.truthStatus || "").toLowerCase()))
+    ? l(content, "Key functions")
+    : l(content, "Recommended functions");
+  const briefSourceIds = content.sources.filter((source) => /client[_ -]?brief|prompt/i.test(source.rawType)).map((source) => source.id).slice(0, 1);
+  const referenceSourceIds = content.analogs[0]?.sourceIds?.length ? content.analogs[0].sourceIds : briefSourceIds;
+  // The hero deliberately shows no money: the client budget is an input
+  // constraint, not a headline value, and the product owner asked for the
+  // cover to stay commercial-free.
+  return [
+    '<div class="cover-grid">',
+    '<div class="cover-main panel-soft">',
+    '<div class="cover-main-head"><span class="eyebrow">' + e(l(content, "DECISION DOCUMENT")) + '</span><span class="cover-sequence">01</span></div>',
+    '<p class="cover-promise">' + e(promise) + "</p>",
+    '<div class="cover-main-copy"><p>' + e(l(content, "The proposal separates confirmed inputs, recommendations, partner dependencies, and decisions still required before kickoff.")) + "</p></div>",
+    "</div>",
+    '<div class="cover-side panel">',
+    '<div><div class="cover-side-index">01</div><span class="eyebrow">' + e(l(content, "COMMERCIAL PROPOSAL")) + '</span><strong>' + e(content.projectType) + "</strong></div>",
+    '<p class="cover-side-copy">' + e(l(content, "The proposal brings the product scope, delivery plan, and commercial terms into one concise client document.")) + "</p>",
+    '<div class="cover-side-signal"><span></span><span></span><span></span></div>',
+    "</div>",
+    '<div class="cover-meta">',
+    metricFact(l(content, "Delivery window"), duration, pagePlan.sourceIds, "cover-delivery-window", content),
+    metric(scopeLabel, scope),
+    metricFact(referenceMetricLabel, reference, referenceSourceIds, "cover-reference-product", content),
+    "</div>",
+    "</div>",
+  ].join("");
+}
+
+function renderOpeningDecisionThesis(content) {
+  const items = [
+    { stage: "01", title: l(content, "Product boundary"), detail: l(content, "Confirm the key functions and what remains outside the first delivery.") },
+    { stage: "02", title: l(content, "Operating ownership"), detail: l(content, "Agree who owns buyer, seller, administration, support, and external handoffs.") },
+    { stage: "03", title: l(content, "Delivery acceptance"), detail: l(content, "Define the accepted result and accountable owner for every stage.") },
+    { stage: "04", title: l(content, "Commercial baseline"), detail: l(content, "Use one project amount and agree open commercial terms before signature.") },
+  ];
+  return '<div class="thread-layout"><div class="thread-line">' + items.map((item) => [
+    '<div class="thread-item">',
+    "<span>" + e(item.stage) + "</span>",
+    "<strong>" + e(item.title) + "</strong>",
+    "<p>" + e(item.detail) + "</p>",
+    "</div>",
+  ].join("")).join("") + '</div><p class="muted">' + e(l(content, "The following pages turn these decisions into a product structure, process, delivery plan, and commercial terms.")) + "</p></div>";
+}
+
+function renderWhyNow(content) {
+  const thesis = meaningfulNarrative(content.narrative.whyNow)
+    || l(content, "The decision is timely only when product promise, operating ownership, and acceptance evidence are resolved together.");
+  const drivers = [];
+  for (const trend of array(content.marketResearch?.trends).slice(0, 3)) {
+    const localizedTrend = clientText(localizeKnown(typeof trend === "string" ? trend : trend.label || trend.text || trend.title, content.locale), 180);
+    if (!isHighConfidenceLocaleMismatch(localizedTrend, content.locale)) drivers.push(localizedTrend);
+  }
+  for (const claim of content.claims) {
+    if (drivers.length >= 3) break;
+    if (!isHighConfidenceLocaleMismatch(claim.text, content.locale)) drivers.push(claim.text);
+  }
+  while (drivers.length < 3) {
+    drivers.push([
+      l(content, "Confirm the highest-value user journey before expanding scope."),
+      l(content, "Resolve ownership at partner and operational handoffs."),
+      l(content, "Tie delivery progress to evidence the client can accept."),
+    ][drivers.length]);
+  }
+  return chapter("03", thesis, l(content, "Evidence-backed signals are separated from decisions that still require client confirmation."), drivers);
+}
+
+function renderProblem(content, _tokens, _dynamicRules, pagePlan = {}) {
+  const thesis = meaningfulNarrative(content.narrative.problemStatement)
+    || l(content, "Value breaks when adjacent owners read different states, rules, or acceptance evidence.");
+  const rows = content.scope.slice(0, 5);
+  if (!rows.length) {
+    return missingState(
+      content,
+      l(content, "The primary handoff sequence is not supplied."),
+      l(content, "A credible problem statement requires the actual actors, state changes, and failure points."),
+      [l(content, "Who initiates the primary journey?"), l(content, "Which state is authoritative?"), l(content, "Where do partner callbacks enter?"), l(content, "Who resolves exceptions?")],
+    );
+  }
+  const thesisSources = inlineSources(array(pagePlan.sourceIds), content, { compact: true });
+  return [
+    '<div class="handoff-layout">',
+    '<div class="handoff-thesis panel-soft"><span class="eyebrow">' + e(l(content, "HANDOFF RISK")) + '</span><strong>' + e(thesis) + '</strong>' + thesisSources + '<p>' + e(l(content, "Each row is tied to the scope model, and recommendations remain visibly marked.")) + "</p></div>",
+    '<div class="handoff-list">',
+    rows.map((row, index) => '<div class="handoff-row"><span>' + padPage(index + 1) + '</span><div><strong>' + e(row.label) + '</strong><p>' + e(row.detail || row.epic || l(content, "Acceptance detail to confirm.")) + '</p></div><small>' + e(ownershipLabel(row.ownership, content)) + " · " + e(truthLabel(row.truthStatus, content)) + "</small></div>").join(""),
+    "</div>",
+    "</div>",
+  ].join("");
+}
+
+function renderMarketEvidence(content) {
+  const rawPositioning = content.marketResearch?.positioning || content.marketResearch?.thesis || meaningfulNarrative(content.narrative.executiveSummary);
+  const positioning = clientText(
+    rawPositioning && !isHighConfidenceLocaleMismatch(localizeKnown(rawPositioning, content.locale), content.locale)
+      ? localizeKnown(rawPositioning, content.locale)
+      : l(content, "Market evidence has not yet established a quantified expansion thesis."),
+    520,
+  );
+  const signals = content.claims
+    .filter((claim) => claim.sourceIds.length)
+    .slice(0, 3)
+    .map((claim) => ({
+      id: claim.id,
+      label: evidenceClaimLabel(claim, content),
+      title: claim.text,
+      detail: inlineSources(claim.sourceIds, content, { compact: true }),
+      sourceIds: claim.sourceIds,
+    }));
+  for (const trend of array(content.marketResearch?.trends).slice(0, 2)) {
+    if (signals.length >= 4) break;
+    const localizedTrend = localizeKnown(typeof trend === "string" ? trend : trend.label || trend.text || trend.title, content.locale);
+    if (isHighConfidenceLocaleMismatch(localizedTrend, content.locale)) continue;
+    signals.push({
+      label: l(content, "Recommendation"),
+      title: clientText(localizedTrend, 180),
+      detail: e(l(content, "Validate relevance before adding it to the product scope.")),
+      sourceIds: [],
+    });
+  }
+  if (!signals.length) {
+    signals.push({
+      label: l(content, "Evidence state"),
+      title: l(content, "No verified market source is attached."),
+      detail: l(content, "Quantified market claims remain outside the proposal until a source, geography, and period are approved."),
+    });
+  }
+  return [
+    '<div class="evidence-layout">',
+    '<div class="evidence-hero panel-soft"><span class="eyebrow">' + e(l(content, "MARKET THESIS")) + '</span><strong>' + e(positioning) + '</strong><p>' + e(l(content, "Evidence frames the decision; benchmark features do not become committed scope automatically.")) + '</p><div class="evidence-metrics">' + metric(l(content, "Supported facts"), String(signals.filter((row) => row.label === l(content, "Supported fact")).length)) + metric(l(content, "Recommendations"), String(signals.filter((row) => row.label === l(content, "Recommendation")).length)) + "</div></div>",
+    '<div class="evidence-list panel">' + signals.map((row, index) => '<div class="evidence-row"' + factualClaimAttributes(row.sourceIds, row.id || "market-signal-" + (index + 1)) + '><span>' + e(row.label) + '</span><strong>' + e(row.title) + '</strong><div class="evidence-detail">' + row.detail + "</div></div>").join("") + "</div>",
+    "</div>",
+  ].join("");
+}
+
+function renderAnalogs(content, _tokens, _dynamicRules, pagePlan = {}) {
+  const readableSources = content.sources
+    .filter((row) => row.display && ["read", "provided", "verified", "grounded"].includes(row.status))
+    .filter(isAnalogRendererSource)
+    .slice(0, 5);
+  const referenceSources = readableSources.length
+    ? readableSources
+    : content.sources.filter((row) => row.display && /analog|link/i.test(row.rawType)).slice(0, 2);
+  const trendLearnings = array(content.marketResearch?.trends)
+    .map((row) => localizeKnown(typeof row === "string" ? row : row.label || row.text || row.title, content.locale))
+    .filter(Boolean);
+  const supported = content.analogs
+    .filter((row) => row.sourceIds.length && ["verified", "single_source"].includes(row.truthStatus))
+    .filter((row) => !isHighConfidenceLocaleMismatch(row.learning, content.locale))
+    .slice(0, 3);
+  const recommendations = [...new Set(trendLearnings)]
+    .filter((row) => !supported.some((item) => item.learning === row))
+    .slice(0, Math.max(0, 3 - supported.length));
+  const rows = [
+    ...supported.map((row) => ({ id: row.id, label: evidenceClaimLabel(row, content), text: row.learning, sourceIds: row.sourceIds })),
+    ...recommendations.map((text) => ({ label: l(content, "Recommendation"), text, sourceIds: [] })),
+  ];
+  if (!rows.length) rows.push({ label: l(content, "Evidence state"), text: l(content, "No verified product claim is included until readable research evidence is available."), sourceIds: pagePlan.sourceIds || [] });
+  const referenceProductSourceIds = content.analogs[0]?.sourceIds?.length
+    ? content.analogs[0].sourceIds
+    : array(pagePlan.sourceIds);
+  const referenceProductClaim = factualClaimAttributes(referenceProductSourceIds, "analog-reference-product", { container: false });
+  return [
+    '<div class="analog-layout">',
+    '<div class="analog-panel panel" data-claim-container="true"><span class="eyebrow">' + e(l(content, "REFERENCE PRODUCT")) + '</span><strong class="analog-title"' + referenceProductClaim + '>' + e(content.analogs[0]?.label || content.projectType) + '</strong><p class="analog-summary">' + e(readableSources.length ? l(content, "Only source-supported observations are presented as facts.") : l(content, "The reference is recorded, but no unsupported product claim is presented as fact.")) + '</p>' + inlineSources(referenceProductSourceIds.length ? referenceProductSourceIds : referenceSources.map((row) => row.id), content) + "</div>",
+    '<div class="analog-panel panel-soft"><span class="eyebrow">' + e(l(content, "LEARNINGS AND RECOMMENDATIONS")) + '</span><div class="analog-list">' + rows.map((row, index) => '<div class="analog-learning"' + factualClaimAttributes(row.sourceIds, row.id || "analog-learning-" + (index + 1)) + '><span>' + padPage(index + 1) + '</span><strong>' + e(row.text) + '</strong><p>' + e(row.label) + '</p>' + inlineSources(row.sourceIds, content, { compact: true }) + "</div>").join("") + '</div><p class="analog-disclosure">' + e(l(content, "Recommendations do not become committed product scope without client approval.")) + "</p></div>",
+    "</div>",
+  ].join("");
+}
+
+function renderProductChapter(content) {
+  const statement = meaningfulNarrative(content.narrative.valueProposition)
+    || l(content, "A coherent product makes every surface read and write one accountable operating state.");
+  const drivers = [
+    content.scope.length ? scopeItemsLabel(content, content.scope.length) : l(content, "Scope structure requires confirmation"),
+    partnerBoundariesLabel(content, content.scope.filter((row) => row.ownership === "partner_integrated").length),
+    deferredCapabilitiesLabel(content, content.scope.filter((row) => row.ownership === "deferred").length),
+  ];
+  return chapter("09", statement, l(content, "The following pages separate product relationships, design decisions, process flow, and trust boundaries."), drivers);
+}
+
+function renderDesignDirection(content, tokens, dynamicRules) {
+  const colors = [tokens.background, tokens.surface, tokens.primary, tokens.warning, tokens.critical];
+  const swatches = colors.map((color, index) => {
+    const className = addDynamicRule("swatch-" + index, "background:" + color, dynamicRules);
+    return '<span class="swatch ' + className + '"></span>';
+  }).join("");
+  const referenceMessage = content.referenceMode === "explicit_full"
+    ? l(content, "Composition and visual grammar follow the selected reference profile.")
+    : content.referenceMode === "explicit_partial"
+      ? l(content, "Only supplied identity constraints are applied; the remaining composition is neutral.")
+      : content.referenceMode === "analog_palette"
+        ? l(content, "The proposal palette is derived from the requested product analog and remains a provisional design direction.")
+      : l(content, "No client visual reference is claimed; a neutral proposal system is used.");
+  const stages = [
+    [l(content, "Direction"), l(content, "Confirm reference authority, tone, and the visual decisions that may be reused.")],
+    [l(content, "UX structure"), l(content, "Approve page hierarchy, key journeys, and required decision evidence.")],
+    [l(content, "UI system"), l(content, "Approve tokens, components, semantic states, and responsive behavior.")],
+    [l(content, "Handoff"), l(content, "Accept the design baseline, exception states, and implementation package.")],
+  ];
+  return [
+    '<div class="design-layout">',
+    '<div class="style-specimen panel-soft"><span class="eyebrow">' + e(l(content, "VISUAL SYSTEM")) + '</span><strong>Aa / 01</strong><p>' + e(referenceMessage) + '</p><div class="swatches">' + swatches + '</div><span class="status">' + e(content.referenceMode === "none" ? l(content, "Neutral visual direction") : content.referenceMode === "analog_palette" ? l(content, "Analog palette recorded") : l(content, "Reference source recorded")) + "</span></div>",
+    '<div class="approval-list panel">' + stages.map((row, index) => '<div class="approval-row"><span>' + padPage(index + 1) + '</span><div><strong>' + e(row[0]) + '</strong><p>' + e(row[1]) + "</p></div></div>").join("") + "</div>",
+    "</div>",
+  ].join("");
+}
+
+function renderOrganizationStructure(content) {
+  const structure = content.organizationStructure;
+  if (structure.variant === "people_chain") return renderDeliveryPeopleChain(content, structure);
+  const isGrounded = structure.mode === "grounded_public_org" && structure.status === "grounded";
+  const sourceIds = [...new Set([
+    ...array(structure.sourceIds),
+    ...structure.branches.flatMap((branch) => [
+      ...array(branch.sourceIds),
+      ...branch.children.flatMap((child) => array(child.sourceIds)),
+    ]),
+  ].map(String).filter(Boolean))];
+  const evidenceLabel = isGrounded
+    ? l(content, "PUBLIC ORGANIZATION VIEW")
+    : structure.status === "pending"
+      ? l(content, "ORGANIZATION INPUTS REQUIRED")
+      : l(content, "RECOMMENDED ROLE MODEL");
+  const evidenceDetail = structure.disclosure || (isGrounded
+    ? l(content, "The hierarchy reflects cited public evidence and does not extend reporting lines beyond those sources.")
+    : structure.status === "pending"
+      ? l(content, "Confirm accountable groups and role relationships before presenting an organization hierarchy as fact.")
+      : l(content, "The hierarchy groups known product actors; it is a proposed role model, not a claim about the company's internal reporting lines."));
+  const rootAttributes = organizationNodeAttributes(structure, "root");
+  const branches = structure.branches.map((branch, branchIndex) => {
+    const children = branch.children.slice(0, 3);
+    const childMarkup = children.map((child, childIndex) => {
+      const pendingClass = child.truthStatus === "unknown" ? " org-node-pending" : "";
+      const detail = child.detail || truthLabel(child.truthStatus, content);
+      return [
+        '<div class="org-child">',
+        '<span class="org-connector org-child-connector"></span>',
+        '<div class="org-node org-child-node' + pendingClass + '"' + organizationNodeAttributes(child, "leaf") + '>',
+        '<small>' + e(l(content, "Role")) + " " + padPage(childIndex + 1) + "</small>",
+        '<strong>' + e(child.label) + "</strong>",
+        '<p>' + e(detail) + "</p>",
+        "</div>",
+        "</div>",
+      ].join("");
+    }).join("");
+    return [
+      '<div class="org-branch">',
+      '<span class="org-connector org-branch-connector"></span>',
+      '<div class="org-node org-branch-node"' + organizationNodeAttributes(branch, "branch") + '>',
+      '<small>' + e(l(content, "Group")) + " " + padPage(branchIndex + 1) + "</small>",
+      '<strong>' + e(branch.label) + "</strong>",
+      '<p>' + e(branch.detail || branchChildrenLabel(content, children.length)) + "</p>",
+      "</div>",
+      '<div class="org-children org-children-count-' + children.length + '">' + childMarkup + "</div>",
+      "</div>",
+    ].join("");
+  }).join("");
+  return [
+    '<div class="org-layout">',
+    '<div class="org-chart panel">',
+    '<div class="org-root-wrap">',
+    '<div class="org-node org-root"' + rootAttributes + '><small>' + e(l(content, "Organization")) + '</small><strong>' + e(structure.rootLabel) + '</strong><p>' + e(isGrounded ? l(content, "Source-backed public structure") : structure.status === "pending" ? l(content, "Structure to confirm") : l(content, "Proposed responsibility model")) + "</p></div>",
+    '<span class="org-connector org-root-connector"></span>',
+    "</div>",
+    '<div class="org-branches">' + branches + "</div>",
+    "</div>",
+    '<div class="org-evidence"><span>' + e(evidenceLabel) + '</span><p>' + e(evidenceDetail) + "</p>" + inlineSources(sourceIds, content, { compact: true }) + "</div>",
+    "</div>",
+  ].join("");
+}
+
+function renderDeliveryPeopleChain(content, structure) {
+  const roles = structure.roles.slice(0, 8);
+  const roleCards = roles.map((role, index) => [
+    '<div class="org-person">',
+    '<span class="org-connector org-person-connector"></span>',
+    '<div class="org-node org-person-node"' + organizationNodeAttributes(role, "person") + '>',
+    '<small>' + e(l(content, "Role")) + " " + padPage(index + 1) + "</small>",
+    '<strong>' + e(role.label) + "</strong>",
+    '<p>' + e(role.detail) + "</p>",
+    "</div>",
+    "</div>",
+  ].join("")).join("");
+  return [
+    '<div class="org-layout">',
+    '<div class="org-chart org-chart-people panel">',
+    '<div class="org-root-wrap">',
+    '<div class="org-node org-root"' + organizationNodeAttributes(structure, "root") + '><small>' + e(l(content, "Leadership")) + '</small><strong>' + e(structure.rootLabel) + '</strong><p>' + e(structure.rootDetail || l(content, "Delivery leadership and escalations")) + "</p></div>",
+    '<span class="org-connector org-root-connector"></span>',
+    "</div>",
+    '<div class="org-manager-wrap">',
+    '<div class="org-node org-manager-node"' + organizationNodeAttributes(structure.manager, "manager") + '><small>' + e(l(content, "Project management")) + '</small><strong>' + e(structure.manager.label) + '</strong><p>' + e(structure.manager.detail) + "</p></div>",
+    '<span class="org-connector org-manager-connector"></span>',
+    "</div>",
+    '<div class="org-people-grid org-people-count-' + roles.length + '">' + roleCards + "</div>",
+    "</div>",
+    '<div class="org-evidence"><span>' + e(l(content, "PROPOSED DELIVERY REPORTING LINE")) + '</span><p>' + e(structure.disclosure) + "</p>" + inlineSources(array(structure.sourceIds), content, { compact: true }) + "</div>",
+    "</div>",
+  ].join("");
+}
+
+function organizationNodeAttributes(node, type) {
+  return ' data-geometry-role="org_node"'
+    + ' data-node-id="' + escapeHtmlAttribute(node.id || "ORG-" + type.toUpperCase()) + '"'
+    + ' data-node-type="' + escapeHtmlAttribute(type) + '"'
+    + ' data-semantic-role="' + escapeHtmlAttribute(["root", "manager"].includes(type) ? "owned" : "neutral") + '"'
+    + ' data-truth-status="' + escapeHtmlAttribute(node.truthStatus || "unknown") + '"';
+}
+
+function renderSwot(content) {
+  const quadrants = ["strength", "weakness", "opportunity", "threat"];
+  const fallback = {
+    strength: l(content, "Which confirmed capability or operating advantage must acceptance protect?"),
+    weakness: l(content, "Which missing input or dependency can block a credible launch?"),
+    opportunity: l(content, "Which evidence-backed user or market signal deserves an early test?"),
+    threat: l(content, "Which external dependency needs a fallback owner and response?"),
+  };
+  return '<div class="quadrant-grid">' + quadrants.map((quadrant) => {
+    const rows = content.swot.filter((row) => row.quadrant === quadrant);
+    const text = rows.length ? rows.map((row) => row.label).join(" · ") : fallback[quadrant];
+    const response = rows.find((row) => row.response)?.response || operatingResponse(quadrant, rows.length > 0, content);
+    return '<div class="quadrant panel" data-swot-quadrant="' + quadrant + '"><span>' + e(rows.length ? truthLabel(rows[0].truthStatus, content) : l(content, "Decision question")) + '</span><strong>' + e(quadrantLabel(quadrant, content)) + '</strong><p>' + e(text) + '</p><p><span class="eyebrow">' + e(l(content, "RECOMMENDED RESPONSE")) + "</span> " + e(response) + "</p></div>";
+  }).join("") + "</div>";
+}
+
+function renderClientDependencies(content) {
+  const rows = array(content.clientDependencies);
+  const readinessCounts = rows.reduce((counts, row) => {
+    counts[clientDependencyReadinessBucket(row.status)] += 1;
+    return counts;
+  }, { ready: 0, waiting: 0, blocked: 0 });
+  const categories = ["access", "integrations", "ownership"];
+  const groupedRows = categories.map((category) => {
+    const categoryRows = rows.filter((row) => row.category === category);
+    if (!categoryRows.length) return "";
+    return [
+      '<div class="client-dependency-group" data-geometry-role="dependency_group" data-group-id="CLIENT-DEPENDENCY-GROUP-' + escapeHtmlAttribute(category) + '"><strong>' + e(clientDependencyCategoryLabel(category, content)) + '</strong><span>' + e(String(categoryRows.length)) + "</span></div>",
+      categoryRows.map((row) => {
+        const sources = row.sourceIds?.length ? inlineSources(row.sourceIds, content, { compact: true }) : "";
+        const detail = row.detail ? '<p class="client-dependency-detail">' + e(row.detail) + "</p>" : "";
+        const sourceIds = row.sourceIds?.length ? ' data-source-ids="' + escapeHtmlAttribute(row.sourceIds.join(",")) + '"' : "";
+        const readinessBucket = clientDependencyReadinessBucket(row.status);
+        const owner = row.owner || l(content, "Client owner to appoint");
+        // Every row is by definition a client-side input, so the status
+        // column carries a single checklist box (checked once the input is
+        // provided) instead of a textual status.
+        const checked = readinessBucket === "ready";
+        return [
+          '<div class="client-dependency-row" data-geometry-role="dependency_row" data-node-id="' + escapeHtmlAttribute(row.id) + '" data-node-type="dependency" data-semantic-role="' + escapeHtmlAttribute(row.status) + '" data-readiness-bucket="' + readinessBucket + '" data-truth-status="' + escapeHtmlAttribute(row.truthStatus || "unknown") + '"' + sourceIds + ">",
+          '<div class="client-dependency-name"><strong>' + e(row.label) + "</strong>" + detail + sources + "</div>",
+          '<div class="client-dependency-owner"><strong>' + e(owner) + "</strong></div>",
+          '<div class="client-dependency-state"><span class="client-dependency-checkbox' + (checked ? " is-checked" : "") + '" data-checked="' + (checked ? "true" : "false") + '"></span></div>',
+          "</div>",
+        ].join("");
+      }).join(""),
+    ].join("");
+  }).join("");
+  return [
+    '<div class="client-dependencies-layout">',
+    '<div class="client-dependencies-summary" data-dependency-row-count="' + rows.length + '" data-ready-count="' + readinessCounts.ready + '" data-waiting-count="' + readinessCounts.waiting + '" data-blocked-count="' + readinessCounts.blocked + '">',
+    '<div class="client-dependency-metric" data-readiness-counter="ready"><span>' + e(l(content, "Ready")) + '</span><strong>' + e(String(readinessCounts.ready)) + "</strong></div>",
+    '<div class="client-dependency-metric" data-readiness-counter="waiting"><span>' + e(l(content, "Waiting / not provided")) + '</span><strong>' + e(String(readinessCounts.waiting)) + "</strong></div>",
+    '<div class="client-dependency-metric" data-readiness-counter="blocked"><span>' + e(l(content, "Blocked")) + '</span><strong>' + e(String(readinessCounts.blocked)) + "</strong></div>",
+    '<div class="client-dependencies-principle"><strong>' + e(l(content, "Only non-public access, credentials, approvals, and client-owned inputs are listed here.")) + '</strong><p>' + e(l(content, "Public company information and researchable facts are resolved by the proposal team.")) + "</p></div>",
+    "</div>",
+    rows.length
+      ? '<div class="client-dependencies-table panel"><div class="client-dependencies-head"><span>' + e(l(content, "Dependency")) + '</span><span>' + e(l(content, "Owner")) + '</span><span>' + e(l(content, "Ready")) + "</span></div>" + groupedRows + "</div>"
+      : '<div class="client-dependencies-empty panel"><strong>' + e(l(content, "No client dependencies identified.")) + '</strong><p>' + e(l(content, "Confirm each open item before it reaches the delivery critical path.")) + "</p></div>",
+    "</div>",
+  ].join("");
+}
+
+function clientDependencyReadinessBucket(status) {
+  if (["provided", "not_applicable"].includes(status)) return "ready";
+  if (status === "blocked") return "blocked";
+  return "waiting";
+}
+
+function clientDependencyCategoryLabel(category, content) {
+  const labels = {
+    access: "ACCESS AND INFRASTRUCTURE",
+    integrations: "INTEGRATIONS AND CREDENTIALS",
+    ownership: "CLIENT OWNERSHIP AND ACCEPTANCE",
+  };
+  return l(content, labels[category] || "CLIENT OWNERSHIP AND ACCEPTANCE");
+}
+
+
+
+function renderDeliveryChapter(content) {
+  const statement = meaningfulNarrative(content.narrative.deliveryApproach)
+    || l(content, "Delivery advances through accepted evidence, not through elapsed calendar time alone.");
+  const drivers = [
+    content.durationWeeks ? deliveryWindowLabel(content, content.durationWeeks, "week") : content.durationMonths ? deliveryWindowLabel(content, content.durationMonths, "month") : l(content, "Delivery window requires confirmation"),
+    content.team.roles.length ? rolesIdentifiedLabel(content, content.team.roles.length) : l(content, "Team roles require confirmation"),
+    content.payments.length ? paymentStagesLabel(content, content.payments.length) : l(content, "Payment stages require confirmation"),
+  ];
+  return chapter("15", statement, l(content, "Scope, capacity, roadmap, price, and payment stages are shown as one reconciled planning baseline."), drivers);
+}
+
+function renderFunctionPrice(content) {
+  if (!content.functionPrice.length) {
+    return [
+      '<div class="function-price-layout">',
+      missingState(content, l(content, "Function allocation is not supplied."), l(content, "The project amount cannot be presented as an accountable allocation until functional groups are approved."), [l(content, "Approve functional groups."), l(content, "Attach an amount to every group."), l(content, "Reconcile the allocated subtotal to the development subtotal.")]),
+      '<div class="function-price-total"><div><span>' + e(l(content, "Allocated subtotal")) + '</span><small>' + e(l(content, "Commercial input required")) + '</small></div><strong>' + e(l(content, "Not supplied")) + '</strong><span class="function-price-total-status">' + e(l(content, "Cost to confirm")) + "</span></div>",
+      "</div>",
+    ].join("");
+  }
+  const subtotal = content.functionPrice.reduce((sum, row) => sum + row.amountMinor, 0);
+  const costStates = content.functionPrice.map((row) => functionPriceCostState(row, content));
+  const knownCostCount = content.functionPrice.filter((row, index) => row.amountMinor > 0 && costStates[index] !== "to_confirm").length;
+  const hasKnownCosts = knownCostCount > 0;
+  const rows = content.functionPrice.map((row, index) => {
+    const costState = costStates[index];
+    const costValue = row.amountMinor > 0 && costState !== "to_confirm"
+      ? formatMinor(row.amountMinor, content.currency, content.currencyExponent, content)
+      : "—";
+    const sourceIds = row.sourceIds?.length ? ' data-source-ids="' + escapeHtmlAttribute(row.sourceIds.join(",")) + '"' : "";
+    return [
+      '<div class="function-price-row" data-geometry-role="function_price_row" data-node-id="' + escapeHtmlAttribute(row.id) + '" data-node-type="function_price" data-truth-status="' + escapeHtmlAttribute(row.truthStatus || "unknown") + '" data-inclusion="' + escapeHtmlAttribute(row.scopeStatus || "to_confirm") + '"' + sourceIds + '>',
+      '<span class="function-price-index">' + e(String(index + 1).padStart(2, "0")) + "</span>",
+      '<span class="function-price-epic">' + e(row.epic) + "</span>",
+      '<strong class="function-price-task">' + e(row.name) + "</strong>",
+      '<span class="function-price-subtask">' + e(row.detail) + "</span>",
+      '<span class="function-price-deadline">' + e(row.deadline) + "</span>",
+      '<span class="function-price-scope function-price-scope-' + escapeHtmlAttribute(row.scopeStatus || "to_confirm") + '">' + e(functionPriceScopeStatusLabel(row.scopeStatus, content)) + "</span>",
+      '<span class="function-price-cost function-price-cost-' + costState + '" data-value-status="' + (costValue === "—" ? "unknown" : "known") + '"><strong>' + e(costValue) + '</strong><small>' + e(functionPriceCostStatusLabel(costState, content)) + "</small></span>",
+      "</div>",
+    ].join("");
+  }).join("");
+  const expected = Number.isSafeInteger(content.functionPriceSubtotalMinor) ? content.functionPriceSubtotalMinor : content.projectPriceMinor;
+  const matches = hasKnownCosts && Number.isSafeInteger(expected) && expected > 0 && subtotal === expected;
+  const allCostsConfirmed = hasKnownCosts && knownCostCount === content.functionPrice.length && costStates.every((state) => state === "confirmed");
+  const projectAmountConfirmed = isConfirmedProjectAmount(content);
+  const densityClass = content.functionPrice.length > 8 ? " function-price-table-compact" : "";
+  return [
+    '<div class="function-price-layout">',
+    '<div class="function-price-table panel' + densityClass + '">',
+    commercialCurrencyNote(content),
+    scenarioBanner(content, content.functionPrice, allCostsConfirmed ? "confirmed" : "unknown"),
+    '<div class="function-price-head"><span>#</span><span>' + e(l(content, "Epic")) + '</span><span>' + e(l(content, "Main task")) + '</span><span>' + e(l(content, "Subtask")) + '</span><span>' + e(l(content, "Deadline")) + '</span><span>' + e(l(content, "Status")) + '</span><span>' + e(l(content, "Cost")) + "</span></div>",
+    rows,
+    "</div>",
+    '<div class="function-price-total"><div><span>' + e(l(content, "Allocated subtotal")) + (hasKnownCosts ? " · " + e(matches ? l(content, "reconciled") : l(content, "requires reconciliation")) : "") + '</span><small>' + e(projectAmountConfirmed ? l(content, "Confirmed project amount") : l(content, "Commercial input required")) + '</small></div><strong>' + e(hasKnownCosts ? formatMinor(subtotal, content.currency, content.currencyExponent, content) : l(content, "Not supplied")) + '</strong><span class="function-price-total-status ' + (allCostsConfirmed ? "is-confirmed" : "is-planning") + '">' + e(allCostsConfirmed ? l(content, "Confirmed cost") : l(content, "Cost to confirm")) + "</span></div>",
+    "</div>",
+  ].join("");
+}
+
+function functionPriceScopeStatusLabel(status, content) {
+  const labels = {
+    requested: "Requested",
+    in_scope: "In scope",
+    recommended: "Recommended",
+    deferred: "Deferred",
+    out_of_scope: "Out of scope",
+    to_confirm: "To confirm",
+  };
+  return l(content, labels[status] || "To confirm");
+}
+
+function functionPriceCostState(row, content) {
+  const truthStatus = normalizeTruthStatus(row.truthStatus);
+  const hasGroundedProvenance = array(row.sourceIds).length > 0;
+  if (CONFIRMED_TRUTH_STATUSES.has(truthStatus) && hasGroundedProvenance && content.currencyStatus === "explicit" && content.currency !== "XXX") return "confirmed";
+  if (["assumed", "modeled", "inferred", "recommended"].includes(truthStatus) || row.derivationRuleId) return "planning";
+  return "to_confirm";
+}
+
+function functionPriceCostStatusLabel(state, content) {
+  if (state === "confirmed") return l(content, "Confirmed cost");
+  if (state === "planning") return l(content, "Planning allocation");
+  // Unknown rows already use an em dash; repeat the explanation once in the
+  // subtotal block instead of adding the same warning to every function.
+  return "";
+}
+
+function renderTeam(content) {
+  if (!content.team.roles.length) {
+    return missingState(
+      content,
+      l(content, "Team capacity is not supplied."),
+      l(content, "A role list and time-phased capacity are required before staffing can be presented."),
+      [l(content, "Confirm accountable delivery roles."), l(content, "Confirm peak FTE and FTE-months by role."), l(content, "Confirm the active period for each role.")],
+    );
+  }
+  const plan = teamCapacityPlan(content);
+  if (!plan) {
+    return missingState(
+      content,
+      l(content, "A role list and time-phased capacity are required before staffing can be presented."),
+      l(content, "Delivery roles are identified; per-role capacity remains to confirm."),
+      [l(content, "Confirm peak FTE and FTE-months by role."), l(content, "Confirm the active period for each role.")],
+    );
+  }
+  const monthHeaders = plan.monthlyTotals.map((_, monthIndex) => {
+    const peak = monthIndex === plan.peakMonthIndex;
+    return '<span class="team-month-head' + (peak ? " is-peak" : "") + '" data-month="' + (monthIndex + 1) + '"' + (peak ? ' data-peak="true"' : "") + '>M' + (monthIndex + 1) + (peak ? '<small>' + e(teamUiText(content, "peak")) + "</small>" : "") + "</span>";
+  }).join("");
+  const maxCellFte = Math.max(...plan.rows.flatMap((row) => row.months), 0);
+  const roleRows = plan.rows.map((row, roleIndex) => {
+    const monthCells = row.months.map((value, monthIndex) => {
+      const peakMonth = monthIndex === plan.peakMonthIndex;
+      const active = value > 0;
+      // Cell emphasis scales with the FTE value itself (1 > 0.5 > 0.125), so
+      // the matrix reads as a heat map instead of highlighting only the peak
+      // month column.
+      const fteLevel = !active || maxCellFte <= 0 ? 0 : Math.max(1, Math.min(4, Math.ceil((value / maxCellFte) * 4)));
+      return '<span class="team-month-cell team-fte-level-' + fteLevel + " " + (active ? "is-active" : "is-zero") + (peakMonth ? " is-peak-month" : "") + '" data-geometry-role="team_month_cell" data-month="' + (monthIndex + 1) + '" data-fte="' + escapeHtmlAttribute(formatTeamDataValue(value)) + '" data-fte-level="' + fteLevel + '" data-truth-status="' + escapeHtmlAttribute(plan.truthStatus) + '"><strong>' + e(active ? formatTeamFte(value, content) : "0") + "</strong></span>";
+    }).join("");
+    return '<div class="team-capacity-row" data-geometry-role="team_role_row" data-role-index="' + (roleIndex + 1) + '" data-role-peak-fte="' + escapeHtmlAttribute(formatTeamDataValue(row.peakFte)) + '" data-role-fte-months="' + escapeHtmlAttribute(formatTeamDataValue(row.fteMonths)) + '"><div class="team-capacity-role"><strong>' + e(row.role) + '</strong><small>' + e(formatTeamFte(row.fteMonths, content) + " " + l(content, "FTE-months")) + '</small></div><span class="team-capacity-focus" data-geometry-role="team_role_focus">' + e(row.focus) + "</span>" + monthCells + "</div>";
+  }).join("");
+  const totalCells = plan.monthlyTotals.map((value, monthIndex) => {
+    const peak = monthIndex === plan.peakMonthIndex;
+    return '<strong class="team-month-total' + (peak ? " is-peak" : "") + '" data-geometry-role="team_month_total" data-month="' + (monthIndex + 1) + '" data-fte="' + escapeHtmlAttribute(formatTeamDataValue(value)) + '"' + (peak ? ' data-peak="true"' : "") + ">" + e(formatTeamFte(value, content)) + "</strong>";
+  }).join("");
+  const capacityEnvelope = plan.peakFte;
+  const peopleValue = content.team.people === null ? teamUiText(content, "toConfirm") : formatTeamFte(content.team.people, content);
+  const peopleTruth = normalizeTruthStatus(content.team.peopleTruthStatus, content.team.truthStatus);
+  const peopleLabel = CONFIRMED_TRUTH_STATUSES.has(peopleTruth) ? teamUiText(content, "confirmedPeople") : teamUiText(content, "plannedPeople");
+  // The metric cards speak the client's language: team size, role count,
+  // project duration, and the busiest month. FTE arithmetic stays in the
+  // matrix below where the per-month numbers explain it.
+  const durationValue = content.durationMonths
+    ? formatRendererUnit(content.durationMonths, "month", content.locale)
+    : l(content, "Schedule to confirm");
+  const metricMarkup = [
+    teamCapacityMetric("people", peopleLabel, peopleValue, teamUiText(content, "staffingScenario")),
+    teamCapacityMetric("roles", teamUiText(content, "roles"), formatTeamFte(plan.rows.length, content), teamUiText(content, "deliveryTeam")),
+    teamCapacityMetric("duration", l(content, "Delivery window"), durationValue, l(content, "Client brief")),
+    teamCapacityMetric("peak_month", l(content, "Peak workload"), "M" + (plan.peakMonthIndex + 1), l(content, "busiest project month"), true, plan.peakFte),
+  ].join("");
+  const note = teamUiText(content, "capacityNote", {
+    total: formatTeamFte(plan.fteMonths, content),
+    envelope: formatTeamFte(capacityEnvelope, content),
+  });
+  return [
+    '<div class="team-capacity-layout" data-team-month-count="' + plan.monthCount + '" data-team-matrix-truth-status="' + escapeHtmlAttribute(plan.truthStatus) + '">',
+    '<div class="team-capacity-metrics">' + metricMarkup + "</div>",
+    '<div class="team-capacity-table panel team-month-count-' + plan.monthCount + '">',
+    '<div class="team-capacity-disclosure" data-warning-status="scenario">' + e(l(content, "Planning scenario · confirmation required")) + "</div>",
+    '<div class="team-capacity-head"><span>' + e(teamUiText(content, "role")) + "</span><span>" + e(teamUiText(content, "deliveryFocus")) + "</span>" + monthHeaders + "</div>",
+    roleRows,
+    '<div class="team-capacity-total"><div class="team-capacity-total-label"><strong>' + e(teamUiText(content, "monthlyTotal")) + '</strong><small>' + e(formatTeamFte(plan.fteMonths, content) + " " + l(content, "FTE-months")) + "</small></div><span></span>" + totalCells + "</div>",
+    "</div>",
+    '<div class="team-capacity-note" data-team-capacity-envelope="' + escapeHtmlAttribute(formatTeamDataValue(capacityEnvelope)) + '"><span>' + e(teamUiText(content, "capacityLogic")) + "</span><strong>" + e(note) + "</strong><small>" + e(teamUiText(content, "monthlyModel")) + "</small></div>",
+    "</div>",
+  ].join("");
+}
+
+function teamCapacityMetric(id, label, value, detail, peak = false, numericValue = null) {
+  const numericAttribute = numericValue === null ? "" : ' data-fte="' + escapeHtmlAttribute(formatTeamDataValue(numericValue)) + '"';
+  return '<div class="team-capacity-metric' + (peak ? " is-peak" : "") + '" data-team-metric="' + escapeHtmlAttribute(id) + '"' + numericAttribute + '><span>' + e(label) + "</span><strong>" + e(value) + "</strong><small>" + e(detail) + "</small></div>";
+}
+
+function teamCapacityPlan(content) {
+  const duration = Number(content?.durationMonths);
+  const roles = array(content?.team?.roles);
+  if (!Number.isInteger(duration) || duration < 2 || duration > 6 || !roles.length || roles.length > 9) return null;
+  const truthStatus = CONFIRMED_TRUTH_STATUSES.has(normalizeTruthStatus(content.team?.truthStatus))
+    ? "modeled"
+    : normalizeTruthStatus(content.team?.truthStatus) || "modeled";
+  const rows = [];
+  for (const role of roles) {
+    const months = array(role.monthlyFte).map((value) => roundTeamFte(value));
+    if (months.length !== duration || months.some((value) => value < 0)) return null;
+    const peakFte = roundTeamFte(Math.max(...months));
+    const fteMonths = roundTeamFte(months.reduce((sum, value) => sum + value, 0));
+    if (peakFte <= 0 || !nearlyEqual(peakFte, role.peakFte) || !nearlyEqual(fteMonths, role.fteMonths)) return null;
+    rows.push({
+      role: role.role,
+      peakFte,
+      fteMonths,
+      focus: teamDeliveryFocus(role.role, content),
+      months,
+    });
+  }
+  const monthlyTotals = Array.from({ length: duration }, (_, monthIndex) => roundTeamFte(rows.reduce((sum, row) => sum + row.months[monthIndex], 0)));
+  const peakFte = Math.max(...monthlyTotals);
+  const peakMonthIndex = monthlyTotals.indexOf(peakFte);
+  const rowsTotal = roundTeamFte(rows.reduce((sum, row) => sum + row.fteMonths, 0));
+  const lockedTotal = nullableNumber(content.team?.fteMonths);
+  const lockedPeak = nullableNumber(content.team?.peakFte);
+  const lockedMonthlyTotals = array(content.team?.monthlyTotals);
+  if ((lockedTotal !== null && !nearlyEqual(rowsTotal, lockedTotal))
+    || (lockedPeak !== null && !nearlyEqual(peakFte, lockedPeak))
+    || (lockedMonthlyTotals.length && (lockedMonthlyTotals.length !== duration || lockedMonthlyTotals.some((value, index) => !nearlyEqual(value, monthlyTotals[index]))))) return null;
+  return {
+    monthCount: duration,
+    rows,
+    monthlyTotals,
+    peakFte,
+    peakMonthIndex,
+    fteMonths: lockedTotal ?? rowsTotal,
+    truthStatus,
+  };
+}
+
+function teamDeliveryFocus(role, content) {
+  const value = String(role || "").toLowerCase();
+  if (/product|pm|mahsulot|продукт|менеджер/iu.test(value)) return teamUiText(content, "focusProduct");
+  if (/architect|arxitektor|архитектор|team\s*lead|teamlead|yechim/iu.test(value)) return teamUiText(content, "focusArchitecture");
+  if (/design|designer|ui\/ux|ux|дизайн|dizayn/iu.test(value)) return teamUiText(content, "focusDesign");
+  if (/backend|back-end|бекенд|бэкенд/iu.test(value)) return teamUiText(content, "focusBackend");
+  if (/frontend|front-end|фронтенд/iu.test(value)) return teamUiText(content, "focusFrontend");
+  if (/(?:^|\W)(qa|quality|test|testing|sifat|тест)(?:\W|$)/iu.test(value)) return teamUiText(content, "focusQa");
+  if (/devops|release|релиз/iu.test(value)) return teamUiText(content, "focusDevops");
+  return teamUiText(content, "focusDelivery");
+}
+
+const TEAM_UI_COPY = Object.freeze({
+  en: Object.freeze({
+    role: "Role",
+    deliveryFocus: "Delivery focus",
+    peak: "PEAK",
+    confirmedPeople: "Confirmed people",
+    plannedPeople: "Planned people",
+    staffingScenario: "staffing scenario",
+    roles: "Roles",
+    deliveryTeam: "delivery team",
+    reconciledTotal: "reconciled total",
+    peakMonth: "Peak / M{month}",
+    concurrentFte: "concurrent FTE",
+    monthlyTotal: "Monthly total",
+    capacityLogic: "CAPACITY LOGIC",
+    monthlyModel: "MONTHLY PLANNING MODEL",
+    capacityNote: "{total} FTE-months reconcile across the matrix; the monthly team peak is {envelope} FTE.",
+    toConfirm: "To confirm",
+    focusProduct: "Backlog and product decisions",
+    focusArchitecture: "System and integrations",
+    focusDesign: "Flows and prototype",
+    focusBackend: "Core services and business logic",
+    focusFrontend: "Buyer, seller and admin surfaces",
+    focusQa: "Quality and release evidence",
+    focusDevops: "Environments and observability",
+    focusDelivery: "Delivery ownership and execution",
+  }),
+  "ru-RU": Object.freeze({
+    role: "Роль",
+    deliveryFocus: "Фокус работы",
+    peak: "ПИК",
+    confirmedPeople: "Подтверждённая численность",
+    plannedPeople: "Плановая численность",
+    staffingScenario: "сценарий команды",
+    roles: "Роли",
+    deliveryTeam: "команда реализации",
+    reconciledTotal: "сверенный итог",
+    peakMonth: "Пик / М{month}",
+    concurrentFte: "одновременный FTE",
+    monthlyTotal: "Итого по месяцам",
+    capacityLogic: "ЛОГИКА РЕСУРСОВ",
+    monthlyModel: "ПОМЕСЯЧНАЯ МОДЕЛЬ",
+    capacityNote: "Матрица сверена с {total} FTE-месяца; месячный пик команды — {envelope} FTE.",
+    toConfirm: "Подтвердить",
+    focusProduct: "Бэклог и продуктовые решения",
+    focusArchitecture: "Система и интеграции",
+    focusDesign: "Сценарии и прототип",
+    focusBackend: "Основные сервисы и бизнес-логика",
+    focusFrontend: "Интерфейсы покупателя, продавца и админа",
+    focusQa: "Качество и доказательства релиза",
+    focusDevops: "Среды и наблюдаемость",
+    focusDelivery: "Ответственность и реализация",
+  }),
+  "uz-Latn": Object.freeze({
+    role: "Rol",
+    deliveryFocus: "Ish yo'nalishi",
+    peak: "PIK",
+    confirmedPeople: "Tasdiqlangan xodimlar soni",
+    plannedPeople: "Rejalashtirilgan xodimlar",
+    staffingScenario: "jamoa ssenariysi",
+    roles: "Rollar",
+    deliveryTeam: "amalga oshirish jamoasi",
+    reconciledTotal: "solishtirilgan jami",
+    peakMonth: "Eng yuqori / {month}-oy",
+    concurrentFte: "bir vaqtdagi FTE",
+    monthlyTotal: "Oylar bo'yicha jami",
+    capacityLogic: "RESURS MANTIG'I",
+    monthlyModel: "OYLIK REJALASHTIRISH MODELI",
+    capacityNote: "Matritsa {total} FTE-oy bilan solishtirilgan; jamoaning oylik eng yuqori yuklamasi {envelope} FTE.",
+    toConfirm: "Tasdiqlash kerak",
+    focusProduct: "Beklog va mahsulot qarorlari",
+    focusArchitecture: "Tizim va integratsiyalar",
+    focusDesign: "Jarayonlar va prototip",
+    focusBackend: "Asosiy servislar va biznes mantiqi",
+    focusFrontend: "Xaridor, sotuvchi va admin interfeyslari",
+    focusQa: "Sifat va reliz dalillari",
+    focusDevops: "Muhitlar va kuzatuvchanlik",
+    focusDelivery: "Mas'uliyat va amalga oshirish",
+  }),
+});
+
+function teamUiText(content, key, replacements = {}) {
+  const locale = localeId(content);
+  const dictionary = TEAM_UI_COPY[locale] || TEAM_UI_COPY.en;
+  let value = dictionary[key] || TEAM_UI_COPY.en[key] || key;
+  for (const [name, replacement] of Object.entries(replacements)) {
+    value = value.replaceAll("{" + name + "}", String(replacement));
+  }
+  return value;
+}
+
+function teamCapacityTitle(content, plan) {
+  if (!plan) return null;
+  const month = plan.peakMonthIndex + 1;
+  const peak = formatTeamFte(plan.peakFte, content);
+  if (localeId(content) === "ru-RU") return "Пиковая загрузка команды — месяц " + month + ": " + peak + " FTE.";
+  if (localeId(content) === "uz-Latn") return "Jamoa yuklamasi " + month + "-oyda eng yuqori: " + peak + " FTE.";
+  return "Month " + month + " is the capacity peak: " + peak + " FTE.";
+}
+
+function formatTeamFte(value, content = {}) {
+  const number = finiteNumber(value);
+  return number === null
+    ? teamUiText(content, "toConfirm")
+    : new Intl.NumberFormat(content.intlLocale || rendererIntlLocale(content.locale), { maximumFractionDigits: 3 }).format(number);
+}
+
+function formatTeamDataValue(value) {
+  const number = finiteNumber(value);
+  if (number === null) return "";
+  return String(roundTeamFte(number));
+}
+
+function roundTeamFte(value) {
+  return Math.round((Number(value) + Number.EPSILON) * 1000) / 1000;
+}
+
+function nearlyEqual(left, right, epsilon = 1e-6) {
+  return Math.abs(Number(left) - Number(right)) <= epsilon;
+}
+
+function renderProjectPrice(content, _tokens, _dynamicRules, pagePlan = {}) {
+  const copy = projectPriceCopy(content.locale);
+  const capacityPlan = teamCapacityPlan(content);
+  const rows = projectPriceLedgerRows(content, capacityPlan, copy);
+  const displayTotalMinor = content.hasProjectPrice
+    ? content.projectPriceMinor
+    : content.hasClientBudget
+      ? content.clientBudgetMinor
+      : null;
+  const hasDisplayTotal = Number.isSafeInteger(displayTotalMinor) && displayTotalMinor > 0;
+  const price = hasDisplayTotal
+    ? formatMinor(displayTotalMinor, content.currency, content.currencyExponent, content)
+    : copy.notSupplied;
+  const currencyKnown = content.currencyStatus === "explicit" && content.currency !== "XXX";
+  const currencyAssumed = content.currencyStatus === "assumed" && content.currency !== "XXX";
+  const currencyState = currencyKnown
+    ? content.currency
+    : currencyAssumed
+      ? content.currency + " · " + copy.workingAssumption
+      : copy.notSupplied;
+  const currencyStatus = currencyKnown ? "explicit" : currencyAssumed ? "assumed" : "unknown";
+  const totalLabel = projectPriceTotalLabel(content, copy);
+  const planningDisclosure = content.projectAmountKind === "budget_constraint"
+    ? `${copy.planningDisclosure} ${copy.budgetNotQuote}`
+    : copy.planningDisclosure;
+  const stageMeta = [
+    content.durationMonths ? formatRendererUnit(content.durationMonths, "month", content.locale) : copy.durationPending,
+    capacityPlan ? copy.roleCount(capacityPlan.rows.length) : copy.capacityPending,
+    capacityPlan ? formatTeamFte(capacityPlan.fteMonths, content) + " " + copy.fteMonths : "",
+  ].filter(Boolean);
+  const terms = [
+    { label: copy.currency, value: currencyState, warning: !currencyKnown },
+    { label: copy.tax, value: content.commercialTerms.tax || copy.open },
+    {
+      label: copy.external,
+      value: content.commercialTerms.externalCosts || (content.externalCosts.length
+        ? content.externalCosts.slice(0, 1).map((row) => row.name + " · " + row.amount).join("")
+        : copy.confirmSeparately),
+    },
+    {
+      label: copy.contract,
+      value: content.commercialTerms.warrantySupportIpSupplied && content.commercialTerms.validity
+        ? [...new Set([content.commercialTerms.validity, content.commercialTerms.warranty, content.commercialTerms.support, content.commercialTerms.ip])].join(" · ")
+        : copy.open,
+    },
+  ];
+  const rowMarkup = rows.map((row, index) => [
+    '<div class="project-price-row" data-price-row="true" data-geometry-role="project_price_row" data-node-id="' + escapeHtmlAttribute(row.id) + '" data-truth-status="' + escapeHtmlAttribute(row.truthStatus) + '"' + (row.roleIndex ? ' data-role-index="' + row.roleIndex + '" data-role-peak-fte="' + escapeHtmlAttribute(formatTeamDataValue(row.peakFte)) + '" data-role-fte-months="' + escapeHtmlAttribute(formatTeamDataValue(row.fteMonths)) + '"' : "") + '>',
+    '<div class="project-price-cell project-price-item" data-price-field="item"><span class="project-price-item-index">' + padPage(index + 1) + '</span><strong>' + e(row.label) + "</strong></div>",
+    '<div class="project-price-cell project-price-number" data-price-field="quantity">' + e(row.quantity) + "</div>",
+    '<div class="project-price-cell project-price-number" data-price-field="duration">' + e(row.duration) + "</div>",
+    '<div class="project-price-cell project-price-unknown" data-price-field="unit_rate" data-value-status="unknown">' + e(row.rate) + "</div>",
+    '<div class="project-price-cell project-price-unknown" data-price-field="amount" data-value-status="unknown">' + e(row.amount) + "</div>",
+    "</div>",
+  ].join("")).join("");
+  return [
+    '<div class="project-price-layout">',
+    '<div class="project-price-ledger" data-project-price-table="true">',
+    '<div class="project-price-summary"><div class="project-price-summary-copy"><span>' + e(copy.summaryEyebrow) + '</span><strong>' + e(copy.summaryTitle) + '</strong></div><div class="project-price-summary-meta">' + stageMeta.map((value) => '<span>' + e(value) + "</span>").join("") + "</div></div>",
+    '<div class="project-price-scenario" data-warning-status="scenario" data-price-scenario-disclosure="true">' + e(planningDisclosure) + "</div>",
+    '<div class="project-price-head">' + [copy.item, copy.quantity, copy.duration, copy.unitRate, copy.amount].map((label, index) => '<span class="project-price-cell" data-price-field="' + ["item", "quantity", "duration", "unit_rate", "amount"][index] + '">' + e(label) + "</span>").join("") + "</div>",
+    '<div class="project-price-rows' + (rows.length === 1 ? " project-price-rows-single" : "") + '">' + rowMarkup + "</div>",
+    '<div class="project-price-total" data-project-price-total="true" data-project-price-total-minor="' + (content.hasProjectPrice ? String(content.projectPriceMinor) : "") + '" data-client-budget-minor="' + (content.hasClientBudget ? String(content.clientBudgetMinor) : "") + '" data-currency-status="' + currencyStatus + '" data-project-amount-kind="' + escapeHtmlAttribute(content.projectAmountKind) + '" data-claim-container="true"><div class="project-price-total-label"><strong>' + e(totalLabel) + '</strong>' + inlineSources(pagePlan.sourceIds, content, { compact: true }) + '</div><div class="project-price-total-value"><strong' + factualClaimAttributes(pagePlan.sourceIds, content.projectAmountKind === "budget_constraint" ? "brief-budget" : "project-total", { container: false }) + '>' + e(price) + "</strong></div></div>",
+    "</div>",
+    '<div class="project-price-disclosure">' + terms.map((row) => '<div class="project-price-term' + (row.warning ? " is-warning" : "") + '"' + (row.label === copy.currency ? ' data-currency-status="' + currencyStatus + '"' : "") + '><span>' + e(row.label) + '</span><strong>' + e(row.value) + "</strong></div>").join("") + "</div>",
+    "</div>",
+  ].join("");
+}
+
+function projectPriceLedgerRows(content, capacityPlan, copy) {
+  if (capacityPlan && capacityPlan.rows.length >= 4 && capacityPlan.rows.length <= 8) {
+    return capacityPlan.rows.map((row, index) => ({
+      id: "PROJECT-PRICE-ROLE-" + (index + 1),
+      roleIndex: index + 1,
+      label: row.role,
+      peakFte: row.peakFte,
+      fteMonths: row.fteMonths,
+      quantity: formatTeamFte(row.peakFte, content) + " FTE",
+      duration: formatTeamFte(row.fteMonths, content),
+      rate: copy.unknownMark,
+      amount: copy.unknownMark,
+      truthStatus: capacityPlan.truthStatus || "assumed",
+    }));
+  }
+  return [{
+    id: "PROJECT-PRICE-DELIVERY",
+    label: copy.projectDelivery,
+    quantity: copy.oneProject,
+    duration: content.durationMonths ? formatRendererUnit(content.durationMonths, "month", content.locale) : copy.notSupplied,
+    rate: copy.unknownMark,
+    amount: copy.unknownMark,
+    truthStatus: "unknown",
+  }];
+}
+
+function projectPriceCopy(locale) {
+  const normalized = normalizeRendererLocale(locale);
+  if (normalized === "uz-Latn") {
+    return {
+      title: "Brifdagi loyiha summasi va xarajatlar tuzilmasi.",
+      badge: "1 ta tasdiqlangan jami summa",
+      summaryEyebrow: "LOYIHA BOSQICHI",
+      summaryTitle: "Loyihani ishga tushirish",
+      roleCount: (count) => count + " ta rejalashtirilgan rol",
+      capacityPending: "Quvvatni aniqlash kerak",
+      durationPending: "Muddatni aniqlash kerak",
+      fteMonths: "FTE-oy",
+      item: "Rol / xarajat bandi",
+      quantity: "Eng yuqori FTE",
+      duration: "FTE-oy",
+      unitRate: "Oylik stavka",
+      amount: "Rol summasi",
+      notSupplied: "Taqdim etilmagan",
+      notItemized: "Ajratilmagan",
+      unknownMark: "—",
+      workingAssumption: "ishchi faraz",
+      confirmedTotal: "Tasdiqlangan loyiha summasi",
+      budgetTotal: "Brifdagi budjet miqdori",
+      planningTotal: "Rejalashtirilgan loyiha summasi",
+      budgetBadge: "Brifdagi budjet",
+      planningBadge: "Rejalashtirilgan jami summa",
+      totalPending: "Loyiha summasi aniqlanadi",
+      planningDisclosure: "Jamoa qatorlari rejalashtirilgan quvvatni ko‘rsatadi; stavka va rol kesimidagi summalar tasdiqlanmagan.",
+      budgetNotQuote: "Mijoz budjeti tijorat taklifi narxi emas.",
+      currency: "Valyuta",
+      currencyNotSupplied: "Valyuta Taqdim etilmagan",
+      currencyAssumption: "Valyuta — ishchi faraz",
+      tax: "Soliq / QQS",
+      external: "Tashqi / takroriy xarajatlar",
+      contract: "Amal qilish / kafolat / yordam / IP",
+      open: "Ochiq shart",
+      confirmSeparately: "Alohida tasdiqlanadi",
+      projectDelivery: "Loyihani ishlab chiqish",
+      oneProject: "1 loyiha",
+    };
+  }
+  if (normalized === "ru-RU") {
+    return {
+      title: "Сумма проекта из брифа и структура затрат.",
+      badge: "1 подтверждённая итоговая сумма",
+      summaryEyebrow: "ЭТАП ПРОЕКТА",
+      summaryTitle: "Запуск проекта",
+      roleCount: (count) => count + " плановых ролей",
+      capacityPending: "Мощность уточнить",
+      durationPending: "Срок уточнить",
+      fteMonths: "FTE-месяца",
+      item: "Роль / статья затрат",
+      quantity: "Пиковая FTE",
+      duration: "FTE-месяцы",
+      unitRate: "Ставка в месяц",
+      amount: "Сумма по роли",
+      notSupplied: "Не предоставлена",
+      notItemized: "Не распределена",
+      unknownMark: "—",
+      workingAssumption: "рабочее допущение",
+      confirmedTotal: "Подтверждённая сумма проекта",
+      budgetTotal: "Бюджет из брифа",
+      planningTotal: "Плановая сумма проекта",
+      budgetBadge: "Бюджет из брифа",
+      planningBadge: "Плановая итоговая сумма",
+      totalPending: "Сумма проекта уточняется",
+      planningDisclosure: "Строки команды показывают плановую мощность; ставки и суммы по ролям не подтверждены.",
+      budgetNotQuote: "Бюджет клиента не является подтверждённой ценой предложения.",
+      currency: "Валюта",
+      currencyNotSupplied: "Валюта не предоставлена",
+      currencyAssumption: "Валюта — рабочее допущение",
+      tax: "Налоги / НДС",
+      external: "Внешние / регулярные затраты",
+      contract: "Срок действия / гарантия / поддержка / IP",
+      open: "Открыто",
+      confirmSeparately: "Согласовать отдельно",
+      projectDelivery: "Разработка проекта",
+      oneProject: "1 проект",
+    };
+  }
+  return {
+    title: "Brief project total and cost structure.",
+    badge: "1 confirmed project total",
+    summaryEyebrow: "PROJECT STAGE",
+    summaryTitle: "Project launch",
+    roleCount: (count) => count + " planned roles",
+    capacityPending: "Capacity to confirm",
+    durationPending: "Duration to confirm",
+    fteMonths: "FTE-months",
+    item: "Role / cost item",
+    quantity: "Peak FTE",
+    duration: "FTE-months",
+    unitRate: "Monthly rate",
+    amount: "Role amount",
+    notSupplied: "Not supplied",
+    notItemized: "Not itemized",
+    unknownMark: "—",
+    workingAssumption: "working assumption",
+    confirmedTotal: "Confirmed project total",
+    budgetTotal: "Budget stated in the brief",
+    planningTotal: "Planning project total",
+    budgetBadge: "Brief budget",
+    planningBadge: "Planning total",
+    totalPending: "Project total to confirm",
+    planningDisclosure: "Team rows show planned capacity; role rates and role amounts are not confirmed.",
+    budgetNotQuote: "The client budget is not a confirmed proposal price.",
+    currency: "Currency",
+    currencyNotSupplied: "Currency Not supplied",
+    currencyAssumption: "Currency is a working assumption",
+    tax: "Tax / VAT",
+    external: "External / recurring costs",
+    contract: "Validity / warranty / support / IP",
+    open: "Open",
+    confirmSeparately: "Confirm separately",
+    projectDelivery: "Project delivery",
+    oneProject: "1 project",
+  };
+}
+
+function renderPayments(content, _tokens, dynamicRules = []) {
+  if (!content.payments.length) {
+    return [
+      '<div class="payment-layout">',
+      scenarioBanner(content, [], "unknown", { payment: true }),
+      missingState(content, l(content, "Payment schedule is not supplied."), l(content, "A project total alone is not a payment schedule. Every stage needs an amount, share, and acceptance trigger."), [l(content, "Confirm payment stages."), l(content, "Attach exact amounts and shares."), l(content, "Define the accepted outcome that releases each payment.")]),
+      '<div class="payment-total"><span>' + e(l(content, "Scheduled total")) + '</span><strong>' + e(l(content, "Not supplied")) + '</strong><span>' + e(l(content, "Commercial input required")) + "</span></div>",
+      "</div>",
+    ].join("");
+  }
+  let cumulative = 0;
+  let cumulativeBasisPoints = 0;
+  const rows = content.payments.map((row, index) => {
+    cumulative += row.amountMinor;
+    cumulativeBasisPoints += row.percentBasisPoints;
+    // The cumulative indicator fills a little further after every stage and
+    // reaches 100% on the final payment.
+    const progressPercent = (Math.min(10000, cumulativeBasisPoints) / 100).toFixed(2);
+    return '<div class="payment-row" data-payment-truth-status="' + escapeHtmlAttribute(row.truthStatus || "unknown") + '"><div><strong>' + e(padPage(index + 1) + " · " + row.name) + '</strong><p>' + e(row.acceptance || l(content, "Acceptance trigger to confirm")) + '</p></div><span>' + e(formatBasisPoints(row.percentBasisPoints, content)) + '</span><span>' + e(formatMinor(row.amountMinor, content.currency, content.currencyExponent, content)) + '</span><span>' + e(formatMinor(cumulative, content.currency, content.currencyExponent, content)) + '</span><div class="payment-progress" aria-hidden="true"><span style="width:' + progressPercent + '%"></span></div></div>';
+  }).join("");
+  const total = content.payments.reduce((sum, row) => sum + row.amountMinor, 0);
+  const percentTotal = content.payments.reduce((sum, row) => sum + row.percentBasisPoints, 0);
+  const reconciled = content.paymentBasisMinor > 0 && total === content.paymentBasisMinor && percentTotal === 10000;
+  const markup = [
+    '<div class="payment-layout" data-payment-schedule="true">',
+    '<div class="panel">' + commercialCurrencyNote(content) + scenarioBanner(content, content.payments, "", { payment: true }) + '<div class="payment-head"><span>' + e(l(content, "Payment / acceptance")) + '</span><span>' + e(l(content, "Share (rounded to 0.01%)")) + '</span><span>' + e(l(content, "Amount")) + '</span><span>' + e(l(content, "Cumulative")) + "</span></div>" + rows + "</div>",
+    '<div class="payment-total"><span>' + e(l(content, "Scheduled total")) + " · " + e(reconciled ? l(content, "100.00% after rounding") : l(content, "requires reconciliation")) + '</span><strong>' + e(formatMinor(total, content.currency, content.currencyExponent, content)) + '</strong><span>· ' + e(formatBasisPoints(percentTotal, content)) + "</span></div>",
+    "</div>",
+  ].join("");
+  // The per-stage progress widths are inline styles; hoist them into scoped
+  // dynamic rules so the document keeps its no-inline-style CSP invariant.
+  return hoistTrustedInlineStyles(markup, "payments", dynamicRules);
+}
+
+function renderClose(content) {
+  const paymentScheduleRequired = content.presentationKinds.has("payments");
+  const paymentScheduleReady = !paymentScheduleRequired || (
+    content.payments.length > 0
+    && content.paymentBasisMinor > 0
+    && content.payments.reduce((sum, row) => sum + row.amountMinor, 0) === content.paymentBasisMinor
+  );
+  const commercialBlockers = [
+    !content.hasProjectPrice ? l(content, "Project quote") : "",
+    content.currencyStatus !== "explicit" || content.currency === "XXX" ? l(content, "Currency") : "",
+    !content.commercialTerms.tax ? l(content, "Tax / VAT") : "",
+    !content.commercialTerms.validity ? l(content, "Quote validity") : "",
+    !content.commercialTerms.externalCosts ? l(content, "External and recurring costs") : "",
+    !content.commercialTerms.warranty ? l(content, "Warranty") : "",
+    !content.commercialTerms.support ? l(content, "Support") : "",
+    !content.commercialTerms.ip ? l(content, "Intellectual property") : "",
+    !paymentScheduleReady ? l(content, "Payment schedule") : "",
+  ].filter(Boolean).map((label) => ({ kind: "commercial", label, owner: content.decisionOwners?.commercial || l(content, "Client commercial owner") }));
+  const dependencyBlockers = content.clientDependencies
+    .filter((row) => clientDependencyReadinessBucket(row.status) !== "ready")
+    .map((row) => ({ kind: "dependency", label: row.label, owner: row.owner || l(content, "Client owner to appoint") }));
+  const blockers = [...commercialBlockers, ...dependencyBlockers];
+  const commercialReady = commercialBlockers.length === 0;
+  const dependenciesReady = dependencyBlockers.length === 0;
+  const closeReady = commercialReady && dependenciesReady;
+  const decisions = [
+    {
+      decision: l(content, "Decision · Scope baseline"),
+      detail: content.scope.length ? approveScopeLabel(content, content.scope.length) : l(content, "Supply and approve the launch scope."),
+      owner: clientText(content.decisionOwners?.scope || l(content, "Client sponsor"), 100),
+      status: content.decisionOwners?.scope ? l(content, "Ready for decision") : l(content, "Owner to appoint"),
+    },
+    {
+      decision: l(content, "Decision · Commercial terms"),
+      detail: commercialReady
+        ? paymentScheduleRequired
+          ? l(content, "Confirm currency, tax/VAT, quote validity, warranty, support and IP; then approve the price and payment stages.")
+          : l(content, "Confirm currency, tax/VAT, quote validity, warranty, support and IP; then approve the project price.")
+        : l(content, "Resolve every open commercial item shown on this page and the project-price page."),
+      owner: clientText(content.decisionOwners?.commercial || l(content, "Client commercial owner"), 100),
+      status: !commercialReady ? l(content, "Input required") : content.decisionOwners?.commercial ? l(content, "Ready for decision") : l(content, "Owner to appoint"),
+    },
+    {
+      decision: l(content, "Decision · Delivery ownership"),
+      detail: dependenciesReady
+        ? content.team.roles.length ? l(content, "Confirm named participants, kickoff date, and acceptance cadence.") : l(content, "Approve delivery roles and accountable owners.")
+        : l(content, "Provide the open client inputs and appoint their accountable owners."),
+      owner: clientText(content.decisionOwners?.delivery || l(content, "Udevs delivery lead"), 100),
+      status: !dependenciesReady ? l(content, "Input required") : content.decisionOwners?.delivery ? l(content, "Ready to assign") : l(content, "Owner to appoint"),
+    },
+  ];
+  const nextAction = closeReady
+    ? meaningfulNarrative(content.narrative.closingStatement) || l(content, "Run one decision review: approve scope, commercial terms, owners, and the kickoff evidence baseline.")
+    : l(content, "Resolve every open item below before commercial approval.");
+  const blockerMarkup = blockers.map((row) => [
+    '<div class="close-blocker" data-close-blocker="true" data-blocker-kind="' + row.kind + '">',
+    '<span>' + e(l(content, row.kind === "commercial" ? "COMMERCIAL" : "CLIENT DEPENDENCY")) + '</span>',
+    '<strong>' + e(row.label) + '</strong>',
+    '</div>',
+  ].join("")).join("");
+  return [
+    '<div class="decision-layout" data-close-ready="' + closeReady + '" data-close-blocker-count="' + blockers.length + '">',
+    '<div class="decision-list panel"><div class="table-head"><span>' + e(l(content, "Decision")) + '</span><span>' + e(l(content, "Required outcome")) + '</span><span>' + e(l(content, "Owner")) + '</span><span>' + e(l(content, "Status")) + "</span></div>" + decisions.map((row) => '<div class="decision-row"><span>' + e(row.decision) + '</span><strong>' + e(row.detail) + '</strong><p>' + e(row.owner) + '</p><span class="decision-status">' + e(row.status) + '</span></div>').join("") + "</div>",
+    '<div class="next-action panel-soft"><span class="eyebrow">' + e(l(content, "NEXT ACTION")) + '</span><strong>' + e(l(content, closeReady ? "Decision meeting" : "Open blockers")) + '</strong><p>' + e(nextAction) + '</p>' + (blockers.length ? '<div class="close-blockers">' + blockerMarkup + '</div>' : '<div class="close-assumptions"><span>' + e(l(content, "MEETING OUTCOME")) + '</span><p>' + e(l(content, "Approved product scope")) + '</p><p>' + e(l(content, "Named decision owners")) + '</p><p>' + e(l(content, "Agreed kickoff date")) + "</p></div>") + '</div>',
+    "</div>",
+  ].join("");
+}
+
+function renderSemanticPage(spec, pagePlan, styleProfile, dynamicRules, content) {
+  const displaySpec = localizeVisualizationSpec(spec, content.locale);
+  if (spec.kind === "gantt" && spec.variant === "gantt") {
+    return renderDevelopmentStagesPage(displaySpec, pagePlan, styleProfile, dynamicRules, content);
+  }
+  if (spec.kind === "nested_market") {
+    return renderMarketSizingPage(displaySpec, pagePlan, content);
+  }
+  const canvasHeight = 540;
+  const layout = layoutVisualization(displaySpec, { width: 1120, height: canvasHeight });
+  const rendered = renderVisualization(displaySpec, layout, styleProfile, { locale: content.locale });
+  const safeMarkup = hoistTrustedInlineStyles(rendered, "viz-" + pagePlan.pageNumber, dynamicRules);
+  const summary = semanticSummary(spec, pagePlan.pageNumber, content);
+  return '<div class="semantic-layout">' + safeMarkup + '<div class="semantic-note"><span>' + e(summary.label) + '</span><p>' + e(summary.detail) + '</p>' + inlineSources(pagePlan.sourceIds, content, { compact: true }) + "</div></div>";
+}
+
+function renderMarketSizingPage(spec, pagePlan, content) {
+  const copy = marketSizingCopy(content.locale);
+  const pending = spec.variant === "formula_pending" || spec.dataState === "pending";
+  const tam = array(spec.nodes).find((node) => node.id === (pending ? "FORMULA-TAM" : "MARKET-TAM"));
+  const sam = array(spec.nodes).find((node) => node.id === (pending ? "FORMULA-SAM" : "MARKET-SAM"));
+  const somNodes = pending
+    ? array(spec.nodes).filter((node) => node.id === "FORMULA-SOM")
+    : array(spec.nodes).filter((node) => String(node.id || "").startsWith("MARKET-SOM-")).slice(0, 3);
+  if (!tam || !sam || somNodes.length < 1) {
+    throw rendererError("CONTENT_MARKET_SIZING_STRUCTURE_INVALID", "TAM/SAM/SOM requires one semantic node for every market level");
+  }
+  const context = pending
+    ? copy.contextPending
+    : [tam.metric?.geography, tam.metric?.period, tam.metric?.currency].filter(Boolean).join(" · ");
+  const questionNodes = array(spec.nodes).filter((node) => node.type === "question");
+  const missingInputs = pending
+    ? '<div class="market-missing-inputs market-sizing-pending-inputs" data-market-missing-inputs="true">' + questionNodes.map((node, index) => '<div class="market-missing-input" data-node-id="' + escapeHtmlAttribute(node.id) + '" data-truth-status="' + escapeHtmlAttribute(node.truthStatus || "unknown") + '"><span>Q' + (index + 1) + '</span><p>' + e(node.label) + "</p></div>").join("") + "</div>"
+    : "";
+  const story = [
+    '<div class="market-story">',
+    '<div class="market-thesis market-sizing-thesis"><span>' + e(copy.thesisKicker) + '</span><strong>' + e(pending ? copy.pendingThesis : copy.numericThesis) + '</strong><p>' + e(pending ? copy.pendingThesisDetail : copy.numericThesisDetail) + "</p></div>",
+    '<div class="market-discipline market-sizing-discipline"><span>' + e(copy.disciplineKicker) + '</span><strong>' + e(copy.disciplineTitle) + '</strong><p>' + e(pending ? copy.pendingDisciplineDetail : copy.numericDisciplineDetail) + "</p>" + missingInputs + "</div>",
+    "</div>",
+  ].join("");
+  const sourceIds = [...new Set([tam, sam, ...somNodes].flatMap((node) => array(node.sourceIds).map(String).filter(Boolean)))];
+  const modeledMethodology = clientText(array(content.market?.methodology).slice(0, 3).join(" "), 360);
+  const benchmarkDisclosure = array(content.market?.methodology).find((item) => /benchmark|ориентир|geografiya|geography/iu.test(String(item || "")));
+  const tamLevel = renderMarketLevel("tam", tam, pending, content, copy);
+  const samLevel = renderMarketLevel("sam", sam, pending, content, copy);
+  const somLevel = renderMarketSomLevel(somNodes, pending, content, copy);
+  const model = [
+    '<div class="market-model">',
+    '<div class="market-context"><span>' + e(copy.contextKicker) + '</span><strong>' + e(context || copy.contextPending) + "</strong></div>",
+    '<div class="viz-canvas market-sizing-funnel" data-viz-id="' + escapeHtmlAttribute(spec.visualizationSpecId) + '" data-viz-kind="nested_market" data-viz-variant="' + escapeHtmlAttribute(spec.variant) + '" data-data-state="' + escapeHtmlAttribute(spec.dataState) + '">' + tamLevel + samLevel + somLevel + "</div>",
+    '<div class="market-methodology market-sizing-methodology" data-market-methodology="true"><span>' + e(copy.methodKicker) + '</span><p>' + e(pending ? copy.pendingMethodology : modeledMethodology || copy.numericMethodology) + "</p>" + inlineSources(sourceIds, content, { compact: true }) + "</div>",
+    "</div>",
+  ].join("");
+  const numericDisclosure = [copy.scenarioDisclosure, benchmarkDisclosure].filter(Boolean).join(" ");
+  const disclosure = '<div class="market-scenario-disclosure" data-market-scenario-disclosure="true" data-warning-status="' + (pending ? "pending" : "scenario") + '"><span>' + e(pending ? copy.pendingDisclosureKicker : copy.scenarioDisclosureKicker) + '</span><p>' + e(pending ? copy.pendingDisclosure : numericDisclosure) + "</p></div>";
+  return '<div class="market-sizing-layout" data-market-state="' + (pending ? "pending" : "numeric") + '">' + story + model + disclosure + "</div>";
+}
+
+function renderMarketLevel(level, node, pending, content, copy) {
+  const label = level.toUpperCase();
+  const truthStatus = node.truthStatus || (pending ? "recommended" : "unknown");
+  const sourceIds = array(node.sourceIds).map(String).filter(Boolean);
+  const valueAttributes = pending ? "" : ' data-market-value="' + escapeHtmlAttribute(String(node.metric?.value || "")) + '"';
+  const claimAttributes = pending || !["explicit", "verified", "single_source"].includes(truthStatus) ? "" : factualClaimAttributes(sourceIds, "market-" + level, { container: false });
+  const primary = pending ? node.label : formatMarketValue(node.metric, content);
+  const evidenceLabel = truthStatus === "assumed"
+    ? l(content, "Assumption")
+    : ["explicit", "verified", "single_source"].includes(truthStatus)
+      ? evidenceClaimLabel({ truthStatus, claimNature: node.claimNature }, content)
+      : "";
+  const detail = pending
+    ? copy.formulaDetail[level]
+    : level === "sam" && finitePositive(node.metric?.shareOfParent)
+      ? [formatMarketPercent(node.metric.shareOfParent, content) + " · " + copy.ofTam, evidenceLabel].filter(Boolean).join(" · ")
+      : [node.metric?.geography, node.metric?.period, evidenceLabel].filter(Boolean).join(" · ");
+  return '<div class="market-level market-level-' + level + '" data-market-level="' + level + '" data-geometry-role="market_level" data-node-id="' + escapeHtmlAttribute(node.id) + '" data-node-type="market_level" data-semantic-role="' + escapeHtmlAttribute(node.semanticRole || "neutral") + '" data-truth-status="' + escapeHtmlAttribute(truthStatus) + '"' + valueAttributes + '><div class="market-level-copy"><span>' + e(label) + '</span><strong' + claimAttributes + '>' + e(primary) + '</strong><p>' + e(detail) + "</p></div></div>";
+}
+
+function renderMarketSomLevel(nodes, pending, content, copy) {
+  const node = nodes[0];
+  if (pending) return renderMarketLevel("som", node, true, content, copy);
+  const scenarios = nodes.map((scenario, index) => {
+    const sourceIds = array(scenario.sourceIds).map(String).filter(Boolean);
+    const label = marketScenarioLabel(scenario, index, copy);
+    const share = finitePositive(scenario.metric?.shareOfParent) ? formatMarketPercent(scenario.metric.shareOfParent, content) : copy.modeledScenario;
+    const claimAttributes = ["explicit", "verified", "single_source"].includes(scenario.truthStatus) ? factualClaimAttributes(sourceIds, "market-som-" + (index + 1), { container: false }) : "";
+    return '<div class="market-scenario" data-scenario-id="' + escapeHtmlAttribute(scenario.id) + '" data-node-id="' + escapeHtmlAttribute(scenario.id) + '" data-truth-status="' + escapeHtmlAttribute(scenario.truthStatus || "assumed") + '" data-market-value="' + escapeHtmlAttribute(String(scenario.metric?.value || "")) + '"><span>' + e(label + " · " + share + " · " + l(content, "Assumption")) + '</span><strong' + claimAttributes + '>' + e(formatMarketValue(scenario.metric, content)) + "</strong></div>";
+  }).join("");
+  return '<div class="market-level market-level-som" data-market-level="som" data-geometry-role="market_level" data-node-id="MARKET-SOM" data-node-type="market_level" data-semantic-role="positive" data-truth-status="scenario"><div class="market-level-copy"><span>SOM</span><div class="market-scenarios">' + scenarios + "</div></div></div>";
+}
+
+function marketScenarioLabel(node, index, copy) {
+  const parts = String(node.label || "").split(" · ").map((part) => part.trim()).filter(Boolean);
+  return parts.length > 1 ? parts[1] : copy.scenario + " " + (index + 1);
+}
+
+function formatMarketValue(metric, content = {}) {
+  const value = finitePositive(metric?.value);
+  if (value === null) return l(content, "To confirm");
+  const formatted = new Intl.NumberFormat(content.intlLocale || rendererIntlLocale(content.locale), {
+    notation: "compact",
+    compactDisplay: "short",
+    maximumFractionDigits: 2,
+  }).format(value);
+  return metric?.currency ? String(metric.currency).toUpperCase() + " " + formatted : formatted;
+}
+
+function formatMarketPercent(value, content = {}) {
+  const share = finitePositive(value);
+  if (share === null) return l(content, "Share to confirm");
+  return new Intl.NumberFormat(content.intlLocale || rendererIntlLocale(content.locale), {
+    style: "percent",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(share);
+}
+
+function marketSizingCopy(locale) {
+  const normalized = normalizeRendererLocale(locale);
+  if (normalized === "ru-RU") return {
+    pendingTitle: "Строим проверяемую модель TAM, SAM и SOM без выдуманных сумм.",
+    numericTitle: "Превращаем объём рынка в измеримое решение о запуске.",
+    thesisKicker: "ГИПОТЕЗА ДЛЯ РЕШЕНИЯ",
+    pendingThesis: "Сначала фиксируем границу. Затем рассчитываем объём.",
+    numericThesis: "Рыночная гипотеза становится основой решения.",
+    pendingThesisDetail: "TAM, SAM и SOM должны использовать одну географию, период и валюту.",
+    numericThesisDetail: "Каждый уровень сужает предыдущий и сохраняет единый контекст расчёта.",
+    disciplineKicker: "ДИСЦИПЛИНА МОДЕЛИ",
+    disciplineTitle: "Покажите формулу. Проверьте источник. Затем оцените сценарий.",
+    pendingDisciplineDetail: "Пока входные данные не подтверждены, значения намеренно не рассчитываются.",
+    numericDisciplineDetail: "Факты, производные значения и сценарные допущения остаются различимыми.",
+    contextKicker: "КОНТЕКСТ РАСЧЁТА",
+    contextPending: "География · период · валюта — подтвердить",
+    methodKicker: "МЕТОД И ИСТОЧНИКИ",
+    pendingMethodology: "TAM задаёт весь адресуемый рынок; SAM — обслуживаемую долю TAM; SOM — отдельный сценарий захвата доли SAM.",
+    numericMethodology: "TAM → SAM → SOM — вложенная модель. Доли сверяются с родительским уровнем; источники относятся только к поддержанным значениям.",
+    pendingDisclosureKicker: "ДАННЫЕ НЕ ПОДМЕНЕНЫ",
+    pendingDisclosure: "Рыночные суммы не показаны, потому что надёжный знаменатель и единый контекст пока не подтверждены.",
+    scenarioDisclosureKicker: "СЦЕНАРНОЕ ОГРАНИЧЕНИЕ",
+    scenarioDisclosure: "Значения SOM — отдельные сценарии захвата рынка, а не числа для сложения. Выберите один сценарий после проверки входных данных.",
+    formulaDetail: { tam: "Общий адресуемый рынок", sam: "Обслуживаемый сегмент TAM", som: "Сценарий захвата доли SAM" },
+    ofTam: "от TAM",
+    modeledScenario: "модельный сценарий",
+    scenario: "Сценарий",
+  };
+  if (normalized === "uz-Latn") return {
+    pendingTitle: "TAM, SAM va SOM uchun tekshiriladigan bozor modelini quramiz.",
+    numericTitle: "Bozor hajmini o‘lchanadigan ishga tushirish qaroriga aylantiramiz.",
+    thesisKicker: "QAROR GIPOTEZASI",
+    pendingThesis: "Avval chegarani belgilaymiz. Keyin hajmni hisoblaymiz.",
+    numericThesis: "Bozor gipotezasi qaror uchun o‘lchanadigan asosga aylanadi.",
+    pendingThesisDetail: "TAM, SAM va SOM bir xil geografiya, davr va valyutada hisoblanishi kerak.",
+    numericThesisDetail: "Har bir daraja avvalgisini toraytiradi va hisob kontekstini bir xil saqlaydi.",
+    disciplineKicker: "MODEL INTIZOMI",
+    disciplineTitle: "Formulani ko‘rsating. Manbani tekshiring. Keyin ssenariyni baholang.",
+    pendingDisciplineDetail: "Kirish ma’lumotlari tasdiqlanmaguncha qiymatlar ataylab hisoblanmaydi.",
+    numericDisciplineDetail: "Faktlar, hosila qiymatlar va ssenariy farazlari bir-biridan ajratiladi.",
+    contextKicker: "HISOB KONTEKSTI",
+    contextPending: "Geografiya · davr · valyuta — tasdiqlanadi",
+    methodKicker: "METOD VA MANBALAR",
+    pendingMethodology: "TAM barcha manzilli bozorni; SAM — TAMning xizmat ko‘rsatiladigan qismini; SOM — SAM ulushini egallash ssenariysini ifodalaydi.",
+    numericMethodology: "TAM → SAM → SOM — ichma-ich model. Ulushlar ota daraja bilan solishtiriladi; manbalar faqat tasdiqlangan qiymatlarga biriktiriladi.",
+    pendingDisclosureKicker: "MA’LUMOT O‘YLAB TOPILMADI",
+    pendingDisclosure: "Ishonchli bozor bazasi va yagona hisob konteksti tasdiqlanmagani uchun bozor summalari ko‘rsatilmagan.",
+    scenarioDisclosureKicker: "SSENARIY CHEGARASI",
+    scenarioDisclosure: "SOM qiymatlari alohida bozor ulushini egallash ssenariylaridir va bir-biriga qo‘shilmaydi. Kirishlar tekshirilgach bitta ssenariy tanlanadi.",
+    formulaDetail: { tam: "Umumiy manzilli bozor", sam: "TAMning xizmat ko‘rsatiladigan segmenti", som: "SAM ulushini egallash ssenariysi" },
+    ofTam: "TAMdan",
+    modeledScenario: "model ssenariysi",
+    scenario: "Ssenariy",
+  };
+  return {
+    pendingTitle: "Build a verifiable TAM, SAM, and SOM model without invented values.",
+    numericTitle: "Turn market size into a measurable launch decision.",
+    thesisKicker: "DECISION HYPOTHESIS",
+    pendingThesis: "Define the boundary first. Calculate the volume second.",
+    numericThesis: "The market hypothesis becomes a measurable decision input.",
+    pendingThesisDetail: "TAM, SAM, and SOM must use one geography, period, and currency.",
+    numericThesisDetail: "Each level narrows the one above it while preserving a consistent calculation context.",
+    disciplineKicker: "MODEL DISCIPLINE",
+    disciplineTitle: "Show the formula. Validate the source. Then assess the scenario.",
+    pendingDisciplineDetail: "Values remain intentionally uncalculated until the required inputs are confirmed.",
+    numericDisciplineDetail: "Facts, derived values, and scenario assumptions remain visibly distinct.",
+    contextKicker: "MODEL CONTEXT",
+    contextPending: "Geography · period · currency — to confirm",
+    methodKicker: "METHOD AND SOURCES",
+    pendingMethodology: "TAM is the total addressable market; SAM is the serviceable share of TAM; SOM is a capture-rate scenario within SAM.",
+    numericMethodology: "TAM → SAM → SOM is a nested model. Shares reconcile to their parent level; sources attach only to supported values.",
+    pendingDisclosureKicker: "NO VALUES INVENTED",
+    pendingDisclosure: "Market amounts are withheld because a reliable denominator and one consistent calculation context are not yet confirmed.",
+    scenarioDisclosureKicker: "SCENARIO BOUNDARY",
+    scenarioDisclosure: "SOM values are alternative capture scenarios, not additive totals. Select one scenario after validating the inputs.",
+    formulaDetail: { tam: "Total addressable market", sam: "Serviceable segment of TAM", som: "Capture-rate scenario within SAM" },
+    ofTam: "of TAM",
+    modeledScenario: "modeled scenario",
+    scenario: "Scenario",
+  };
+}
+
+function renderDevelopmentStagesPage(spec, pagePlan, styleProfile, dynamicRules, content) {
+  const tokens = resolveStyleTokens(styleProfile);
+  const copy = developmentStagesCopy(content.locale, content.isMarketplace);
+  const scale = normalizeDevelopmentScale(spec.timeScale);
+  const phases = array(spec.nodes)
+    .filter((node) => Number.isFinite(Number(node?.time?.start)) && Number.isFinite(Number(node?.time?.end)))
+    .map((node) => ({
+      ...node,
+      start: Math.max(scale.start, Math.min(scale.end, Math.floor(Number(node.time.start)))),
+      end: Math.max(scale.start, Math.min(scale.end, Math.floor(Number(node.time.end)))),
+    }))
+    .map((node) => ({ ...node, end: Math.max(node.start, node.end) }))
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+  if (!phases.length) {
+    throw rendererError("CONTENT_ROADMAP_STRUCTURE_INVALID", "The Development Stages page requires at least one bounded stage");
+  }
+
+  const totalUnits = scale.end - scale.start + 1;
+  const phaseColors = [tokens.primary, tokens.warning, tokens.secondary, tokens.positive];
+  const phaseGeometry = phases.map((phase, index) => {
+    const left = ((phase.start - scale.start) / totalUnits) * 100;
+    const width = ((phase.end - phase.start + 1) / totalUnits) * 100;
+    const inset = Math.min(.28, Math.max(.08, width * .025));
+    return {
+      phase,
+      color: phaseColors[index % phaseColors.length],
+      left,
+      width,
+      bandLeft: left + inset,
+      bandWidth: Math.max(.2, width - inset * 2),
+      gateLeft: Math.min(99.78, ((phase.end - scale.start + 1) / totalUnits) * 100),
+    };
+  });
+  const workstreamColors = [tokens.primary, tokens.warning, tokens.secondary, tokens.primary, tokens.warning, tokens.critical, tokens.positive];
+  const workstreams = developmentWorkstreams(copy, scale).map((row, index) => ({ ...row, color: workstreamColors[index] }));
+  const ticks = Array.from({ length: totalUnits }, (_, index) => scale.start + index);
+  const grid = ticks.map(() => '<span class="roadmap-grid-cell"></span>').join("");
+
+  const phaseMarkup = phaseGeometry.map(({ phase, color, bandLeft, bandWidth }) => [
+    '<div class="roadmap-phase-band" data-geometry-role="semantic_node" data-node-id="' + escapeHtmlAttribute(phase.id) + '" data-node-type="phase" data-semantic-role="' + escapeHtmlAttribute(phase.semanticRole || "neutral") + '" data-truth-status="' + escapeHtmlAttribute(phase.truthStatus || "assumed") + '" data-inclusion="' + escapeHtmlAttribute(phase.inclusion || "recommended") + '" style="left:' + percentValue(bandLeft) + '%;width:' + percentValue(bandWidth) + '%;border-color:' + color + ';background:' + tokens.background + '">',
+    '<strong>' + e(phase.label) + '</strong>',
+    '<small>' + e(developmentRangeLabel(scale.unit, phase.start, phase.end, content.locale)) + "</small>",
+    "</div>",
+  ].join("")).join("");
+
+  const workstreamLabels = workstreams.map((row, index) => [
+    '<div class="roadmap-label-cell roadmap-workstream-label">',
+    '<span>' + String(index + 1).padStart(2, "0") + "</span>",
+    '<strong>' + e(row.label) + '</strong>',
+    '<small>' + e(developmentRangeLabel(scale.unit, row.start, row.end, content.locale)) + "</small>",
+    "</div>",
+  ].join("")).join("");
+
+  const workstreamRows = workstreams.map((row) => {
+    const left = ((row.start - scale.start) / totalUnits) * 100;
+    const width = ((row.end - row.start + 1) / totalUnits) * 100;
+    const inset = Math.min(.34, Math.max(.08, width * .018));
+    return [
+      '<div class="roadmap-workstream-row">',
+      '<div class="roadmap-week-grid">' + grid + "</div>",
+      '<span class="roadmap-workstream-bar" data-geometry-role="roadmap_workstream" data-semantic-role="recommended" data-truth-status="assumed" data-inclusion="recommended" style="left:' + percentValue(left + inset) + '%;width:' + percentValue(Math.max(.2, width - inset * 2)) + '%;border-color:' + row.color + ';background:' + row.color + ';color:' + readableTextColor(row.color, tokens.text, tokens.background) + '"><small>' + e(developmentRangeLabel(scale.unit, row.start, row.end, content.locale)) + "</small></span>",
+      "</div>",
+    ].join("");
+  }).join("");
+
+  const gateLines = phaseGeometry.map(({ color, gateLeft }, index) => '<span class="roadmap-gate-line" data-geometry-role="roadmap_gate" data-truth-status="assumed" style="left:' + percentValue(gateLeft) + '%;border-color:' + color + '"><strong>G' + (index + 1) + "</strong></span>").join("");
+  const gateCards = phaseGeometry.map(({ left, width }, index) => '<div class="roadmap-gate-card" data-geometry-role="roadmap_gate_outcome" data-truth-status="assumed" style="left:' + percentValue(left) + '%;width:' + percentValue(width) + '%"><p>' + e(developmentGateOutcome(copy, index, phaseGeometry.length)) + "</p></div>").join("");
+  const tickMarkup = ticks.map((tick) => '<span>' + e(timeAxisTickLabel(scale.unit, tick, content.locale)) + "</span>").join("");
+  const duration = content.durationMonths
+    ? formatRendererUnit(content.durationMonths, "month", content.locale)
+    : content.durationWeeks
+      ? formatRendererUnit(content.durationWeeks, "week", content.locale)
+      : formatRendererUnit(totalUnits, scale.unit, content.locale);
+  const sourceMarkup = inlineSources(pagePlan.sourceIds, content, { compact: true });
+  const durationClaim = sourceMarkup ? factualClaimAttributes(pagePlan.sourceIds, "roadmap-delivery-duration", { container: false }) : "";
+  const durationContainer = sourceMarkup ? ' data-claim-container="true"' : "";
+  const intro = [
+    '<div class="roadmap-stage-intro">',
+    '<div class="roadmap-stage-thesis"><span>' + e(copy.parallelLabel) + '</span><p>' + e(copy.thesis(workstreams.length, phaseGeometry.length)) + "</p></div>",
+    '<div class="roadmap-duration-fact"' + durationContainer + '><span>' + e(copy.briefDuration) + '</span><strong' + durationClaim + '>' + e(duration) + "</strong>" + sourceMarkup + "</div>",
+    "</div>",
+  ].join("");
+  const chart = [
+    '<div class="viz-canvas viz-roadmap roadmap-stage-chart" data-viz-id="' + escapeHtmlAttribute(spec.visualizationSpecId) + '" data-viz-kind="gantt" data-viz-variant="gantt" data-data-state="' + escapeHtmlAttribute(spec.dataState) + '">',
+    '<div class="roadmap-label-column">',
+    '<div class="roadmap-label-cell roadmap-label-heading"><strong>' + e(copy.stages) + "</strong></div>",
+    '<div class="roadmap-label-cell"><span>' + e(copy.planningScale) + '</span><strong>' + e(formatRendererUnit(totalUnits, scale.unit, content.locale)) + "</strong></div>",
+    workstreamLabels,
+    '<div class="roadmap-label-cell roadmap-label-gates"><span>' + e(copy.gates) + '</span><strong>' + e(copy.targetOutcomes) + "</strong></div>",
+    "</div>",
+    '<div class="roadmap-timeline-column">',
+    '<div class="roadmap-phase-track">' + phaseMarkup + "</div>",
+    '<div class="viz-gantt-axis roadmap-week-track">' + tickMarkup + "</div>",
+    workstreamRows,
+    '<div class="roadmap-gate-outcomes">' + gateCards + "</div>",
+    '<div class="roadmap-gate-layer">' + gateLines + "</div>",
+    "</div>",
+    "</div>",
+  ].join("");
+  const disclosure = '<div class="roadmap-stage-disclosure" data-warning-status="scenario"><span>' + e(copy.scenario) + '</span><p>' + e(copy.disclosure) + "</p></div>";
+  const safeMarkup = hoistTrustedInlineStyles(intro + chart + disclosure, "roadmap-" + pagePlan.pageNumber, dynamicRules);
+  return '<div class="semantic-layout roadmap-stage-layout">' + safeMarkup + "</div>";
+}
+
+function normalizeDevelopmentScale(timeScale = {}) {
+  const start = Math.floor(Number(timeScale.start));
+  const end = Math.floor(Number(timeScale.end));
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start || end - start + 1 > 52) {
+    throw rendererError("CONTENT_ROADMAP_SCALE_MISSING", "Development Stages requires a bounded time scale of at most 52 units");
+  }
+  return { start, end, unit: String(timeScale.unit || "week") };
+}
+
+function developmentWorkstreams(copy, scale) {
+  const total = scale.end - scale.start + 1;
+  const startAt = (fraction) => Math.min(scale.end, scale.start + Math.floor(total * fraction));
+  const endAt = (fraction) => Math.max(scale.start, Math.min(scale.end, scale.start + Math.ceil(total * fraction) - 1));
+  const spans = [
+    [0, .25],
+    [0, .5],
+    [0, .25],
+    [.125, .75],
+    [.25, .75],
+    [.5, .9375],
+    [.75, 1],
+  ];
+  return copy.workstreams.map((label, index) => {
+    const start = startAt(spans[index][0]);
+    const end = Math.max(start, endAt(spans[index][1]));
+    return { label, start, end };
+  });
+}
+
+function developmentGateOutcome(copy, index, count) {
+  if (index === count - 1) return copy.gateOutcomes[3];
+  if (count === 3 && index === 1) return copy.gateOutcomes[1];
+  return copy.gateOutcomes[Math.min(index, 2)];
+}
+
+function developmentRangeLabel(unit, start, end, locale) {
+  return timeAxisTickLabel(unit, start, locale) + "–" + timeAxisTickLabel(unit, end, locale);
+}
+
+function percentValue(value) {
+  return Number(value.toFixed(3)).toString();
+}
+
+function developmentStagesCopy(locale, isMarketplace) {
+  const normalized = normalizeRendererLocale(locale);
+  if (normalized === "ru-RU") return {
+    parallelLabel: "ПАРАЛЛЕЛЬНАЯ РАБОТА",
+    thesis: (streams, gates) => streams + " рабочих потоков сходятся в " + gates + " плановых точках контроля.",
+    briefDuration: "СРОК ИЗ БРИФА",
+    stages: "ЭТАПЫ РАЗРАБОТКИ",
+    planningScale: "ПЛАНОВАЯ ШКАЛА",
+    gates: "КОНТРОЛЬНЫЕ ТОЧКИ",
+    targetOutcomes: "Плановые результаты",
+    scenario: "ПЛАНОВЫЙ СЦЕНАРИЙ · ДЛЯ СОГЛАСОВАНИЯ",
+    disclosure: "Параллельность потоков, границы этапов и результаты контрольных точек смоделированы. Подтверждён только общий срок из брифа.",
+    workstreams: [
+      "Состав и операционная модель",
+      "Исследование продукта и прототип",
+      "Архитектура и среды",
+      isMarketplace ? "Разработка ядра маркетплейса" : "Разработка ядра продукта",
+      "Интеграции и операционные инструменты",
+      "QA, безопасность и стабилизация",
+      "UAT, запуск и передача",
+    ],
+    gateOutcomes: ["Состав и модель готовы", "Прототип и архитектура готовы", "Бета готова к приёмке", "Запуск и передача готовы"],
+  };
+  if (normalized === "uz-Latn") return {
+    parallelLabel: "PARALLEL ISHLAR",
+    thesis: (streams, gates) => streams + " ta ish oqimi " + gates + " ta reja nazorat nuqtasida birlashadi.",
+    briefDuration: "BRIF MUDDATI",
+    stages: "ISHLAB CHIQISH BOSQICHLARI",
+    planningScale: "REJA SHKALASI",
+    gates: "NAZORAT NUQTALARI",
+    targetOutcomes: "Rejalashtirilgan natijalar",
+    scenario: "REJALASHTIRISH SSENARIYSI · MIJOZ BILAN KELISHILADI",
+    disclosure: "Ish oqimlarining parallelligi, bosqich chegaralari va nazorat natijalari modellashtirilgan. Faqat brifdagi umumiy muddat tasdiqlangan.",
+    workstreams: [
+      "Tarkib va ish modeli",
+      "Mahsulot tahlili va prototip",
+      "Arxitektura va muhitlar",
+      isMarketplace ? "Marketpleys yadrosini ishlab chiqish" : "Mahsulot yadrosini ishlab chiqish",
+      "Integratsiyalar va operatsion vositalar",
+      "QA, xavfsizlik va mustahkamlash",
+      "UAT, ishga tushirish va topshirish",
+    ],
+    gateOutcomes: ["Tarkib va model tayyor", "Prototip va arxitektura tayyor", "Beta qabulga tayyor", "Ishga tushirish va topshirish tayyor"],
+  };
+  return {
+    parallelLabel: "PARALLEL DELIVERY",
+    thesis: (streams, gates) => streams + " workstreams converge at " + gates + " planning gates.",
+    briefDuration: "BRIEF DURATION",
+    stages: "DEVELOPMENT STAGES",
+    planningScale: "PLANNING SCALE",
+    gates: "ACCEPTANCE GATES",
+    targetOutcomes: "Target outcomes",
+    scenario: "PLANNING SCENARIO · FOR CLIENT REVIEW",
+    disclosure: "Workstream overlaps, stage boundaries, and gate outcomes are modeled. Only the total duration from the brief is source-supported.",
+    workstreams: [
+      "Scope and operating model",
+      "Product discovery and prototype",
+      "Architecture and environments",
+      isMarketplace ? "Marketplace core engineering" : "Core product engineering",
+      "Integrations and operational tooling",
+      "QA, security, and hardening",
+      "UAT, launch, and handover",
+    ],
+    gateOutcomes: ["Scope and model ready", "Prototype and architecture ready", "Beta ready for acceptance", "Launch and handover ready"],
+  };
+}
+
+function developmentStagesTitle(locale, duration) {
+  const normalized = normalizeRendererLocale(locale);
+  if (normalized === "ru-RU") return "Этапы разработки на " + duration + ".";
+  if (normalized === "uz-Latn") return duration + "lik ishlab chiqish bosqichlari.";
+  return "Development stages across " + duration + ".";
+}
+
+function developmentGateCountLabel(locale, count) {
+  const normalized = normalizeRendererLocale(locale);
+  if (normalized === "ru-RU") return "Плановых точек контроля: " + count;
+  if (normalized === "uz-Latn") return count + " ta reja nazorat nuqtasi";
+  return count + " planning gates";
+}
+
+function semanticSummary(spec, pageNumber, content) {
+  const pending = spec.dataState === "pending" || ["pending", "questions", "formula_pending"].includes(spec.variant);
+  if (spec.kind === "nested_market") {
+    return pending
+      ? { label: l(content, "TO CONFIRM"), detail: l(content, "Market formulas are visible without invented values. Approve all required inputs before using the model.") }
+      : { label: l(content, "MODELED MARKET"), detail: l(content, "Nested levels express subset logic; SOM values are scenarios, never an additive forecast.") };
+  }
+  if (spec.kind === "ownership_boundary") {
+    return pending
+      ? { label: l(content, "BOUNDARY QUESTIONS"), detail: l(content, "Confirm the owned control state, partner callbacks, and capabilities explicitly deferred from launch.") }
+      : { label: l(content, "OWNERSHIP MODEL"), detail: l(content, "Owned control, partner-enabled services, and deferred scope remain distinct relationship types.") };
+  }
+  if (spec.kind === "hub_spoke") {
+    return pending
+      ? { label: l(content, "SCOPE TO CONFIRM"), detail: l(content, "Confirm the product root, functional directions, functions, and subfunctions before approval.") }
+      : { label: l(content, "PRODUCT HIERARCHY"), detail: l(content, "The product root stays at the left; every direction, function, and subfunction expands to the right.") };
+  }
+  if (spec.kind === "bpmn") {
+    return pending
+      ? { label: l(content, "PROCESS QUESTIONS"), detail: l(content, "Confirm actors, tasks, real decisions, exception routes, and accepted outcomes before approving this process.") }
+      : { label: l(content, "PRIMARY FLOW"), detail: l(content, "The directed flow shows actors, decisions, outcomes, and exception ownership.") };
+  }
+  if (spec.kind === "architecture") {
+    const recommended = array(spec.nodes).some((node) => ["recommended", "inferred", "assumed"].includes(String(node.truthStatus || "").toLowerCase()));
+    return pending
+      ? { label: l(content, "CONTEXT TO CONFIRM"), detail: l(content, "Confirm channels, trusted application boundary, operational data needs, and partner dependencies.") }
+      : { label: recommended ? l(content, "Recommendation") : l(content, "TRUST BOUNDARY"), detail: l(content, "Channels reach the trusted product core; data remains inside and partner services remain outside.") };
+  }
+  const scale = spec.timeScale || {};
+  const span = Number.isFinite(Number(scale.start)) && Number.isFinite(Number(scale.end))
+    ? formatRendererUnit(String(scale.start) + "-" + String(scale.end), scale.unit || "period", content.locale)
+    : content.durationWeeks
+      ? formatRendererUnit(content.durationWeeks, "week", content.locale)
+      : content.durationMonths
+        ? formatRendererUnit(content.durationMonths, "month", content.locale)
+        : l(content, "duration to confirm");
+  return pending
+    ? { label: l(content, "ROADMAP QUESTIONS"), detail: l(content, "Roadmap duration") + " · " + span + ". " + l(content, "Confirm real phase spans, dependencies, and acceptance gates.") }
+    : { label: l(content, "DELIVERY SCALE"), detail: l(content, "Roadmap duration") + " · " + span + ". " + l(content, "Bars use the inclusive time scale and preserve dependencies.") };
+}
+
+function resolvePageTitle(pagePlan, content, spec) {
+  if (pagePlan.kind === "project_price") return projectPriceCopy(content.locale).title;
+  if (pagePlan.title) return clientText(localizeKnown(pagePlan.title, content.locale), 120);
+  if (pagePlan.kind === "cover") return content.projectTitle;
+  if (pagePlan.kind === "market_sizing" && spec?.kind === "nested_market") {
+    const copy = marketSizingCopy(content.locale);
+    return spec.variant === "formula_pending" || spec.dataState === "pending" ? copy.pendingTitle : copy.numericTitle;
+  }
+  if (pagePlan.kind === "primary_flow" && spec && (spec.dataState === "pending" || ["pending", "questions"].includes(spec.variant))) {
+    return l(content, "Process questions before approval.");
+  }
+  if (pagePlan.kind === "roadmap" && spec?.timeScale) {
+    const duration = content.durationMonths
+      ? formatRendererUnit(content.durationMonths, "month", content.locale)
+      : content.durationWeeks
+        ? formatRendererUnit(content.durationWeeks, "week", content.locale)
+        : formatRendererUnit(Number(spec.timeScale.end) - Number(spec.timeScale.start) + 1, spec.timeScale.unit || "period", content.locale);
+    return developmentStagesTitle(content.locale, duration);
+  }
+  if (pagePlan.kind === "team") {
+    const title = teamCapacityTitle(content, teamCapacityPlan(content));
+    if (title) return title;
+  }
+  return rendererPageTitles(content.locale)[pageKindIndex(pagePlan.kind)];
+}
+
+function resolvePageBadge(pagePlan, content, spec) {
+  if (spec) {
+    if (spec.dataState === "pending") return l(content, "Requires confirmation");
+    if (spec.dataState === "grounded" || spec.dataState === "verified") return l(content, "Supported by evidence");
+    const labels = {
+      nested_market: "Market model inputs",
+      ownership_boundary: "Responsibility model",
+      hub_spoke: "Recommended product structure",
+      bpmn: "Recommended process",
+      architecture: "Architecture inputs",
+      gantt: "Delivery planning model",
+    };
+    if (spec.kind === "gantt" && spec.variant === "gantt") {
+      return developmentGateCountLabel(content.locale, array(spec.nodes).length);
+    }
+    const label = l(content, labels[spec.kind] || "Inputs and recommendations");
+    return spec.kind === "hub_spoke" && Number(spec.segmentCount) > 1
+      ? `${label} · ${spec.segmentIndex}/${spec.segmentCount}`
+      : label;
+  }
+  if (pagePlan.kind === "org_structure") {
+    if (content.organizationStructure.status === "grounded" && content.organizationStructure.mode === "grounded_public_org") return l(content, "Public organization view");
+    if (content.organizationStructure.status === "pending") return l(content, "Requires confirmation");
+    return l(content, "Recommended role model");
+  }
+  if (pagePlan.kind === "function_price") return functionGroupsLabel(content, content.functionPrice.length);
+  if (pagePlan.kind === "team") {
+    const plan = teamCapacityPlan(content);
+    if (plan) return rolesLabel(content, content.team.roles.length) + " · " + formatRendererUnit(plan.monthCount, "month", content.locale);
+    return content.team.roles.length ? rolesLabel(content, content.team.roles.length) : l(content, "Capacity to confirm");
+  }
+  if (pagePlan.kind === "project_price") return projectPriceBadge(content, projectPriceCopy(content.locale));
+  if (pagePlan.kind === "payments") return content.payments.length ? paymentStagesShortLabel(content, content.payments.length) : l(content, "Schedule to confirm");
+  return rendererPageBadges(content.locale)[pageKindIndex(pagePlan.kind)];
+}
+
+function normalizeFunctionPrice(lock, semanticModel, proposalModel, exponent, locale) {
+  const semanticRows = array(semanticModel.commercial?.functionPrice);
+  const proposalRows = array(proposalModel.functionPrice);
+  const scopeRows = array(proposalModel.scope).length ? array(proposalModel.scope) : array(semanticModel.scopeItems);
+  if (lock) {
+    return array(lock.functionPrice).map((row, index) => {
+      const proposalRow = findProvenanceRow(row, index, proposalRows);
+      const semanticRow = findProvenanceRow(row, index, semanticRows, "label");
+      const scopeRow = findFunctionPriceScopeRow(row, proposalRow, scopeRows, index, lock.functionPrice.length);
+      const truthStatus = normalizeTruthStatus(row.truthStatus, proposalRow?.truthStatus, semanticRow?.truthStatus, row.status, proposalRow?.status);
+      return {
+        id: String(row.id || "FP-" + (index + 1)),
+        name: clientText(localizeRendererText(row.name || row.label || proposalRow?.name || semanticRow?.label || "Function " + (index + 1), locale), 120),
+        epic: clientText(localizeRendererText(proposalRow?.epic || scopeRow?.epic || "To confirm", locale), 100),
+        detail: clientText(localizeRendererText(proposalRow?.detail || scopeRow?.detail || "To confirm", locale), 170),
+        deadline: clientText(localizeRendererText(proposalRow?.phase || proposalRow?.deadline || scopeRow?.phase || scopeRow?.deadline || "To confirm", locale), 70),
+        scopeStatus: normalizeFunctionScopeStatus(proposalRow, scopeRow),
+        amountMinor: safeMinor(row.amountMinor, "functionPrice[" + index + "].amountMinor"),
+        truthStatus,
+        sourceIds: [...new Set([
+          ...array(row.sourceIds),
+          ...array(proposalRow?.sourceIds),
+          ...array(semanticRow?.sourceIds),
+        ].map(String).filter(Boolean))].slice(0, 4),
+        derivationRuleId: row.derivationRuleId || proposalRow?.derivationRuleId || semanticRow?.derivationRuleId || null,
+      };
+    });
+  }
+  const rows = semanticRows.length ? semanticRows : proposalRows;
+  return rows.map((row, index) => {
+    const proposalRow = findProvenanceRow(row, index, proposalRows, row.label ? "label" : "name");
+    const scopeRow = findFunctionPriceScopeRow(row, proposalRow, scopeRows, index, rows.length);
+    return {
+      id: String(row.id || "FP-" + (index + 1)),
+      name: clientText(localizeRendererText(row.name || row.label || proposalRow?.name || scopeRow?.feature || "Function " + (index + 1), locale), 120),
+      epic: clientText(localizeRendererText(row.epic || proposalRow?.epic || scopeRow?.epic || "To confirm", locale), 100),
+      detail: clientText(localizeRendererText(row.detail || proposalRow?.detail || scopeRow?.detail || "To confirm", locale), 170),
+      deadline: clientText(localizeRendererText(row.phase || row.deadline || proposalRow?.phase || proposalRow?.deadline || scopeRow?.phase || scopeRow?.deadline || "To confirm", locale), 70),
+      scopeStatus: normalizeFunctionScopeStatus(proposalRow || row, scopeRow),
+      amountMinor: majorToMinor(row.amount ?? row.total ?? row.price ?? row.cost, exponent),
+      truthStatus: normalizeTruthStatus(row.truthStatus, row.status, proposalRow?.truthStatus, proposalRow?.status),
+      sourceIds: [...new Set([...array(row.sourceIds), ...array(proposalRow?.sourceIds)].map(String).filter(Boolean))].slice(0, 4),
+      derivationRuleId: row.derivationRuleId || proposalRow?.derivationRuleId || null,
+    };
+  }).filter((row) => row.amountMinor !== null);
+}
+
+function findFunctionPriceScopeRow(row, proposalRow, scopeRows, index, inventoryLength) {
+  const explicitScopeId = String(row?.scopeId || proposalRow?.scopeId || "").trim();
+  if (explicitScopeId) {
+    const byId = scopeRows.find((scope) => String(scope?.id || "").trim() === explicitScopeId);
+    if (byId) return byId;
+  }
+  const labels = [row?.name, row?.label, proposalRow?.name, proposalRow?.label, proposalRow?.feature]
+    .map(normalizeFunctionMatchLabel)
+    .filter(Boolean);
+  for (const label of labels) {
+    const matches = scopeRows.filter((scope) => [scope?.feature, scope?.name, scope?.label].map(normalizeFunctionMatchLabel).includes(label));
+    if (matches.length === 1) return matches[0];
+  }
+  return scopeRows.length === inventoryLength ? scopeRows[index] || null : null;
+}
+
+function normalizeFunctionMatchLabel(value) {
+  return String(value || "").normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
+}
+
+function normalizeFunctionScopeStatus(primary = {}, scope = {}) {
+  primary = primary || {};
+  scope = scope || {};
+  const value = String(primary.inclusion || primary.priority || primary.scopeStatus || scope.inclusion || scope.priority || scope.scopeStatus || "").trim().toLowerCase();
+  const hasGroundedProvenance = array(primary.sourceIds).length > 0 || array(scope.sourceIds).length > 0;
+  if (/out[_ -]?of[_ -]?scope|excluded|вне|tashqar/.test(value)) return "out_of_scope";
+  if (/defer|later|отлож|keyin/.test(value)) return "deferred";
+  if (/recommend|propos|tavsiya|рекоменд/.test(value)) return "recommended";
+  if (/requested|explicit|запрош|so['’]?ral/.test(value)) return hasGroundedProvenance ? "requested" : "to_confirm";
+  if (/in[_ -]?scope|include|включ|kirit/.test(value)) return hasGroundedProvenance ? "in_scope" : "to_confirm";
+  const truthStatus = normalizeTruthStatus(primary.truthStatus, primary.status, scope.truthStatus, scope.status);
+  return CONFIRMED_TRUTH_STATUSES.has(truthStatus) && hasGroundedProvenance ? "in_scope" : truthStatus === "recommended" ? "recommended" : "to_confirm";
+}
+
+function normalizePayments(lock, semanticModel, proposalModel, exponent, projectPriceMinor, locale) {
+  const semanticRows = array(semanticModel.commercial?.payments);
+  const proposalRows = array(proposalModel.payments);
+  const provenanceRows = [...semanticRows, ...proposalRows];
+  if (lock) {
+    return [...array(lock.payments)].sort((a, b) => Number(a.order) - Number(b.order)).map((row, index) => {
+      const provenance = findProvenanceRow(row, index, provenanceRows);
+      return {
+        id: String(row.id || "PAY-" + (index + 1)),
+        name: clientText(localizeKnown(row.name || row.label || "Payment " + (index + 1), locale), 100),
+        amountMinor: safeMinor(row.amountMinor, "payments[" + index + "].amountMinor"),
+        percentBasisPoints: safeBasisPoints(row.percentBasisPoints, "payments[" + index + "].percentBasisPoints"),
+        order: Number(row.order ?? index + 1),
+        acceptance: clientText(localizeKnown(row.acceptance || row.due || "Acceptance trigger to confirm", locale), 160),
+        truthStatus: normalizeTruthStatus(row.truthStatus, row.status, provenance?.truthStatus, provenance?.status),
+      };
+    });
+  }
+  const rows = semanticRows.length ? semanticRows : proposalRows;
+  return rows.map((row, index) => {
+    const amountMinor = majorToMinor(row.amount ?? row.total, exponent);
+    let basis = row.percentBasisPoints;
+    if (!Number.isSafeInteger(Number(basis)) && finiteNumber(row.percent) !== null) basis = Math.round(Number(row.percent) * 100);
+    if (!Number.isSafeInteger(Number(basis)) && amountMinor !== null && projectPriceMinor > 0) basis = Math.round((amountMinor * 10000) / projectPriceMinor);
+    return {
+      id: String(row.id || "PAY-" + (index + 1)),
+      name: clientText(localizeKnown(row.name || row.label || row.period || row.milestone || "Payment " + (index + 1), locale), 100),
+      amountMinor,
+      percentBasisPoints: Number.isSafeInteger(Number(basis)) ? Number(basis) : 0,
+      order: Number(row.order ?? index + 1),
+      acceptance: clientText(localizeKnown(row.acceptance || row.due || "Acceptance trigger to confirm", locale), 160),
+      truthStatus: normalizeTruthStatus(row.truthStatus, row.status),
+    };
+  }).filter((row) => row.amountMinor !== null);
+}
+
+function normalizeScope(semanticModel, proposalModel, locale) {
+  const rows = array(semanticModel.scopeItems).length
+    ? semanticModel.scopeItems
+    : array(semanticModel.scope?.scopeItems).length
+      ? semanticModel.scope.scopeItems
+      : array(proposalModel.scope);
+  return rows.map((row, index) => {
+    const source = Array.isArray(row)
+      ? { epic: row[0], feature: row[1], detail: row[2], phase: row[3], inclusion: row[4] }
+      : row || {};
+    return {
+      id: String(source.id || "SCOPE-" + (index + 1)),
+      label: clientText(localizeKnown(source.label || source.feature || source.name || source.epic || "Scope item " + (index + 1), locale), 110),
+      epic: clientText(localizeKnown(source.epic || source.domain || "Product", locale), 80),
+      detail: clientText(localizeKnown(source.detail || source.description || source.phase || "", locale), 180),
+      inclusion: String(source.inclusion || "in_scope"),
+      ownership: String(source.ownership || "unknown"),
+      truthStatus: String(source.truthStatus || "unknown"),
+      sourceIds: array(source.sourceIds).map(String).filter(Boolean),
+      derivationRuleId: source.derivationRuleId || null,
+    };
+  });
+}
+
+function normalizeTeam(lock, semanticModel, proposalModel, locale, durationMonths) {
+  const semanticTeam = semanticModel.team || {};
+  const proposalTeam = proposalModel.teamPlan || {};
+  const semanticRoles = array(semanticTeam.roles);
+  const proposalRoles = array(proposalTeam.roleAllocations).length ? proposalTeam.roleAllocations : array(proposalTeam.roles);
+  const provenanceRoles = [...semanticRoles, ...proposalRoles];
+  const teamPlan = lock?.teamPlan || (semanticRoles.length ? semanticTeam : proposalTeam);
+  const canonical = canonicalizeTeamPlan(teamPlan, { durationMonths });
+  const canonicalRows = canonical.roleAllocations.length
+    ? canonical.roleAllocations
+    : canonical.roles.map((role) => ({ role }));
+  return {
+    people: nullableNumber(canonical.people),
+    peopleTruthStatus: normalizeTruthStatus(teamPlan.peopleTruthStatus, teamPlan.truthStatus, semanticTeam.peopleTruthStatus, semanticTeam.truthStatus, proposalTeam.peopleTruthStatus, proposalTeam.truthStatus),
+    monthCount: canonical.monthCount,
+    monthlyTotals: canonical.monthlyTotals,
+    peakMonth: canonical.peakMonth,
+    fteMonths: nullableNumber(canonical.fteMonths),
+    peakFte: nullableNumber(canonical.peakFte),
+    truthStatus: normalizeTruthStatus(canonical.truthStatus, semanticTeam.truthStatus, proposalTeam.truthStatus),
+    roles: canonicalRows.map((source, index) => {
+      const provenance = findProvenanceRow(source, index, provenanceRoles, "role");
+      return {
+        role: clientText(localizeKnown(source.role || source.name || "Role " + (index + 1), locale), 90),
+        people: nullableNumber(source.people),
+        monthlyFte: array(source.monthlyFte).map(Number),
+        fteMonths: nullableNumber(source.fteMonths),
+        peakFte: nullableNumber(source.peakFte ?? source.fte ?? source.qty),
+        truthStatus: normalizeTruthStatus(source.truthStatus, source.status, provenance?.truthStatus, provenance?.status, canonical.truthStatus),
+      };
+    }),
+  };
+}
+
+function normalizeOrganizationStructure(proposalModel, semanticModel, locale, projectTitle) {
+  const supplied = proposalModel.organizationStructure && typeof proposalModel.organizationStructure === "object"
+    ? proposalModel.organizationStructure
+    : null;
+  // A supplied structure is rendered as branches: either the grounded public
+  // organization or the recommended client-platform role model (root = the
+  // client's organization, branches = administration / partner / user roles).
+  if (supplied && array(supplied.branches).length) {
+    const rootSourceIds = normalizedSourceIds(supplied.sourceIds);
+    const rawBranches = array(supplied.branches).slice(0, 3);
+    const branches = rawBranches.map((branch, branchIndex) => {
+      const branchSourceIds = normalizedSourceIds(branch?.sourceIds, rootSourceIds);
+      const rawChildren = array(branch?.children).slice(0, 3);
+      const children = rawChildren.length
+        ? rawChildren.map((child, childIndex) => ({
+            id: safeDomId(String(child?.id || `ORG-B${branchIndex + 1}-R${childIndex + 1}`)),
+            label: clientText(localizeKnown(child?.label || child?.name || l({ locale }, "Role details to confirm"), locale), 72),
+            detail: clientText(localizeKnown(child?.detail || child?.description || "", locale), 90),
+            truthStatus: normalizeTruthStatus(child?.truthStatus, child?.status, branch?.truthStatus, supplied.truthStatus),
+            sourceIds: normalizedSourceIds(child?.sourceIds, branchSourceIds),
+            derivationRuleId: child?.derivationRuleId || branch?.derivationRuleId || supplied.derivationRuleId || null,
+          }))
+        : [pendingOrganizationRole(branchIndex, locale)];
+      return {
+        id: safeDomId(String(branch?.id || `ORG-BRANCH-${branchIndex + 1}`)),
+        label: clientText(localizeKnown(branch?.label || branch?.name || l({ locale }, "Accountable group to confirm"), locale), 72),
+        detail: clientText(localizeKnown(branch?.detail || branch?.description || "", locale), 100),
+        truthStatus: normalizeTruthStatus(branch?.truthStatus, branch?.status, supplied.truthStatus),
+        sourceIds: branchSourceIds,
+        derivationRuleId: branch?.derivationRuleId || supplied.derivationRuleId || null,
+        children,
+      };
+    });
+    while (branches.length < 3) branches.push(pendingOrganizationBranch(branches.length, locale));
+    const requestedMode = supplied.mode === "grounded_public_org" ? "grounded_public_org" : "proposed_role_model";
+    const allSourceIds = [...new Set([
+      ...rootSourceIds,
+      ...branches.flatMap((branch) => [...branch.sourceIds, ...branch.children.flatMap((child) => child.sourceIds)]),
+    ])];
+    const normalizedStatus = normalizeOrganizationStatus(supplied.status, requestedMode, allSourceIds.length > 0);
+    const hasPendingNode = branches.some((branch) => branch.truthStatus === "unknown" || branch.children.some((child) => child.truthStatus === "unknown"));
+    return {
+      id: safeDomId(String(supplied.id || "ORG-ROOT")),
+      mode: requestedMode,
+      status: normalizedStatus === "grounded" && hasPendingNode ? "mixed" : normalizedStatus,
+      rootLabel: clientText(localizeKnown(supplied.rootLabel || supplied.label || projectTitle || l({ locale }, "Organization"), locale), 100),
+      truthStatus: normalizeTruthStatus(supplied.truthStatus, supplied.status),
+      sourceIds: allSourceIds,
+      derivationRuleId: supplied.derivationRuleId || null,
+      disclosure: clientText(localizeKnown(supplied.disclosure || "", locale), 320),
+      branches,
+    };
+  }
+
+  const actors = array(semanticModel.actors)
+    .filter((actor) => actor && actor.type !== "system_actor")
+    .slice(0, 9);
+  const branchDefinitions = [
+    { id: "ORG-GROUP-INTERNAL", label: "Administration and operations", types: new Set(["internal_operator"]) },
+    { id: "ORG-GROUP-USERS", label: "Product users", types: new Set(["end_user"]) },
+    { id: "ORG-GROUP-PARTNERS", label: "External partners", types: new Set(["partner_actor", "unknown"]) },
+  ];
+  const branches = branchDefinitions.map((definition, branchIndex) => {
+    const matchingActors = actors.filter((actor) => definition.types.has(actor.type)).slice(0, 3);
+    const children = matchingActors.length
+      ? matchingActors.map((actor, childIndex) => ({
+          id: safeDomId(String(actor.id || `${definition.id}-ROLE-${childIndex + 1}`)),
+          label: clientText(localizeKnown(actor.label || actor.name || l({ locale }, "Role details to confirm"), locale), 72),
+          detail: l({ locale }, "Known product actor"),
+          truthStatus: normalizeTruthStatus(actor.truthStatus, actor.status, "recommended"),
+          sourceIds: normalizedSourceIds(actor.sourceIds),
+          derivationRuleId: actor.derivationRuleId || "ORG-ACTOR-GROUPING-V1",
+        }))
+      : [pendingOrganizationRole(branchIndex, locale)];
+    return {
+      id: definition.id,
+      label: l({ locale }, definition.label),
+      detail: l({ locale }, "Proposed responsibility group"),
+      truthStatus: matchingActors.length ? "recommended" : "unknown",
+      sourceIds: [...new Set(matchingActors.flatMap((actor) => normalizedSourceIds(actor.sourceIds)))],
+      derivationRuleId: "ORG-ACTOR-GROUPING-V1",
+      children,
+    };
+  });
+  const sourceIds = [...new Set(branches.flatMap((branch) => [...branch.sourceIds, ...branch.children.flatMap((child) => child.sourceIds)]))];
+  return {
+    id: "ORG-ROOT",
+    mode: "proposed_role_model",
+    status: actors.length ? "proposed" : "pending",
+    rootLabel: clientText(projectTitle || l({ locale }, "Organization"), 100),
+    truthStatus: actors.length ? "recommended" : "unknown",
+    sourceIds,
+    derivationRuleId: actors.length ? "ORG-ACTOR-GROUPING-V1" : "ORG-QUESTIONS-V1",
+    disclosure: actors.length
+      ? l({ locale }, "The hierarchy groups known product actors; it is a proposed role model, not a claim about the company's internal reporting lines.")
+      : l({ locale }, "A proposed role structure is shown transparently until public organization evidence is available."),
+    branches,
+  };
+}
+
+function deliveryPeopleChainStructure(proposalModel, locale, projectTitle) {
+  // Narrow role cards must never split a hyphenated token like
+  // "Release-инженер" across lines, so hyphens become non-breaking.
+  const noBreakHyphens = (value) => String(value).replace(/(\S)-(\S)/gu, "$1‑$2");
+  const roles = array(proposalModel.teamPlan?.roleAllocations)
+    .map((row) => noBreakHyphens(clientText(localizeKnown(String(row?.role || ""), locale), 72)))
+    .filter(Boolean);
+  if (roles.length < 3) return null;
+  const managerIndex = roles.findIndex((role) => /(?:^|[\s(/])(?:pm|project\s*manager|product\s*manager)(?:$|[\s)/])|менеджер|menejer/iu.test(role));
+  const manager = managerIndex >= 0 ? roles[managerIndex] : roles[0];
+  const reports = roles.filter((_, index) => index !== (managerIndex >= 0 ? managerIndex : 0)).slice(0, 8);
+  if (reports.length < 2) return null;
+  return {
+    id: "ORG-ROOT",
+    mode: "proposed_role_model",
+    variant: "people_chain",
+    status: "proposed",
+    rootLabel: "CEO",
+    rootDetail: l({ locale }, "Delivery leadership and escalations"),
+    truthStatus: "recommended",
+    sourceIds: [],
+    derivationRuleId: "ORG-DELIVERY-PEOPLE-CHAIN-V1",
+    disclosure: l({ locale }, "The hierarchy shows the proposed delivery-team reporting line for this project; it is not a claim about the client's internal structure."),
+    projectLabel: clientText(projectTitle || l({ locale }, "Organization"), 100),
+    manager: {
+      id: "ORG-MANAGER",
+      label: manager,
+      detail: l({ locale }, "Coordinates scope, plan, team and acceptance"),
+      truthStatus: "recommended",
+    },
+    roles: reports.map((role, index) => ({
+      id: `ORG-PERSON-${index + 1}`,
+      label: role,
+      detail: teamDeliveryFocus(role, { locale }),
+      truthStatus: "recommended",
+    })),
+    branches: [],
+  };
+}
+
+function pendingOrganizationBranch(index, locale) {
+  return {
+    id: `ORG-BRANCH-PENDING-${index + 1}`,
+    label: l({ locale }, "Accountable group to confirm"),
+    detail: l({ locale }, "Organization input required"),
+    truthStatus: "unknown",
+    sourceIds: [],
+    derivationRuleId: "ORG-QUESTIONS-V1",
+    children: [pendingOrganizationRole(index, locale)],
+  };
+}
+
+function pendingOrganizationRole(index, locale) {
+  return {
+    id: `ORG-ROLE-PENDING-${index + 1}`,
+    label: l({ locale }, "Role details to confirm"),
+    detail: l({ locale }, "No actor confirmed for this group."),
+    truthStatus: "unknown",
+    sourceIds: [],
+    derivationRuleId: "ORG-QUESTIONS-V1",
+  };
+}
+
+function normalizedSourceIds(primary, fallback = []) {
+  const own = array(primary).map(String).filter(Boolean);
+  return [...new Set(own.length ? own : array(fallback).map(String).filter(Boolean))];
+}
+
+function normalizeOrganizationStatus(status, mode, hasSources) {
+  const value = String(status || "").trim().toLowerCase();
+  if (/pending|unknown|missing|research_required/.test(value)) return "pending";
+  if (/grounded|verified|complete|public/.test(value) && mode === "grounded_public_org" && hasSources) return "grounded";
+  if (mode === "grounded_public_org" && hasSources) return "grounded";
+  return "proposed";
+}
+
+function normalizeSources(rows, locale) {
+  const seen = new Set();
+  return array(rows).map((source, index) => {
+    const label = safeSourceLabel(source.label || source.title || source.type || "Evidence source", locale);
+    return {
+      id: String(source.id || "SOURCE-" + (index + 1)),
+      label,
+      type: clientText(localizeKnown(String(source.type || "evidence").replaceAll("_", " "), locale), 50),
+      display: safeDisplayUrl(source.displayUrl || source.url || source.source || source.sourceRef),
+      href: safeSourceHref(source.url || source.source || source.sourceRef || source.displayUrl),
+      status: String(source.status || "unknown").toLowerCase(),
+      rawType: String(source.type || "evidence"),
+      researchTopic: String(source.researchTopic || source.topic || "").toLowerCase(),
+    };
+  }).filter((source) => {
+    const key = source.id + "|" + source.display.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 12);
+}
+
+function normalizeClaims(rows, locale) {
+  return array(rows).map((claim) => ({
+    id: String(claim.id || ""),
+    text: clientText(localizeKnown(claim.text || claim.claim || "", locale), 260),
+    truthStatus: String(claim.truthStatus || claim.status || "unknown"),
+    claimNature: normalizeEvidenceNature(claim.claimNature, claim.text || claim.claim),
+    sourceIds: array(claim.sourceIds).map(String).filter(Boolean),
+    derivationRuleId: claim.derivationRuleId || null,
+  })).filter((claim) => claim.text).slice(0, 12);
+}
+
+function normalizeAnalogs(semanticModel, proposalModel, locale) {
+  const rows = array(semanticModel.analogs).length
+    ? semanticModel.analogs
+    : array(proposalModel.analogs).length
+      ? proposalModel.analogs
+      : array(proposalModel.analogResearch);
+  return rows.map((row, index) => ({
+    id: String(row.id || "ANALOG-" + (index + 1)),
+    label: clientText(localizeKnown(row.label || row.name || row.title || "Analog " + (index + 1), locale), 90),
+    learning: clientText(localizeKnown(row.learning || row.insight || row.summary || "Benchmark learning requires validation.", locale), 240),
+    scopeEffect: ["benchmark_only", "validate", "do_not_copy"].includes(row.scopeEffect) ? row.scopeEffect : "benchmark_only",
+    display: safeDisplayUrl(row.displayUrl || row.url || row.source),
+    truthStatus: String(row.truthStatus || row.status || "unknown"),
+    claimNature: normalizeEvidenceNature(row.claimNature, row.learning || row.insight || row.summary),
+    sourceIds: array(row.sourceIds).map(String).filter(Boolean),
+    derivationRuleId: row.derivationRuleId || null,
+  }));
+}
+
+function normalizeSwot(semanticModel, proposalModel, locale) {
+  const semanticRows = array(semanticModel.swot);
+  if (semanticRows.length) {
+    return semanticRows.map((row, index) => ({
+      quadrant: normalizeQuadrant(row.quadrant),
+      label: clientText(localizeKnown(row.label || row.text || "SWOT item " + (index + 1), locale), 200),
+      response: row.response ? clientText(localizeKnown(row.response, locale), 180) : null,
+      truthStatus: String(row.truthStatus || "unknown"),
+    }));
+  }
+  if (Array.isArray(proposalModel.swot)) {
+    return proposalModel.swot.map((row, index) => {
+      const source = Array.isArray(row) ? { quadrant: row[0], label: row[1] } : row || {};
+      return {
+        quadrant: normalizeQuadrant(source.quadrant || source.kind || source.type),
+        label: clientText(localizeKnown(source.label || source.text || source.detail || source.description || "SWOT item " + (index + 1), locale), 200),
+        response: source.response ? clientText(localizeKnown(source.response, locale), 180) : null,
+        truthStatus: String(source.truthStatus || "unknown"),
+      };
+    });
+  }
+  return Object.entries(proposalModel.swot || {}).flatMap(([quadrant, values]) => array(values).map((value) => ({
+    quadrant: normalizeQuadrant(quadrant),
+    label: clientText(localizeKnown(typeof value === "string" ? value : value.label || value.text, locale), 200),
+    response: typeof value === "object" && value?.response ? clientText(localizeKnown(value.response, locale), 180) : null,
+    truthStatus: typeof value === "object" ? String(value.truthStatus || "unknown") : "unknown",
+  })));
+}
+
+function normalizeClientDependencies(proposalModel, semanticModel, locale, context = {}) {
+  const suppliedRows = [
+    ...clientDependencyInputRows(proposalModel.clientDependencies),
+    ...clientDependencyInputRows(proposalModel.groundedBrief?.clientDependencies),
+    ...clientDependencyInputRows(semanticModel.clientDependencies),
+  ].map((row, index) => normalizeClientDependencyRow(row, index, locale)).filter(Boolean);
+
+  const defaults = defaultClientDependencies(proposalModel, semanticModel, locale, context);
+  // A real client-readiness inventory is authoritative for this page. Do not
+  // dilute a complete supplied list with generic defaults that can displace
+  // its Product Owner or acceptance owner rows.
+  const rows = suppliedRows.length >= 3 ? suppliedRows : suppliedRows.length ? [...suppliedRows, ...defaults] : defaults;
+  const deduped = [];
+  const seen = new Set();
+  for (const row of rows) {
+    const key = `${row.category}:${String(row.label || "").trim().toLowerCase()}`;
+    if (!row.label || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(row);
+  }
+  const categoryOrder = new Map([["access", 0], ["integrations", 1], ["ownership", 2]]);
+  const statusOrder = new Map([["blocked", 0], ["required", 1], ["in_progress", 2], ["to_confirm", 3], ["provided", 4], ["not_applicable", 5]]);
+  const sorted = deduped.sort((a, b) => {
+    const categoryDifference = (categoryOrder.get(a.category) ?? 9) - (categoryOrder.get(b.category) ?? 9);
+    return categoryDifference || (statusOrder.get(a.status) ?? 9) - (statusOrder.get(b.status) ?? 9);
+  });
+  const selected = ["access", "integrations", "ownership"]
+    .map((category) => sorted.find((row) => row.category === category))
+    .filter(Boolean);
+  for (const row of sorted.filter((candidate) => /product owner|decision owner|sponsor|acceptance owner|testing team|uat/iu.test(`${candidate.label} ${candidate.owner}`))) {
+    if (selected.length >= 8) break;
+    if (!selected.includes(row)) selected.push(row);
+  }
+  for (const row of sorted) {
+    if (selected.length >= 8) break;
+    if (!selected.includes(row)) selected.push(row);
+  }
+  return selected.sort((a, b) => (categoryOrder.get(a.category) ?? 9) - (categoryOrder.get(b.category) ?? 9));
+}
+
+function clientDependencyInputRows(value, inheritedCategory = "") {
+  if (Array.isArray(value)) {
+    return value.flatMap((row) => {
+      if (row && typeof row === "object" && !Array.isArray(row)) return [{ ...row, category: row.category || inheritedCategory }];
+      return typeof row === "string" ? [{ label: row, category: inheritedCategory }] : [];
+    });
+  }
+  if (!value || typeof value !== "object") return [];
+  if (value.label || value.name || value.dependency || value.title) {
+    return [{ ...value, category: value.category || inheritedCategory }];
+  }
+  if (Array.isArray(value.rows) || Array.isArray(value.items) || Array.isArray(value.dependencies)) {
+    return clientDependencyInputRows(value.rows || value.items || value.dependencies, value.category || inheritedCategory);
+  }
+  return Object.entries(value).flatMap(([category, rows]) => clientDependencyInputRows(rows, category));
+}
+
+function normalizeClientDependencyRow(row, index, locale) {
+  const source = row && typeof row === "object" ? row : {};
+  const label = clientText(localizeKnown(source.label || source.name || source.dependency || source.title || "", locale), 120);
+  if (!label) return null;
+  const sourceIds = array(source.sourceIds).map(String).filter(Boolean).slice(0, 3);
+  const truthStatus = normalizeTruthStatus(source.truthStatus, source.provenance?.truthStatus, source.status);
+  let status = normalizeClientDependencyStatus(source.status || source.readiness || source.state, truthStatus);
+  if (status === "provided" && !CONFIRMED_TRUTH_STATUSES.has(truthStatus) && sourceIds.length === 0) status = "to_confirm";
+  return {
+    id: String(source.id || "CLIENT-DEPENDENCY-" + (index + 1)),
+    category: normalizeClientDependencyCategory(source.category || source.group || source.section, label),
+    label,
+    detail: source.detail || source.description || source.requirement
+      ? clientText(localizeKnown(source.detail || source.description || source.requirement, locale), 180)
+      : "",
+    owner: clientText(localizeKnown(source.owner || source.responsible || source.accountable || "", locale), 100),
+    status,
+    timing: normalizeClientDependencyTiming(source.timing || source.deadline || source.when, status),
+    truthStatus,
+    sourceIds,
+    derivationRuleId: source.derivationRuleId || (sourceIds.length ? null : "CLIENT-DEPENDENCY-SUPPLIED-V1"),
+  };
+}
+
+function defaultClientDependencies(proposalModel, semanticModel, locale, context = {}) {
+  const base = (category, label, status, timing, suffix, extra = {}) => ({
+    id: "CLIENT-DEPENDENCY-" + suffix,
+    category,
+    label: clientText(localizeKnown(label, locale), 120),
+    detail: "",
+    status,
+    timing,
+    truthStatus: "recommended",
+    sourceIds: [],
+    derivationRuleId: "CLIENT-DEPENDENCY-READINESS-V1",
+    ...extra,
+  });
+  const decisionOwnerReady = Boolean(context.decisionOwners?.scope || context.decisionOwners?.delivery);
+  const partnerScope = [...array(proposalModel.scope), ...array(semanticModel.scopeItems)]
+    .filter((row) => row?.ownership === "partner_integrated" && CONFIRMED_TRUTH_STATUSES.has(normalizeTruthStatus(row.truthStatus, row.status)));
+  const partnerSourceIds = [...new Set(partnerScope.flatMap((row) => array(row.sourceIds).map(String).filter(Boolean)))].slice(0, 3);
+  return [
+    base("access", "Domain and DNS access", "required", "before_kickoff", "DOMAIN", { owner: localizeKnown("Client infrastructure owner", locale) }),
+    base("access", "Hosting or cloud access", "required", "before_kickoff", "HOSTING", { owner: localizeKnown("Client infrastructure owner", locale) }),
+    base("access", "Store or platform administration access", "required", "before_kickoff", "PLATFORM", { owner: localizeKnown("Client platform owner", locale) }),
+    base("integrations", "Integration credentials", partnerScope.length ? "required" : "to_confirm", "before_integration", "INTEGRATIONS", partnerSourceIds.length ? {
+      truthStatus: "recommended",
+      sourceIds: partnerSourceIds,
+      derivationRuleId: "CLIENT-DEPENDENCY-PARTNER-SCOPE-V1",
+      owner: localizeKnown("Client integration owner", locale),
+    } : { owner: localizeKnown("Client integration owner", locale) }),
+    base("ownership", "Product catalog and content", "required", "before_kickoff", "CATALOG", { owner: localizeKnown("Client product owner", locale) }),
+    base("ownership", "Brand assets and content", "required", "before_kickoff", "BRAND", { owner: localizeKnown("Client brand owner", locale) }),
+    base("ownership", "Client decision owner", decisionOwnerReady ? "provided" : "required", "before_kickoff", "DECISION", decisionOwnerReady ? { owner: context.decisionOwners.scope || context.decisionOwners.delivery, truthStatus: "explicit", derivationRuleId: "CLIENT-DEPENDENCY-DECISION-OWNER-V1" } : { owner: localizeKnown("Client sponsor", locale) }),
+    base("ownership", "Acceptance-test participants", "required", "before_acceptance", "UAT", { owner: localizeKnown("Client QA / UAT owner", locale) }),
+  ];
+}
+
+function normalizeClientDependencyCategory(value, label = "") {
+  const text = `${value || ""} ${label || ""}`.toLowerCase();
+  if (/integrat|api|credential|payment|shipping|fulfil/.test(text)) return "integrations";
+  if (/access|infra|server|host|cloud|domain|dns|platform|store/.test(text)) return "access";
+  return "ownership";
+}
+
+function normalizeClientDependencyStatus(value, truthStatus = "unknown") {
+  const text = String(value || "").trim().toLowerCase();
+  if (/not[_ -]?applicable|n\/a|не\s+примен|tegishli\s+emas/.test(text)) return "not_applicable";
+  if (/blocked|blocker|блокир|заблок|to['’]?siq|blok/.test(text)) return "blocked";
+  if (/progress|working|в\s+работ|jarayon/.test(text)) return "in_progress";
+  if (/provided|confirmed|ready|done|предостав|подтверж|готов|taqdim|tasdiq|tayyor/.test(text)) return "provided";
+  if (/required|input|required_from_client|not[_ -]?ready|missing|нуж|треб|kerak|kutil/.test(text)) return "required";
+  if (CONFIRMED_TRUTH_STATUSES.has(truthStatus)) return "provided";
+  return "to_confirm";
+}
+
+function normalizeClientDependencyTiming(value, status = "to_confirm") {
+  const text = String(value || "").trim().toLowerCase();
+  if (/accept|uat|при[её]м|qabul/.test(text)) return "before_acceptance";
+  if (/integrat|api|интеграц|integrats/.test(text)) return "before_integration";
+  if (status === "not_applicable") return "not_applicable";
+  return "before_kickoff";
+}
+
+function normalizeNarrative(model, locale) {
+  const narrative = model.narrative || {};
+  return {
+    executiveSummary: clientText(localizeKnown(narrative.executiveSummary || model.executiveSummary || "", locale), 900),
+    problemStatement: clientText(localizeKnown(narrative.problemStatement || model.problemStatement || "", locale), 900),
+    valueProposition: clientText(localizeKnown(narrative.valueProposition || model.solutionNarrative || "", locale), 900),
+    whyNow: clientText(localizeKnown(narrative.whyNow || "", locale), 900),
+    deliveryApproach: clientText(localizeKnown(narrative.deliveryApproach || "", locale), 900),
+    closingStatement: clientText(localizeKnown(narrative.closingStatement || "", locale), 900),
+  };
+}
+
+function normalizeExternalCosts(lock, proposalModel, currency, exponent, locale) {
+  if (lock) {
+    return array(lock.pricing?.externalRows).map((row, index) => ({
+      name: clientText(localizeKnown(row.name || row.component || "External item " + (index + 1), locale), 90),
+      amount: formatMinor(safeMinor(row.amountMinor, "externalRows[" + index + "].amountMinor"), currency, exponent, { locale }),
+      included: Boolean(row.includedInProjectPrice),
+    }));
+  }
+  return array(proposalModel.pricing?.externalRows || proposalModel.pricing?.infraExternal).map((row, index) => ({
+    name: clientText(localizeKnown(row.name || row.component || "External item " + (index + 1), locale), 90),
+    amount: finiteNumber(row.amount ?? row.cost) === null ? localizeRendererText("Amount to confirm", locale) : formatMinor(majorToMinor(row.amount ?? row.cost, exponent), currency, exponent, { locale }),
+    included: Boolean(row.includedInProjectPrice),
+  }));
+}
+
+function normalizeCommercialTerms(proposalModel, locale) {
+  const roots = [proposalModel.commercialTerms, proposalModel.contractTerms, proposalModel.commercialAssumptions, proposalModel.pricing?.terms].filter((row) => row && typeof row === "object");
+  const valueFor = (...keys) => {
+    for (const root of roots) {
+      for (const key of keys) {
+        const value = root[key];
+        if (value !== undefined && value !== null && String(value).trim()) return clientText(localizeKnown(value, locale), 180);
+      }
+    }
+    return "";
+  };
+  const tax = valueFor("taxVat", "taxVAT", "tax", "vat", "taxTreatment");
+  const validity = valueFor("quoteValidity", "validity", "validUntil", "offerValidity");
+  const warrantySupport = valueFor("warrantySupport", "warrantyAndSupport");
+  const warranty = valueFor("warranty", "warrantyTerms") || warrantySupport;
+  const support = valueFor("support", "supportTerms", "postLaunchSupport") || warrantySupport;
+  const ip = valueFor("ip", "ipTerms", "intellectualProperty");
+  const externalCosts = valueFor("externalCosts", "thirdPartyCosts", "recurringCosts", "externalAndRecurringCosts");
+  return {
+    tax,
+    validity,
+    warranty,
+    support,
+    ip,
+    externalCosts,
+    warrantySupportIpSupplied: Boolean(warranty && support && ip),
+    allRequiredSupplied: Boolean(tax && validity && warranty && support && ip && externalCosts),
+  };
+}
+
+function normalizeDecisionOwners(proposalModel, semanticModel, locale) {
+  const roots = [proposalModel.decisionOwners, proposalModel.groundedBrief?.decisionOwners, semanticModel.decisionOwners]
+    .filter((row) => row && typeof row === "object");
+  const valueFor = (...keys) => {
+    for (const root of roots) {
+      for (const key of keys) {
+        const candidate = root[key];
+        const value = candidate && typeof candidate === "object" && !Array.isArray(candidate) ? candidate.value : candidate;
+        const status = candidate && typeof candidate === "object" && !Array.isArray(candidate) ? String(candidate.status || "explicit").toLowerCase() : "explicit";
+        if (value !== undefined && value !== null && String(value).trim() && !["unknown", "missing", "not_supplied"].includes(status)) {
+          return clientText(localizeKnown(value, locale), 100);
+        }
+      }
+    }
+    return "";
+  };
+  return {
+    scope: valueFor("scope", "scopeOwner", "product", "productOwner"),
+    commercial: valueFor("commercial", "commercialOwner", "finance", "financeOwner"),
+    delivery: valueFor("delivery", "deliveryOwner", "project", "projectOwner"),
+  };
+}
+
+function safeDiagramStyleProfile(profile, tokens) {
+  return {
+    ...profile,
+    canvas: {
+      ...(profile.canvas || {}),
+      background: tokens.background,
+      surface1: tokens.surface,
+      surface2: tokens.surface2,
+      textPrimary: tokens.text,
+      textSecondary: tokens.muted,
+      rule: tokens.rule,
+    },
+    accents: {
+      ...(profile.accents || {}),
+      primary: tokens.primary,
+      secondary: tokens.secondary,
+      positive: tokens.positive,
+      warning: tokens.warning,
+      critical: tokens.critical,
+    },
+  };
+}
+
+function hoistTrustedInlineStyles(markup, scope, dynamicRules) {
+  let index = 0;
+  return String(markup).replace(/<([A-Za-z][A-Za-z0-9:-]*)([^<>]*?)\sstyle="([^"]*)"([^<>]*?)>/g, (whole, tagName, before, style, after) => {
+    const declaration = validateTrustedStyleDeclaration(style);
+    const className = addDynamicRule(scope + "-" + (++index), declaration, dynamicRules);
+    let attributes = String(before || "") + String(after || "");
+    if (/\sclass="[^"]*"/.test(attributes)) {
+      attributes = attributes.replace(/\sclass="([^"]*)"/, (match, existing) => ' class="' + escapeHtmlAttribute(existing + " " + className) + '"');
+    } else {
+      attributes += ' class="' + className + '"';
+    }
+    return "<" + tagName + attributes + ">";
+  });
+}
+
+function validateTrustedStyleDeclaration(style) {
+  const allowed = new Set(["left", "top", "width", "height", "border-color", "border-style", "background", "color", "--viz-node-color", "--viz-node-tint", "--viz-node-soft", "--viz-lane-color", "--viz-lane-label-width"]);
+  const pieces = String(style || "").split(";").map((piece) => piece.trim()).filter(Boolean);
+  if (!pieces.length) throw rendererError("DOM_UNSAFE_MARKUP", "Empty trusted style declaration");
+  const normalized = [];
+  for (const piece of pieces) {
+    const separator = piece.indexOf(":");
+    const property = piece.slice(0, separator).trim();
+    const value = piece.slice(separator + 1).trim();
+    if (separator <= 0 || !allowed.has(property)) throw rendererError("DOM_UNSAFE_MARKUP", "Unexpected renderer style property");
+    const safe = property === "border-style"
+      ? /^(?:solid|dashed|dotted)$/.test(value)
+      : ["background", "color", "border-color", "--viz-node-color", "--viz-lane-color"].includes(property)
+        ? /^#[0-9A-Fa-f]{6}$/.test(value)
+        : ["--viz-node-tint", "--viz-node-soft"].includes(property)
+          ? /^#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?$/.test(value)
+          : /^-?[0-9]+(?:\.[0-9]+)?(?:px|%)$/.test(value);
+    if (!safe) throw rendererError("DOM_UNSAFE_MARKUP", "Unsafe renderer style value");
+    normalized.push(property + ":" + value);
+  }
+  return normalized.join(";");
+}
+
+function addDynamicRule(prefix, declaration, dynamicRules) {
+  if (/url\s*\(|expression\s*\(|@import|javascript:|data:text\/html|[{}]/i.test(declaration)) {
+    throw rendererError("DOM_UNSAFE_MARKUP", "Dynamic renderer rule is unsafe");
+  }
+  const className = "kp-dyn-" + safeDomId(prefix + "-" + (dynamicRules.length + 1));
+  dynamicRules.push("." + className + "{" + declaration + "}");
+  return className;
+}
+
+function renderReadinessScript() {
+  return [
+    "window.__KP_RENDER_READY__=(async function(){",
+    "await document.fonts.ready;",
+    "await Promise.all(Array.from(document.images).map(function(img){if(img.complete&&img.naturalWidth>0)return true;return img.decode().catch(function(){img.dataset.kpImageError='decode_failed';});}));",
+    "var revision=0;var bump=function(){revision+=1;};",
+    "var mutationObserver=new MutationObserver(bump);mutationObserver.observe(document.body,{subtree:true,childList:true,attributes:true,characterData:true});",
+    "var resizeObserver=new ResizeObserver(bump);document.querySelectorAll('.kp-page,.viz-node,.viz-canvas').forEach(function(node){resizeObserver.observe(node);});",
+    "var previous='';var stable=0;",
+    "while(stable<2){await new Promise(function(resolve){requestAnimationFrame(resolve);});",
+    "var rects=Array.from(document.querySelectorAll('.kp-page,.viz-node,.viz-canvas')).map(function(node){var r=node.getBoundingClientRect();return [r.x,r.y,r.width,r.height].map(function(v){return Math.round(v*100)/100;}).join(',');}).join('|');",
+    "var signature=revision+':'+rects;if(signature===previous){stable+=1;}else{stable=0;previous=signature;}}",
+    "mutationObserver.disconnect();resizeObserver.disconnect();return true;})();",
+  ].join("");
+}
+
+function l(content, text) {
+  return localizeKnown(text, content?.locale || "en");
+}
+
+function localizeKnown(value, locale) {
+  return normalizeClientTerminology(localizeRendererText(value, locale), locale);
+}
+
+function normalizeClientTerminology(value, locale) {
+  let text = String(value ?? "");
+  const normalized = normalizeRendererLocale(locale);
+  const replacements = normalized === "uz-Latn"
+    ? [
+        [/\bMVP\s+scope\b/gi, "boshlang‘ich mahsulot tarkibi"],
+        [/\bscope\b/gi, "tarkib"],
+        [/\bdiscovery\b/gi, "talablarni aniqlash"],
+        [/\broadmap\b/gi, "yo‘l xaritasi"],
+        [/\bcheckout\b/gi, "buyurtmani rasmiylashtirish"],
+        [/\breconciliation\b/gi, "hisob-kitoblarni solishtirish"],
+        [/\bbenchmark\b/gi, "taqqoslash namunasi"],
+        [/\bmobile[- ]first\b/gi, "mobilga yo‘naltirilgan"],
+        [/\bmobil[- ]first\b/gi, "mobilga yo‘naltirilgan"],
+        [/\bpush(?:-based)?\b/gi, "tezkor bildirishnomalar"],
+        [/\bdashboards?\b/gi, "boshqaruv panellari"],
+        [/\badmin\b/gi, "boshqaruv"],
+        [/\bAI\b/g, "sun’iy intellekt"],
+        [/\bMarketplace\b/g, "Marketpleys"],
+        [/\bMVP\b/g, "boshlang‘ich mahsulot"],
+      ]
+    : normalized === "ru-RU"
+      ? [
+          [/\bMVP\s+scope\b/gi, "состав первого выпуска"],
+          [/\bscope\b/gi, "состав"],
+          [/\bdiscovery\b/gi, "предпроектный анализ"],
+          [/\broadmap\b/gi, "дорожная карта"],
+          [/\bcheckout\b/gi, "оформление заказа"],
+          [/\breconciliation\b/gi, "сверка расчётов"],
+          [/\bbenchmark\b/gi, "аналог"],
+          [/\bmobile[- ]first\b/gi, "ориентированный на мобильные устройства"],
+          [/\bpush(?:-based)?\b/gi, "уведомления"],
+          [/\bdashboards?\b/gi, "панели управления"],
+          [/\badmin\b/gi, "администрирование"],
+          [/\bMVP\b/g, "первый выпуск"],
+        ]
+      : [];
+  for (const [pattern, replacement] of replacements) text = text.replace(pattern, replacement);
+  return text;
+}
+
+function localizeVisualizationSpec(spec, locale) {
+  return {
+    ...spec,
+    nodes: array(spec?.nodes).map((node) => ({
+      ...node,
+      label: localizeKnown(node.label, locale),
+      fullLabel: node.fullLabel ? localizeKnown(node.fullLabel, locale) : node.fullLabel,
+    })),
+    edges: array(spec?.edges).map((edge) => ({
+      ...edge,
+      label: edge.label ? localizeKnown(edge.label, locale) : edge.label,
+    })),
+    groups: array(spec?.groups).map((group) => ({
+      ...group,
+      label: group.label ? localizeKnown(group.label, locale) : group.label,
+    })),
+  };
+}
+
+const CONFIRMED_TRUTH_STATUSES = new Set(["explicit", "confirmed", "verified", "grounded", "provided", "client_provided"]);
+const ENGLISH_FUNCTION_WORDS = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "before", "by", "can", "for", "from", "has", "have", "in", "is", "it", "must", "not", "of", "on", "or", "should", "that", "the", "this", "to", "until", "was", "were", "when", "with",
+]);
+
+function normalizeTruthStatus(...values) {
+  const value = values.find((candidate) => candidate !== undefined && candidate !== null && String(candidate).trim());
+  return value ? String(value).trim().toLowerCase() : "unknown";
+}
+
+function normalizeProjectAmountKind(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["budget_constraint", "confirmed_quote", "planning_total"].includes(normalized) ? normalized : "unknown";
+}
+
+function isConfirmedProjectAmount(content = {}) {
+  return content.projectAmountKind === "confirmed_quote"
+    && CONFIRMED_TRUTH_STATUSES.has(normalizeTruthStatus(content.projectAmountTruthStatus))
+    && content.currencyStatus === "explicit"
+    && content.currency !== "XXX";
+}
+
+function projectPriceTotalLabel(content = {}, copy = {}) {
+  if (content.projectAmountKind === "budget_constraint" && content.hasClientBudget) return copy.budgetTotal;
+  if (!content.hasProjectPrice) return copy.totalPending;
+  if (isConfirmedProjectAmount(content)) return copy.confirmedTotal;
+  return copy.planningTotal;
+}
+
+function projectPriceBadge(content = {}, copy = {}) {
+  if (content.projectAmountKind === "budget_constraint" && content.hasClientBudget) return copy.budgetBadge;
+  if (!content.hasProjectPrice) return l(content, "Amount to confirm");
+  if (isConfirmedProjectAmount(content)) return copy.badge;
+  return copy.planningBadge;
+}
+
+function findProvenanceRow(row, index, candidates, identityKey = "name") {
+  const id = String(row?.id || "").trim();
+  if (id) {
+    const byId = candidates.find((candidate) => String(candidate?.id || "").trim() === id);
+    if (byId) return byId;
+  }
+  const identity = String(row?.[identityKey] || row?.label || row?.role || "").trim().toLowerCase();
+  if (identity) {
+    const byIdentity = candidates.find((candidate) => String(candidate?.[identityKey] || candidate?.label || candidate?.role || "").trim().toLowerCase() === identity);
+    if (byIdentity) return byIdentity;
+  }
+  return candidates[index] || null;
+}
+
+function requiresScenarioDisclosure(rows, aggregateStatus = "") {
+  const statuses = [aggregateStatus, ...array(rows).map((row) => row?.truthStatus || row?.status)]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean);
+  return !statuses.length || statuses.some((status) => !CONFIRMED_TRUTH_STATUSES.has(status));
+}
+
+function scenarioBanner(content, rows, aggregateStatus = "", { payment = false } = {}) {
+  if (!requiresScenarioDisclosure(rows, aggregateStatus)) return "";
+  return '<div class="scenario-banner" data-warning-status="scenario"' + (payment ? ' data-payment-scenario-disclosure="true"' : "") + '>' + e(l(content, "Planning scenario · confirmation required")) + "</div>";
+}
+
+function commercialCurrencyNote(content) {
+  if (content.currencyStatus === "explicit" && content.currency !== "XXX") return "";
+  const value = content.currencyStatus === "assumed" && content.currency !== "XXX"
+    ? l(content, "Working currency") + " · " + content.currency
+    : l(content, "Currency not supplied.");
+  return '<div class="currency-note" data-warning-status="currency">' + e(value) + "</div>";
+}
+
+function assertRendererLocaleCoherence(content, visualizationSpecs) {
+  if (localeId(content) === "en") return;
+  const candidates = [];
+  for (const [key, value] of Object.entries(content.narrative || {})) candidates.push(["narrative." + key, value]);
+  for (const [index, row] of content.scope.entries()) {
+    candidates.push(["scope[" + index + "].label", row.label], ["scope[" + index + "].detail", row.detail]);
+  }
+  for (const [index, row] of content.swot.entries()) candidates.push(["swot[" + index + "].label", row.label], ["swot[" + index + "].response", row.response]);
+  for (const [index, row] of content.clientDependencies.entries()) {
+    candidates.push(["clientDependencies[" + index + "].label", row.label], ["clientDependencies[" + index + "].detail", row.detail]);
+  }
+  if (content.presentationKinds.has("function_price")) {
+    for (const [index, row] of content.functionPrice.entries()) {
+      candidates.push(
+        ["functionPrice[" + index + "].name", row.name],
+        ["functionPrice[" + index + "].epic", row.epic],
+        ["functionPrice[" + index + "].detail", row.detail],
+        ["functionPrice[" + index + "].deadline", row.deadline],
+      );
+    }
+  }
+  for (const [specIndex, spec] of array(visualizationSpecs).entries()) {
+    const localized = localizeVisualizationSpec(spec, content.locale);
+    for (const [index, node] of array(localized.nodes).entries()) candidates.push(["visualizationSpecs[" + specIndex + "].nodes[" + index + "]", node.fullLabel || node.label]);
+    for (const [index, edge] of array(localized.edges).entries()) candidates.push(["visualizationSpecs[" + specIndex + "].edges[" + index + "]", edge.label]);
+    for (const [index, group] of array(localized.groups).entries()) candidates.push(["visualizationSpecs[" + specIndex + "].groups[" + index + "]", group.label]);
+  }
+  const mismatch = candidates.find(([, value]) => isHighConfidenceLocaleMismatch(value, content.locale));
+  if (mismatch) {
+    throw rendererError("CONTENT_LOCALE_MISMATCH", "Client-facing model text does not match the requested locale at " + mismatch[0]);
+  }
+}
+
+function isHighConfidenceEnglishNarrative(value) {
+  const text = String(value || "").replace(/https?:\/\/\S+/gi, " ").trim();
+  if (text.length < 55) return false;
+  const tokens = text.toLowerCase().match(/[a-z]+(?:'[a-z]+)?/g) || [];
+  if (tokens.length < 9) return false;
+  const hits = tokens.filter((token) => ENGLISH_FUNCTION_WORDS.has(token));
+  return hits.length >= 5 && new Set(hits).size >= 4 && hits.length / tokens.length >= 0.1;
+}
+
+function isHighConfidenceLocaleMismatch(value, locale) {
+  if (normalizeRendererLocale(locale) === "en") return false;
+  if (isHighConfidenceEnglishNarrative(value)) return true;
+  if (normalizeRendererLocale(locale) !== "uz-Latn") return false;
+  const text = String(value || "").trim();
+  if (text.length < 55) return false;
+  const cyrillic = (text.match(/[А-Яа-яЁё]/g) || []).length;
+  const letters = (text.match(/[A-Za-zА-Яа-яЁёʻʼ']/g) || []).length;
+  return cyrillic >= 12 && letters > 0 && cyrillic / letters >= 0.18;
+}
+
+function localeId(content) {
+  return normalizeRendererLocale(content?.locale || "en");
+}
+
+function scopeItemsLabel(content, count) {
+  if (localeId(content) === "ru-RU") return count + " элементов состава";
+  if (localeId(content) === "uz-Latn") return count + " ta tarkib elementi";
+  return count + " scope items";
+}
+
+function partnerBoundariesLabel(content, count) {
+  if (localeId(content) === "ru-RU") return "Партнёрских границ: " + count;
+  if (localeId(content) === "uz-Latn") return "Hamkor chegaralari: " + count;
+  return count + " partner boundaries identified";
+}
+
+function deferredCapabilitiesLabel(content, count) {
+  if (localeId(content) === "ru-RU") return "Отложенных возможностей вне запуска: " + count;
+  if (localeId(content) === "uz-Latn") return "Ishga tushirishdan tashqarida qoldirilgan imkoniyatlar: " + count;
+  return count + " deferred capabilities kept outside launch";
+}
+
+function deliveryWindowLabel(content, count, unit) {
+  const duration = formatRendererUnit(count, unit, content.locale);
+  if (localeId(content) === "ru-RU") return "Срок реализации: " + duration;
+  if (localeId(content) === "uz-Latn") return "Amalga oshirish muddati: " + duration;
+  return duration + " delivery window";
+}
+
+function rolesIdentifiedLabel(content, count) {
+  if (localeId(content) === "ru-RU") return "Ролей в плане: " + count;
+  if (localeId(content) === "uz-Latn") return "Rejadagi rollar: " + count;
+  return count + " delivery roles identified";
+}
+
+function paymentStagesLabel(content, count) {
+  if (localeId(content) === "ru-RU") return "Этапов оплаты по приёмке: " + count;
+  if (localeId(content) === "uz-Latn") return "Qabul natijasiga bog'langan to'lov bosqichlari: " + count;
+  return count + " acceptance-linked payment stages";
+}
+
+function functionTraceLabel(content, functionCount, partnerCount) {
+  if (localeId(content) === "ru-RU") return "Бюджетных функциональных групп: " + functionCount + " · партнёрских/внешних границ отдельно: " + partnerCount;
+  if (localeId(content) === "uz-Latn") return "Budjetlangan funksional guruhlar: " + functionCount + " · alohida hamkor/tashqi chegaralar: " + partnerCount;
+  return functionCount + " budgeted function groups · " + partnerCount + " partner/external boundaries tracked separately";
+}
+
+function functionGroupsLabel(content, count) {
+  if (localeId(content) === "ru-RU") return "Функциональных групп: " + count;
+  if (localeId(content) === "uz-Latn") return "Funksional guruhlar: " + count;
+  return count + " functional groups";
+}
+
+function rolesLabel(content, count) {
+  if (localeId(content) === "ru-RU") return "Ролей: " + count;
+  if (localeId(content) === "uz-Latn") return "Rollar: " + count;
+  return count + " roles";
+}
+
+function branchChildrenLabel(content, count) {
+  const locale = normalizeRendererLocale(content?.locale);
+  if (locale === "ru-RU") {
+    const mod10 = count % 10;
+    const mod100 = count % 100;
+    const label = mod10 === 1 && mod100 !== 11 ? "роль" : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? "роли" : "ролей";
+    return count + " " + label;
+  }
+  if (locale === "uz-Latn") return count + " ta rol";
+  return count + " role" + (count === 1 ? "" : "s");
+}
+
+function paymentStagesShortLabel(content, count) {
+  if (localeId(content) === "ru-RU") return "Этапов оплаты: " + count;
+  if (localeId(content) === "uz-Latn") return "To'lov bosqichlari: " + count;
+  return count + " payment stages";
+}
+
+function approveScopeLabel(content, count) {
+  if (localeId(content) === "ru-RU") return "Согласовать " + count + " ключевых функций и границы ответственности.";
+  if (localeId(content) === "uz-Latn") return count + " ta asosiy funksiya va mas'uliyat chegarasini tasdiqlash.";
+  return "Approve " + count + " key functions and the ownership boundary.";
+}
+
+function sourceStatusLabel(status, content) {
+  const labels = {
+    read: "Source opened",
+    provided: "Client provided",
+    verified: "Verified source",
+    grounded: "Supported source",
+    unknown: "Status to confirm",
+  };
+  return l(content, labels[status] || labels.unknown);
+}
+
+function currencyDisplay(content) {
+  if (content.currencyStatus === "explicit" && content.currency !== "XXX") return content.currency;
+  if (content.currencyStatus === "assumed" && content.currency !== "XXX") return content.currency + " · " + l(content, "working assumption");
+  return l(content, "Not supplied");
+}
+
+function quadrantLabel(quadrant, content) {
+  const labels = { strength: "Strength", weakness: "Weakness", opportunity: "Opportunity", threat: "Threat" };
+  return l(content, labels[quadrant] || labels.strength);
+}
+
+function chapter(index, statement, detail, drivers) {
+  return '<div class="chapter-layout"><div class="chapter-index">' + e(index) + '</div><div class="chapter-copy"><strong>' + e(statement) + '</strong><p>' + e(detail) + '</p><div class="driver-grid">' + drivers.map((driver, position) => '<div class="driver"><span>0' + (position + 1) + '</span><strong>' + e(driver) + "</strong></div>").join("") + "</div></div></div>";
+}
+
+function missingState(content, title, detail, questions) {
+  return '<div class="missing-state panel-soft"><div><span class="eyebrow">' + e(l(content, "INPUT REQUIRED")) + '</span><strong>' + e(title) + '</strong><p>' + e(detail) + '</p></div><div class="question-list">' + questions.map((question, index) => '<div class="question-row"><span>Q' + (index + 1) + '</span><strong>' + e(question) + "</strong></div>").join("") + "</div></div>";
+}
+
+function metric(label, value) {
+  return '<div class="metric"><span>' + e(label) + '</span><strong>' + e(value) + "</strong></div>";
+}
+
+function metricFact(label, value, sourceIds, claimId, content) {
+  return '<div class="metric" data-claim-container><span>' + e(label) + '</span><strong' + factualClaimAttributes(sourceIds, claimId, { container: false }) + '>' + e(value) + "</strong>" + inlineSources(sourceIds, content, { compact: true }) + "</div>";
+}
+
+function term(label, value) {
+  return '<div class="term"><span>' + e(label) + '</span><strong>' + e(value) + "</strong></div>";
+}
+
+function strictLayoutFamily(value) {
+  const family = String(value || "");
+  if (!LAYOUT_FAMILIES.has(family)) {
+    throw rendererError("CONTRACT_PRESENTATION_PLAN_INVALID", "Unsupported layout family: " + family);
+  }
+  return family;
+}
+
+function strictColor(value, fallback, path) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (!/^#[0-9A-Fa-f]{6}$/.test(String(value))) {
+    throw rendererError("CONTRACT_STYLE_PROFILE_INVALID", "Invalid color token at " + path);
+  }
+  return String(value).toUpperCase();
+}
+
+function resolveFontStack(value) {
+  const tokenMap = {
+    sans_neo: "neo_grotesk_sans",
+    sans_humanist: "humanist_sans",
+    sans_geometric: "geometric_sans",
+    serif_transitional: "transitional_serif",
+    serif_display: "display_serif",
+    mono_system: "monospace",
+  };
+  const key = tokenMap[value] || value || "unknown";
+  return FONT_BY_CLASS[key] || FONT_BY_CLASS.unknown;
+}
+
+function safeCssFontStack(value, fallback) {
+  const raw = String(value || "").trim().replace(/\s+/g, " ");
+  if (!raw || raw.length > 180 || /[;{}<>@\\\n\r]|(?:url|var)\s*\(/i.test(raw)) return fallback;
+  const genericFamilies = new Set([
+    "serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui",
+    "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded",
+  ]);
+  const families = [];
+  for (const part of raw.split(",").slice(0, 6)) {
+    const unquoted = part.trim().replace(/^['"]|['"]$/g, "").trim();
+    if (!unquoted || unquoted.length > 64 || !/^[\p{L}\p{N} ._\-]+$/u.test(unquoted)) continue;
+    if (!families.some((item) => item.toLowerCase() === unquoted.toLowerCase())) families.push(unquoted);
+  }
+  if (!families.length) return fallback;
+  if (!families.some((item) => genericFamilies.has(item.toLowerCase()))) {
+    families.push(/\bmono/i.test(fallback) ? "monospace" : /\bserif\b/i.test(fallback) && !/sans-serif/i.test(fallback) ? "serif" : "sans-serif");
+  }
+  return families
+    .map((family) => (genericFamilies.has(family.toLowerCase()) || /^[A-Za-z0-9_.-]+$/.test(family) ? family : `"${family}"`))
+    .join(", ");
+}
+
+function alphaHex(hex, alpha) {
+  const safe = strictColor(hex, "#000000", "internal");
+  const value = Math.round(Math.max(0, Math.min(1, alpha)) * 255).toString(16).padStart(2, "0").toUpperCase();
+  return safe + value;
+}
+
+function readableTextColor(background, preferred, alternate) {
+  const candidates = [preferred, alternate, "#000000", "#FFFFFF"].map((color) => strictColor(color, "#000000", "internal"));
+  return candidates.reduce((best, candidate) => contrastRatioHex(candidate, background) > contrastRatioHex(best, background) ? candidate : best, candidates[0]);
+}
+
+function ensureTextContrast(foreground, backgrounds, fallback, minimum = 4.75) {
+  const base = strictColor(foreground, "#000000", "internal");
+  const safeFallback = strictColor(fallback, "#000000", "internal");
+  const surfaces = array(backgrounds).map((color) => strictColor(color, "#FFFFFF", "internal"));
+  const passes = (candidate) => surfaces.every((background) => contrastRatioHex(candidate, background) >= minimum);
+  if (passes(base)) return base;
+  if (passes(safeFallback)) return safeFallback;
+
+  const backgroundLuminance = surfaces.reduce((sum, color) => sum + relativeLuminanceHex(color), 0) / Math.max(1, surfaces.length);
+  const target = backgroundLuminance >= .5 ? "#000000" : "#FFFFFF";
+  for (let step = 1; step <= 10; step += 1) {
+    const candidate = mixHex(base, target, step / 10);
+    if (passes(candidate)) return candidate;
+  }
+  return readableTextColor(surfaces[0] || "#FFFFFF", safeFallback, target);
+}
+
+function mixHex(left, right, rightWeight) {
+  const a = strictColor(left, "#000000", "internal");
+  const b = strictColor(right, "#000000", "internal");
+  const weight = Math.max(0, Math.min(1, Number(rightWeight) || 0));
+  const channels = [1, 3, 5].map((index) => {
+    const value = Math.round(Number.parseInt(a.slice(index, index + 2), 16) * (1 - weight)
+      + Number.parseInt(b.slice(index, index + 2), 16) * weight);
+    return value.toString(16).padStart(2, "0").toUpperCase();
+  });
+  return "#" + channels.join("");
+}
+
+function contrastRatioHex(left, right) {
+  const leftLuminance = relativeLuminanceHex(strictColor(left, "#000000", "internal"));
+  const rightLuminance = relativeLuminanceHex(strictColor(right, "#000000", "internal"));
+  return (Math.max(leftLuminance, rightLuminance) + .05) / (Math.min(leftLuminance, rightLuminance) + .05);
+}
+
+function relativeLuminanceHex(hex) {
+  const channels = [1, 3, 5].map((index) => Number.parseInt(hex.slice(index, index + 2), 16) / 255).map((value) => value <= .03928 ? value / 12.92 : Math.pow((value + .055) / 1.055, 2.4));
+  return .2126 * channels[0] + .7152 * channels[1] + .0722 * channels[2];
+}
+
+function boundedNumber(value, fallback, minimum, maximum) {
+  if (value === undefined || value === null) return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < minimum || number > maximum) {
+    throw rendererError("CONTRACT_STYLE_PROFILE_INVALID", "Style geometry value is outside renderer limits");
+  }
+  return Number(number.toFixed(3));
+}
+
+function clientText(value, maximum = 400) {
+  const text = String(value ?? "").normalize("NFC").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  assertSafeRendererText(text);
+  if (PRIVATE_TEXT_PATTERN.test(text) || BIDI_OVERRIDE_PATTERN.test(text)) {
+    throw rendererError("CONTENT_INTERNAL_IDENTIFIER_VISIBLE", "Client-visible content contains an internal identifier");
+  }
+  const chars = Array.from(text);
+  return chars.length <= maximum ? text : chars.slice(0, maximum - 1).join("") + "…";
+}
+
+function meaningfulNarrative(value) {
+  const text = clientText(value || "", 900);
+  if (!text || /^(?:executive summary|problem statement|value proposition|timing rationale|delivery approach|next decisions?)\s+to confirm\.?$/i.test(text)) return "";
+  return text;
+}
+
+function safeSourceLabel(value, locale = "en") {
+  const text = String(value || "").normalize("NFC").replace(/\s+/g, " ").trim();
+  if (!text || PRIVATE_TEXT_PATTERN.test(text) || /[/\\]{2,}/.test(text)) return localizeRendererText("Client-supplied evidence", locale);
+  return clientText(localizeKnown(text, locale), 100);
+}
+
+function safeDisplayUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw || PRIVATE_TEXT_PATTERN.test(raw)) return "";
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "https:" || url.username || url.password) return "";
+    const path = url.pathname === "/" ? "" : url.pathname;
+    return clientText(url.hostname.replace(/^www\./i, "") + path, 120);
+  } catch {
+    return "";
+  }
+}
+
+function safeSourceHref(value) {
+  const raw = String(value || "").trim();
+  if (!raw || PRIVATE_TEXT_PATTERN.test(raw)) return "";
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "https:" || url.username || url.password) return "";
+    url.hash = "";
+    for (const key of [...url.searchParams.keys()]) {
+      if (/^utm_|^(?:gclid|fbclid|ref|token|access_token|api_?key|secret|session|auth|signature|sig)$/i.test(key)) url.searchParams.delete(key);
+    }
+    const href = url.toString();
+    return href.length <= 600 ? href : "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeEvidenceNature(value, text = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["observed", "reported", "estimate", "forecast", "scenario"].includes(normalized)) return normalized;
+  const candidate = String(text || "").toLowerCase();
+  if (/scenario|сценар|ssenari/iu.test(candidate)) return "scenario";
+  if (/forecast|project(?:ed|ion)|прогноз|prognoz|kutil(?:moqda|adi)|ожида(?:ется|емый)/iu.test(candidate)) return "forecast";
+  if (/estimate|estimated|approximately|taxmin|оценк|примерно|около/iu.test(candidate)) return "estimate";
+  if (/report(?:ed|s)?|according|сообща|по данным|ma['’]?lumot/iu.test(candidate)) return "reported";
+  return "observed";
+}
+
+function evidenceClaimLabel(row, content) {
+  if (String(row?.truthStatus || "").toLowerCase() === "verified") return l(content, "Supported fact");
+  if (String(row?.truthStatus || "").toLowerCase() === "single_source") {
+    const nature = normalizeEvidenceNature(row?.claimNature, row?.text || row?.learning);
+    return l(content, ["estimate", "forecast", "scenario"].includes(nature) ? "Single-source projection" : "Single-source observation");
+  }
+  return l(content, "Recommendation");
+}
+
+function isAnalogRendererSource(source = {}) {
+  const type = String(source.rawType || "").toLowerCase();
+  const topic = String(source.researchTopic || "").toLowerCase();
+  return type === "analog_research"
+    || ["analog_features", "analog_business_model", "product_analog"].includes(topic)
+    || /^analog_(?:feature|business|product)/.test(topic);
+}
+
+function factualClaimAttributes(sourceIds, claimId, { container = true } = {}) {
+  const ids = [...new Set(array(sourceIds).map(String).filter(Boolean))];
+  if (!ids.length) return "";
+  return (container ? ' data-claim-container="true"' : "")
+    + ' data-factual-claim="true"'
+    + ' data-claim-id="' + escapeHtmlAttribute(String(claimId || "factual-claim")) + '"'
+    + ' data-source-ids="' + escapeHtmlAttribute(ids.join(",")) + '"';
+}
+
+function inlineSources(sourceIds, content, { compact = false } = {}) {
+  const ids = [...new Set(array(sourceIds).map(String).filter(Boolean))];
+  if (!ids.length || !content) return "";
+  const byId = new Map(array(content.sources).map((source) => [String(source.id), source]));
+  const sources = ids.map((id) => byId.get(id)).filter(Boolean);
+  if (!sources.length) return "";
+  const chips = sources.slice(0, 3).map((source) => {
+    const display = String(source.display || "").trim();
+    const label = String(source.label || "").trim();
+    const comparableLabel = label.toLowerCase().replace(/^www\./, "");
+    const comparableDisplay = display.toLowerCase().replace(/^www\./, "");
+    const chipText = display && comparableLabel !== comparableDisplay && !comparableLabel.includes(comparableDisplay)
+      ? label + " · " + display
+      : display || label;
+    const attributes = ' class="source-chip" data-citation="true" data-content-role="citation" data-source-id="' + escapeHtmlAttribute(source.id) + '"';
+    return source.href
+      ? '<a' + attributes + ' href="' + escapeHtmlAttribute(source.href) + '">' + e(chipText) + "</a>"
+      : '<span' + attributes + '>' + e(chipText) + "</span>";
+  }).join("");
+  return '<div class="inline-sources' + (compact ? " compact" : "") + '" data-citation="true" data-citation-ids="' + escapeHtmlAttribute(sources.map((source) => source.id).join(",")) + '"><span class="inline-source-label">' + e(l(content, "Source")) + "</span>" + chips + "</div>";
+}
+
+function normalizeStringRows(value, maximumRows, maximumText) {
+  return array(value).map((row) => clientText(typeof row === "string" ? row : row.label || row.name || row.text, maximumText)).filter(Boolean).slice(0, maximumRows);
+}
+
+function e(value) {
+  return escapeHtmlText(clientText(value, 1200));
+}
+
+function renderTitleMarkup(value) {
+  const text = clientText(value, 1200);
+  return text.split(/(\s+)/u).map((part) => {
+    const safe = escapeHtmlText(part);
+    return /[\p{L}\p{N}]-[\p{L}\p{N}]/u.test(part) ? '<span class="page-title-token">' + safe + "</span>" : safe;
+  }).join("");
+}
+
+function extractVisibleText(html) {
+  return normalizeVisible(String(html || "")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'"));
+}
+
+function normalizeVisible(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function array(value) {
+  return Array.isArray(value) ? value.filter((item) => item !== null && item !== undefined) : [];
+}
+
+function finiteNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function finitePositive(value) {
+  const number = finiteNumber(value);
+  return number !== null && number > 0 ? number : null;
+}
+
+function nullableNumber(value) {
+  const number = finiteNumber(value);
+  return number === null || number < 0 ? null : number;
+}
+
+function safeMinor(value, field) {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < 0) {
+    throw rendererError("CONTRACT_COMMERCIAL_LOCK_INVALID", field + " must be a non-negative safe integer");
+  }
+  return number;
+}
+
+function safeBasisPoints(value, field) {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < 0 || number > 10000) {
+    throw rendererError("CONTRACT_COMMERCIAL_LOCK_INVALID", field + " must be an integer from 0 to 10000");
+  }
+  return number;
+}
+
+function majorToMinor(value, exponent) {
+  const number = finiteNumber(value);
+  if (number === null || number < 0) return null;
+  const factor = 10 ** exponent;
+  const minor = Math.round(number * factor);
+  return Number.isSafeInteger(minor) ? minor : null;
+}
+
+function resolveCurrency(value) {
+  const currency = String(value || "XXX").toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currency)) {
+    throw rendererError("COMMERCIAL_CURRENCY_UNSUPPORTED_V1", "Currency is invalid for renderer v1");
+  }
+  return currency;
+}
+
+function formatMinor(minor, currency, exponent, content = {}) {
+  if (!Number.isSafeInteger(minor) || minor < 0) return l(content, "Amount to confirm");
+  const factor = 10 ** exponent;
+  const major = minor / factor;
+  const fraction = minor % factor;
+  const digits = fraction === 0 ? 0 : exponent;
+  const formatted = new Intl.NumberFormat(content.intlLocale || rendererIntlLocale(content.locale), {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(major);
+  // Familiar currency symbols read better for clients than ISO codes
+  // ("$11 800" instead of "USD 11 800"); other currencies keep their code.
+  const symbol = { USD: "$", EUR: "€", GBP: "£" }[currency];
+  if (symbol) return symbol + formatted;
+  return currency === "XXX" ? formatted : currency + " " + formatted;
+}
+
+function formatBasisPoints(value, content = {}) {
+  const basis = Number(value);
+  if (!Number.isSafeInteger(basis) || basis < 0) return l(content, "Share to confirm");
+  return new Intl.NumberFormat(content.intlLocale || rendererIntlLocale(content.locale), {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(basis / 100) + "%";
+}
+
+function formatNumber(value, content = {}) {
+  const number = finiteNumber(value);
+  return number === null ? l(content, "To confirm") : new Intl.NumberFormat(content.intlLocale || rendererIntlLocale(content.locale), { maximumFractionDigits: 2 }).format(number);
+}
+
+function padPage(value) {
+  return String(value).padStart(2, "0");
+}
+
+function truthLabel(value, content = {}) {
+  const labels = {
+    explicit: "Confirmed",
+    verified: "Verified",
+    single_source: "Single source",
+    recommended: "Proposed",
+    inferred: "Inferred",
+    assumed: "Assumption",
+    unknown: "To confirm",
+  };
+  return l(content, labels[value] || "To confirm");
+}
+
+function ownershipLabel(value, content = {}) {
+  const labels = {
+    owned: "Owned",
+    partner_integrated: "Partner-enabled",
+    deferred: "Deferred",
+    out_of_scope: "Out of scope",
+    unknown: "Ownership to confirm",
+  };
+  return l(content, labels[value] || "Ownership to confirm");
+}
+
+function scopeEffectCopy(value, content = {}) {
+  if (value === "validate") return l(content, "Validate the operating pattern before scope approval.");
+  if (value === "do_not_copy") return l(content, "Do not copy the feature or brand expression.");
+  return l(content, "Benchmark context only; no automatic scope commitment.");
+}
+
+function normalizeQuadrant(value) {
+  const text = String(value || "").toLowerCase();
+  if (/weak/.test(text)) return "weakness";
+  if (/opportun/.test(text)) return "opportunity";
+  if (/threat|risk/.test(text)) return "threat";
+  return "strength";
+}
+
+function operatingResponse(quadrant, hasEvidence, content = {}) {
+  const response = quadrant === "strength" ? "Protect the advantage in acceptance criteria."
+    : quadrant === "weakness" ? "Assign an owner and close the missing input."
+      : quadrant === "opportunity" ? "Test the signal early and define a measure."
+        : "Define a fallback route before the dependency reaches the critical path.";
+  return (hasEvidence ? "" : l(content, "After the input is confirmed: ")) + l(content, response);
+}
+
+function capitalize(value) {
+  const text = String(value || "");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function rendererError(code, message) {
+  return Object.assign(new Error(message), { code });
+}

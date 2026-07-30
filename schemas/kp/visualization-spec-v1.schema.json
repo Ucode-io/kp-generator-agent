@@ -1,0 +1,244 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://udevs.local/schemas/kp/visualization-spec-v1.schema.json",
+  "title": "KP VisualizationSpec v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "visualizationSpecId", "requestId", "pageNumber", "kind", "variant",
+    "intent", "dataState", "layout", "timeScale", "nodes", "edges", "groups",
+    "aggregationMapping", "degradation", "warnings"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "visualizationSpecId": { "type": "string", "pattern": "^VSPEC-[A-Za-z0-9._-]+$", "maxLength": 80 },
+    "requestId": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "pageNumber": { "type": "integer", "minimum": 1, "maximum": 50 },
+    "segmentIndex": { "type": "integer", "minimum": 1, "maximum": 50 },
+    "segmentCount": { "type": "integer", "minimum": 1, "maximum": 50 },
+    "kind": { "enum": ["nested_market", "ownership_boundary", "hub_spoke", "bpmn", "architecture", "gantt"] },
+    "variant": { "type": "string", "minLength": 1 },
+    "intent": { "enum": ["relationship", "hierarchy", "process", "architecture", "composition", "schedule"] },
+    "dataState": { "enum": ["grounded", "mixed", "scenario", "pending"] },
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engine", "orientation"],
+      "properties": {
+        "engine": { "enum": ["nested_levels", "boundary_flow", "radial", "two_sided_tree", "left_to_right_tree", "network", "swimlane", "linear_flow", "layered", "context", "gantt", "milestone_timeline", "questions"] },
+        "orientation": { "enum": ["horizontal", "vertical", "radial"] }
+      }
+    },
+    "timeScale": { "oneOf": [{ "$ref": "#/$defs/timeSpan" }, { "type": "null" }] },
+    "nodes": {
+      "type": "array",
+      "maxItems": 36,
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "edges": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/edge" }
+    },
+    "groups": {
+      "type": "array",
+      "maxItems": 12,
+      "items": { "$ref": "#/$defs/group" }
+    },
+    "aggregationMapping": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/aggregation" }
+    },
+    "degradation": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["degradedFrom", "reason", "aggregationMappingIds"],
+          "properties": {
+            "degradedFrom": { "type": "string", "minLength": 1, "maxLength": 80 },
+            "reason": { "type": "string", "minLength": 1, "maxLength": 100 },
+            "aggregationMappingIds": { "type": "array", "uniqueItems": true, "maxItems": 32, "items": { "$ref": "#/$defs/id" } }
+          }
+        }
+      ]
+    },
+    "warnings": { "type": "array", "maxItems": 20, "items": { "type": "string", "minLength": 1, "maxLength": 320 } }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,80}$" },
+    "sourceIds": { "type": "array", "uniqueItems": true, "maxItems": 16, "items": { "type": "string", "minLength": 1, "maxLength": 80 } },
+    "truthStatus": { "enum": ["explicit", "verified", "single_source", "recommended", "inferred", "assumed", "unknown"] },
+    "inclusion": { "enum": ["requested", "in_scope", "recommended", "deferred", "out_of_scope", "unknown"] },
+    "semanticRole": { "enum": ["owned", "partner", "deferred", "risk", "positive", "neutral"] },
+    "dataRef": { "type": ["string", "null"], "pattern": "^(/([^/~]|~0|~1)*)*$", "maxLength": 320 },
+    "timeSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit", "start", "end"],
+      "properties": {
+        "unit": { "enum": ["week", "month"] },
+        "start": { "type": "integer", "minimum": 1 },
+        "end": { "type": "integer", "minimum": 1 },
+        "derived": { "type": "boolean" }
+      }
+    },
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "currency", "period", "geography", "shareOfParent"],
+      "properties": {
+        "value": { "type": "number", "exclusiveMinimum": 0 },
+        "currency": { "type": "string", "minLength": 1, "maxLength": 12 },
+        "period": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "geography": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "shareOfParent": { "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1 }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "label", "fullLabel", "type", "semanticRole", "truthStatus", "inclusion",
+        "groupId", "lane", "time", "dataRef", "metric", "sourceIds", "derivationRuleId"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "fullLabel": { "type": "string", "minLength": 1, "maxLength": 320 },
+        "type": { "enum": ["core", "surface", "domain", "capability", "subfunction", "event", "start_event", "end_event", "task", "gateway", "channel", "application", "service", "data_store", "external_system", "market_level", "phase", "milestone", "question", "note", "annotation", "aggregate"] },
+        "semanticRole": { "$ref": "#/$defs/semanticRole" },
+        "truthStatus": { "$ref": "#/$defs/truthStatus" },
+        "inclusion": { "$ref": "#/$defs/inclusion" },
+        "groupId": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "lane": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "time": { "oneOf": [{ "$ref": "#/$defs/timeSpan" }, { "type": "null" }] },
+        "dataRef": { "$ref": "#/$defs/dataRef" },
+        "metric": { "oneOf": [{ "$ref": "#/$defs/metric" }, { "type": "null" }] },
+        "claimNature": { "enum": ["observed", "reported", "estimate", "forecast", "scenario", null] },
+        "sourceIds": { "$ref": "#/$defs/sourceIds" },
+        "derivationRuleId": { "type": ["string", "null"], "minLength": 1, "maxLength": 80 }
+      }
+    },
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "lag", "allowOverlap"],
+      "properties": {
+        "type": { "enum": ["finish_to_start", "start_to_start", "finish_to_finish"] },
+        "lag": { "type": "integer", "minimum": 0 },
+        "allowOverlap": { "type": "boolean" }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "from", "to", "type", "direction", "label", "semanticRole", "truthStatus", "sourceIds", "derivationRuleId", "dataRef", "dependency"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "from": { "$ref": "#/$defs/id" },
+        "to": { "$ref": "#/$defs/id" },
+        "type": { "enum": ["sequence", "message", "request", "callback", "status", "reads_writes", "data_flow", "dependency", "subset_of", "exception", "association"] },
+        "direction": { "enum": ["forward", "both", "none"] },
+        "label": { "type": ["string", "null"], "minLength": 1, "maxLength": 100 },
+        "semanticRole": { "$ref": "#/$defs/semanticRole" },
+        "truthStatus": { "$ref": "#/$defs/truthStatus" },
+        "sourceIds": { "$ref": "#/$defs/sourceIds" },
+        "derivationRuleId": { "type": ["string", "null"], "minLength": 1, "maxLength": 80 },
+        "dataRef": { "$ref": "#/$defs/dataRef" },
+        "dependency": { "oneOf": [{ "$ref": "#/$defs/dependency" }, { "type": "null" }] }
+      }
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "type", "semanticRole", "nodeIds", "truthStatus", "sourceIds", "derivationRuleId"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "type": { "enum": ["zone", "boundary", "lane", "pool", "cluster", "track", "scenario_set"] },
+        "semanticRole": { "$ref": "#/$defs/semanticRole" },
+        "nodeIds": { "type": "array", "uniqueItems": true, "minItems": 1, "maxItems": 36, "items": { "$ref": "#/$defs/id" } },
+        "truthStatus": { "$ref": "#/$defs/truthStatus" },
+        "sourceIds": { "$ref": "#/$defs/sourceIds" },
+        "derivationRuleId": { "type": ["string", "null"], "minLength": 1, "maxLength": 80 }
+      }
+    },
+    "aggregation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "aggregateNodeId", "sourceEntityIds", "reason", "displayLabel"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "aggregateNodeId": { "$ref": "#/$defs/id" },
+        "sourceEntityIds": { "type": "array", "uniqueItems": true, "minItems": 1, "maxItems": 100, "items": { "$ref": "#/$defs/id" } },
+        "reason": { "enum": ["visible_node_limit", "readability_limit", "semantic_grouping"] },
+        "displayLabel": { "type": "string", "minLength": 1, "maxLength": 100 }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "nested_market" } } },
+      "then": { "properties": { "variant": { "enum": ["numeric", "formula_pending"] }, "intent": { "const": "composition" }, "layout": { "type": "object", "properties": { "engine": { "const": "nested_levels" } } }, "timeScale": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "ownership_boundary" } } },
+      "then": {
+        "properties": { "variant": { "enum": ["complete", "pending"] }, "intent": { "const": "relationship" } },
+        "allOf": [
+          { "if": { "properties": { "variant": { "const": "complete" } } }, "then": { "properties": { "layout": { "type": "object", "properties": { "engine": { "const": "boundary_flow" } } } } } },
+          { "if": { "properties": { "variant": { "const": "pending" } } }, "then": { "properties": { "layout": { "type": "object", "properties": { "engine": { "const": "questions" } } } } } }
+        ]
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "hub_spoke" } } },
+      "then": {
+        "properties": { "variant": { "enum": ["radial", "two_sided_tree", "left_to_right_tree", "network", "pending"] }, "intent": { "enum": ["hierarchy", "relationship"] } },
+        "allOf": [
+          { "if": { "properties": { "variant": { "const": "radial" } } }, "then": { "properties": { "layout": { "type": "object", "properties": { "engine": { "const": "radial" } } } } } },
+          { "if": { "properties": { "variant": { "const": "two_sided_tree" } } }, "then": { "properties": { "layout": { "type": "object", "properties": { "engine": { "const": "two_sided_tree" } } } } } },
+          { "if": { "properties": { "variant": { "const": "left_to_right_tree" } } }, "then": { "properties": { "layout": { "type": "object", "properties": { "engine": { "const": "left_to_right_tree" } } } } } },
+          { "if": { "properties": { "variant": { "const": "network" } } }, "then": { "properties": { "layout": { "type": "object", "properties": { "engine": { "const": "network" } } } } } },
+          { "if": { "properties": { "variant": { "const": "pending" } } }, "then": { "properties": { "layout": { "type": "object", "properties": { "engine": { "const": "questions" } } } } } }
+        ]
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "bpmn" } } },
+      "then": {
+        "properties": { "variant": { "enum": ["swimlane", "linear", "questions"] }, "intent": { "const": "process" } },
+        "allOf": [
+          { "if": { "properties": { "variant": { "const": "swimlane" } } }, "then": { "properties": { "layout": { "type": "object", "properties": { "engine": { "const": "swimlane" } } } } } },
+          { "if": { "properties": { "variant": { "const": "linear" } } }, "then": { "properties": { "layout": { "type": "object", "properties": { "engine": { "const": "linear_flow" } } } } } },
+          { "if": { "properties": { "variant": { "const": "questions" } } }, "then": { "properties": { "layout": { "type": "object", "properties": { "engine": { "const": "questions" } } } } } }
+        ]
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "architecture" } } },
+      "then": {
+        "properties": { "variant": { "enum": ["layered", "context", "pending"] }, "intent": { "const": "architecture" } },
+        "allOf": [
+          { "if": { "properties": { "variant": { "const": "layered" } } }, "then": { "properties": { "layout": { "type": "object", "properties": { "engine": { "const": "layered" } } } } } },
+          { "if": { "properties": { "variant": { "const": "context" } } }, "then": { "properties": { "layout": { "type": "object", "properties": { "engine": { "const": "context" } } } } } },
+          { "if": { "properties": { "variant": { "const": "pending" } } }, "then": { "properties": { "layout": { "type": "object", "properties": { "engine": { "const": "questions" } } } } } }
+        ]
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "gantt" } } },
+      "then": {
+        "properties": { "variant": { "enum": ["gantt", "milestone", "pending"] }, "intent": { "const": "schedule" } },
+        "allOf": [
+          { "if": { "properties": { "variant": { "const": "gantt" } } }, "then": { "properties": { "layout": { "type": "object", "properties": { "engine": { "const": "gantt" } } }, "timeScale": { "$ref": "#/$defs/timeSpan" } } } },
+          { "if": { "properties": { "variant": { "const": "milestone" } } }, "then": { "properties": { "layout": { "type": "object", "properties": { "engine": { "const": "milestone_timeline" } } }, "timeScale": { "$ref": "#/$defs/timeSpan" } } } },
+          { "if": { "properties": { "variant": { "const": "pending" } } }, "then": { "properties": { "layout": { "type": "object", "properties": { "engine": { "const": "questions" } } }, "timeScale": { "type": "null" } } } }
+        ]
+      }
+    }
+  ]
+}

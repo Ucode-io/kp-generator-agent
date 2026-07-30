@@ -1,0 +1,10 @@
+node_modules
+reports
+tmp
+data
+.git
+.gitignore
+__MACOSX
+**/.DS_Store
+*.pdf
+.env

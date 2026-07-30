@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://udevs.local/schemas/kp/commercial-lock-v1.schema.json",
+  "title": "KP CommercialLock v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "requestId", "currency", "currencyExponent", "projectPriceMinor", "pricing", "functionPriceSubtotalMinor", "functionPrice", "payments", "teamPlan", "durationMonths", "durationWeeks", "explicitScopeRows", "sourceProposalModelHash", "lockHash"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "requestId": { "type": "string" },
+    "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+    "currencyExponent": { "type": "integer", "minimum": 0, "maximum": 6 },
+    "projectPriceMinor": { "type": "integer", "minimum": 0 },
+    "pricing": { "type": "object", "additionalProperties": true },
+    "functionPriceSubtotalMinor": { "type": "integer", "minimum": 0 },
+    "functionPrice": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+    "payments": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+    "teamPlan": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["people", "roleCount", "roles", "roleAllocations", "monthCount", "monthlyTotals", "peakMonth", "fteMonths", "peakFte", "truthStatus", "sourceIds", "derivationRuleId"],
+      "properties": {
+        "people": { "type": "number", "minimum": 0 },
+        "roleCount": { "type": "integer", "minimum": 0 },
+        "roles": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "roleAllocations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["role", "monthlyFte", "peakFte", "fteMonths"],
+            "properties": {
+              "role": { "type": "string", "minLength": 1 },
+              "monthlyFte": { "type": "array", "items": { "type": "number", "minimum": 0 } },
+              "peakFte": { "type": "number", "minimum": 0 },
+              "fteMonths": { "type": "number", "minimum": 0 }
+            }
+          }
+        },
+        "monthCount": { "type": "integer", "minimum": 0 },
+        "monthlyTotals": { "type": "array", "items": { "type": "number", "minimum": 0 } },
+        "peakMonth": { "type": ["integer", "null"], "minimum": 1 },
+        "fteMonths": { "type": "number", "minimum": 0 },
+        "peakFte": { "type": "number", "minimum": 0 },
+        "truthStatus": { "type": "string" },
+        "sourceIds": { "type": "array", "items": { "type": "string" } },
+        "derivationRuleId": { "type": ["string", "null"] }
+      }
+    },
+    "durationMonths": { "type": "integer", "minimum": 0 },
+    "durationWeeks": { "type": "integer", "minimum": 0 },
+    "explicitScopeRows": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+    "sourceProposalModelHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "lockHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

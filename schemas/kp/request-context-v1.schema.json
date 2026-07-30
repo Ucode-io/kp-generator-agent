@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://udevs.local/schemas/kp/request-context-v1.schema.json",
+  "title": "KP RequestContext v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "requestId", "channel", "receivedAt", "locale", "timezone"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "requestId": { "type": "string", "pattern": "^KP-[0-9]{8}-[A-Z0-9]{6,32}$" },
+    "channel": { "enum": ["telegram", "direct_api", "test", "internal"] },
+    "receivedAt": { "type": "string", "format": "date-time" },
+    "locale": { "type": "string", "minLength": 2, "maxLength": 32 },
+    "timezone": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "transport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chatType", "chatId", "userId", "messageId"],
+      "properties": {
+        "chatType": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "chatId": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "messageId": { "type": "integer", "minimum": 0 },
+        "messageThreadId": { "type": "integer", "minimum": 0 },
+        "mediaGroupId": { "type": ["string", "null"], "maxLength": 120 },
+        "replyToMessageId": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "routing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chatIdHash", "canaryBucket", "rendererSelectionReason"],
+      "properties": {
+        "chatIdHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "idempotencyKeyHash": { "type": "string", "pattern": "^(hmac-sha256:v1:|sha256:)[0-9a-f]{64}$" },
+        "referenceModeHint": { "enum": ["explicit_full", "explicit_partial", "none"] },
+        "canaryBucket": { "type": "integer", "minimum": 0, "maximum": 99 },
+        "rendererSelectionReason": { "type": "string", "minLength": 1, "maxLength": 120 }
+      }
+    }
+  }
+}

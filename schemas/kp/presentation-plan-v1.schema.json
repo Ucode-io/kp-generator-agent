@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://udevs.local/schemas/kp/presentation-plan-v1.schema.json",
+  "title": "KP PresentationPlan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "planId", "requestId", "pageCount", "canvas", "pages", "diagnostics", "planHash", "warnings"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "planId": { "type": "string", "pattern": "^PPLAN-[A-Za-z0-9._-]+$" },
+    "requestId": { "type": "string" },
+    "pageCount": { "type": "integer", "minimum": 2, "maximum": 50 },
+    "canvas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "aspectRatio"],
+      "properties": {
+        "width": { "const": 1440 },
+        "height": { "const": 960 },
+        "aspectRatio": { "const": 1.5 }
+      }
+    },
+    "pages": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pageNumber", "kind", "intent", "layoutFamily", "selectionScore", "visualizationSpecId", "notes"],
+        "properties": {
+          "pageNumber": { "type": "integer", "minimum": 1, "maximum": 50 },
+          "kind": { "type": "string", "minLength": 1 },
+          "intent": { "type": "string", "minLength": 1 },
+          "layoutFamily": { "type": "string", "minLength": 1 },
+          "selectionScore": { "type": "number" },
+          "visualizationSpecId": { "type": ["string", "null"] },
+          "notes": { "type": "array", "items": { "type": "string" } },
+          "contentClasses": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "enum": ["fact", "model", "recommendation"] }
+          },
+          "sourceIds": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+          "derivationRuleIds": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+          "selectionReasons": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+          "decisionRelevance": { "type": "number", "minimum": 0, "maximum": 1 },
+          "researchRequired": { "type": "boolean" },
+          "fallbackMode": { "enum": ["none", "transparent_model"] },
+          "segmentIndex": { "type": "integer", "minimum": 1, "maximum": 50 },
+          "segmentCount": { "type": "integer", "minimum": 1, "maximum": 50 }
+        }
+      }
+    },
+    "diagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layoutSelections", "defaultIntroductions", "distinctLayoutFamilyCount"],
+      "properties": {
+        "layoutSelections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["pageNumber", "kind", "selectedFamily", "score", "candidates"],
+            "properties": {
+              "pageNumber": { "type": "integer", "minimum": 1, "maximum": 50 },
+              "kind": { "type": "string", "minLength": 1 },
+              "selectedFamily": { "type": "string", "minLength": 1 },
+              "score": { "type": "number" },
+              "candidates": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["family", "score", "styleConfidence", "unusedSilhouetteBonus", "consecutiveRepeatPenalty", "recentGeometrySimilarityPenalty"],
+                  "properties": {
+                    "family": { "type": "string", "minLength": 1 },
+                    "score": { "type": "number" },
+                    "styleConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "unusedSilhouetteBonus": { "type": "number" },
+                    "consecutiveRepeatPenalty": { "type": "number" },
+                    "recentGeometrySimilarityPenalty": { "type": "number" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "defaultIntroductions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["family", "pageNumber", "defaultProfileId", "defaultProfileVersion", "reason"],
+            "properties": {
+              "family": { "type": "string", "minLength": 1 },
+              "pageNumber": { "type": "integer", "minimum": 1, "maximum": 50 },
+              "defaultProfileId": { "type": "string", "minLength": 1 },
+              "defaultProfileVersion": { "type": "string", "minLength": 1 },
+              "reason": { "const": "semantic_page_requirement" }
+            }
+          }
+        },
+        "distinctLayoutFamilyCount": { "type": "integer", "minimum": 1 },
+        "pageDecisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "intent", "include", "explicitlyRequested", "relevance", "contentClasses", "sourceIds", "derivationRuleIds", "researchRequired", "fallbackMode", "reasons"],
+            "properties": {
+              "kind": { "type": "string", "minLength": 1 },
+              "intent": { "type": "string", "minLength": 1 },
+              "include": { "type": "boolean" },
+              "explicitlyRequested": { "type": "boolean" },
+              "relevance": { "type": "number", "minimum": 0, "maximum": 1 },
+              "contentClasses": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["fact", "model", "recommendation"] } },
+              "sourceIds": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+              "derivationRuleIds": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+              "researchRequired": { "type": "boolean" },
+              "fallbackMode": { "enum": ["none", "transparent_model"] },
+              "reasons": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+            }
+          }
+        },
+        "researchRequests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "reason", "fallbackMode"],
+            "properties": {
+              "kind": { "type": "string", "minLength": 1 },
+              "reason": { "type": "string", "minLength": 1 },
+              "fallbackMode": { "const": "transparent_model" }
+            }
+          }
+        },
+        "suppressedDuplicates": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "planHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  }
+}

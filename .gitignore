@@ -1,0 +1,8 @@
+node_modules/
+.env
+reports/
+tmp/
+data/kp_reference_sessions/
+data/commercial_proposals/
+*.log
+.DS_Store

@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://udevs.local/schemas/kp/qa-report-v2.schema.json",
+  "title": "KP QA Report v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "requestId", "executionId", "executionVariant", "rendererVersion", "mode", "startedAt", "status", "summary", "gates", "findings", "artifacts"],
+  "properties": {
+    "schemaVersion": { "const": "2.0" },
+    "requestId": { "type": "string", "minLength": 1 },
+    "executionId": { "type": "string", "minLength": 1 },
+    "executionVariant": { "enum": ["v5-delivery", "v5-shadow", "legacy-delivery"] },
+    "rendererVersion": { "enum": ["v5", "legacy-v4"] },
+    "mode": { "enum": ["enforce", "shadow"] },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "finishedAt": { "type": ["string", "null"], "format": "date-time" },
+    "status": { "enum": ["RUNNING", "PASS_PENDING_PROMOTION", "PASS", "FAIL", "ERROR"] },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["blocker", "error", "warning", "info", "enforcedGateCount", "passedGateCount", "failedGateCount", "skippedGateCount", "notRunGateCount"],
+      "properties": {
+        "blocker": { "type": "integer", "minimum": 0 },
+        "error": { "type": "integer", "minimum": 0 },
+        "warning": { "type": "integer", "minimum": 0 },
+        "info": { "type": "integer", "minimum": 0 },
+        "enforcedGateCount": { "type": "integer", "minimum": 0 },
+        "passedGateCount": { "type": "integer", "minimum": 0 },
+        "failedGateCount": { "type": "integer", "minimum": 0 },
+        "skippedGateCount": { "type": "integer", "minimum": 0 },
+        "notRunGateCount": { "type": "integer", "minimum": 0 },
+        "pendingGateCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "gates": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/gate" }
+    },
+    "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "candidatePdf": { "type": ["string", "null"] },
+        "renderDirectory": { "type": ["string", "null"] },
+        "contactSheet": { "type": ["string", "null"] },
+        "referenceProfile": { "type": ["string", "null"] },
+        "referenceFidelity": { "type": ["string", "null"] }
+      }
+    }
+  },
+  "$defs": {
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "status", "enforced", "durationMs", "metrics", "findings"],
+      "properties": {
+        "id": { "enum": ["G0", "G1", "G2", "G3", "G4", "G5", "G6", "G7"] },
+        "name": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["PASS", "FAIL", "ERROR", "SKIP", "PENDING", "NOT_RUN"] },
+        "enforced": { "type": "boolean" },
+        "durationMs": { "type": "number", "minimum": 0 },
+        "metrics": { "type": "object", "additionalProperties": true },
+        "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["code", "severity"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[A-Z0-9_]+$" },
+        "severity": { "enum": ["BLOCKER", "ERROR", "WARNING", "INFO"] },
+        "page": { "type": ["integer", "null"], "minimum": 1, "maximum": 50 },
+        "artifact": { "type": ["string", "null"] },
+        "message": { "type": ["string", "null"] },
+        "evidence": { "type": ["object", "null"], "additionalProperties": true },
+        "remediation": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

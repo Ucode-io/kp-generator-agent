@@ -1,0 +1,308 @@
+{
+  "schemaVersion": "1.0",
+  "generatedAt": "2026-07-21T04:40:57.046Z",
+  "sourceName": "Udevs AI Assistant",
+  "entryPoints": [
+    "scripts/kpi_pdf_client.mjs",
+    "scripts/kp_reference_runtime.mjs",
+    "scripts/kp_reference_store.mjs",
+    "scripts/kp_reference_contracts.mjs"
+  ],
+  "files": [
+    {
+      "relativePath": "schemas/kp/candidate-evidence-bundle-v1.schema.json",
+      "sha256": "c9a97a867f55132ed33011bcadf307a579b582209d858f6d674511dac35fdac9",
+      "sizeBytes": 2796
+    },
+    {
+      "relativePath": "schemas/kp/commercial-lock-v1.schema.json",
+      "sha256": "53855e8805e516dfe565d8d9fe2984f6598c77da75f0120f5cbb709bb6b1be1a",
+      "sizeBytes": 3120
+    },
+    {
+      "relativePath": "schemas/kp/evidence-manifest-v2.schema.json",
+      "sha256": "2290585b1447098730aa7368128fe32eefffb64aa08c1e3e5a8b500f66bb1b9a",
+      "sizeBytes": 4018
+    },
+    {
+      "relativePath": "schemas/kp/idempotency-record-v1.schema.json",
+      "sha256": "21c007f91270efe729577283468a0e4045ce4323f643a08050282cef61811d91",
+      "sizeBytes": 3652
+    },
+    {
+      "relativePath": "schemas/kp/presentation-plan-v1.schema.json",
+      "sha256": "6825f69d327e0e501b54777c3d156022e09833eca5544744daf6ebbea52d8f59",
+      "sizeBytes": 6851
+    },
+    {
+      "relativePath": "schemas/kp/promotion-journal-v1.schema.json",
+      "sha256": "4011814c89553f39315cf0324aaf6e83af66902820e79e17946ba3b45941a308",
+      "sizeBytes": 2165
+    },
+    {
+      "relativePath": "schemas/kp/proposal-model-v3.schema.json",
+      "sha256": "636a21d110540d55ed337634805372c1287efa398ca4704344aa75965685b8cb",
+      "sizeBytes": 5106
+    },
+    {
+      "relativePath": "schemas/kp/proposal-package-v1.schema.json",
+      "sha256": "70c80570da265ea1102e78e6efad877a7fcd9fb1555ad7004f5ee52d718fbde4",
+      "sizeBytes": 1731
+    },
+    {
+      "relativePath": "schemas/kp/proposal-record-v1.schema.json",
+      "sha256": "b134c84bc5302daa1084175f9fff473f3d8747d22f1a6edab7fd30189a69ff83",
+      "sizeBytes": 1604
+    },
+    {
+      "relativePath": "schemas/kp/proposal-retention-v1.schema.json",
+      "sha256": "441f64849ad36ae10f37b2121e812a50547e49116d6cc9a32d53f26caa8f41a9",
+      "sizeBytes": 999
+    },
+    {
+      "relativePath": "schemas/kp/proposal-semantic-model-v1.schema.json",
+      "sha256": "617cc66fcc8b2a04a7d87760c8fc120fd14a8e2598b91ebb25622903c235455d",
+      "sizeBytes": 18492
+    },
+    {
+      "relativePath": "schemas/kp/qa-report-v2.schema.json",
+      "sha256": "60f0681c619b78efaf8cc57f603ee826dfcd4ac0fc9ec9ffd614ae1957f805ba",
+      "sizeBytes": 3771
+    },
+    {
+      "relativePath": "schemas/kp/reference-analysis-v1.schema.json",
+      "sha256": "f0db480d9558b3ac5e5a45093036e8a39d647dd1adb1d6a811e66a7371265687",
+      "sizeBytes": 5402
+    },
+    {
+      "relativePath": "schemas/kp/reference-capture-v1.schema.json",
+      "sha256": "e6584483db661402c38c3b69ba255d2e0182d862b69544bbd787d4fa1291ad34",
+      "sizeBytes": 3062
+    },
+    {
+      "relativePath": "schemas/kp/reference-fidelity-targets-v1.schema.json",
+      "sha256": "013754bea3b3a2873d9af21151bcf42904fe1fd00188f5173061d62c7d1ecd5e",
+      "sizeBytes": 3091
+    },
+    {
+      "relativePath": "schemas/kp/reference-session-store-v1.schema.json",
+      "sha256": "e3a43dfcf0224077d8f04b2fd670bc93076d0367dedf166843a4194ce8601742",
+      "sizeBytes": 3813
+    },
+    {
+      "relativePath": "schemas/kp/request-context-v1.schema.json",
+      "sha256": "21a6e8fa16c88c078cde98e80ba107dc32aa557bd50c91f67c8683a42a201e89",
+      "sizeBytes": 2049
+    },
+    {
+      "relativePath": "schemas/kp/request-status-v1.schema.json",
+      "sha256": "845e3e36e05e0cc599632c8aca50bb0c177cbbcd147ac1631e2c1f893b957ba4",
+      "sizeBytes": 1191
+    },
+    {
+      "relativePath": "schemas/kp/stored-evidence-bundle-v1.schema.json",
+      "sha256": "51124c8d0cb994852031f9d3550e9cffdea54fcb46f194eb61ca9bca35a25562",
+      "sizeBytes": 2463
+    },
+    {
+      "relativePath": "schemas/kp/visual-style-profile-v1.schema.json",
+      "sha256": "13613d5421180dc67ae2ecae70e6c8b8b1d2b9e72dee005f63c26af650eba457",
+      "sizeBytes": 1735
+    },
+    {
+      "relativePath": "schemas/kp/visualization-spec-v1.schema.json",
+      "sha256": "a02a7ceaee0ad8b4ef9d8dbcffbb640859cb329c911f7b08ca5bf5ade0c3c8cc",
+      "sizeBytes": 13978
+    },
+    {
+      "relativePath": "scripts/audio_transcription.mjs",
+      "sha256": "05a85a33098d570864e1a8cd011c4ddc3c20739c4b590975f2d1dbb2bbf120bb",
+      "sizeBytes": 2812
+    },
+    {
+      "relativePath": "scripts/kp_architecture_layers.mjs",
+      "sha256": "1519382496f6425f053d7f3d0246f8f071ab558c28f9b86c2d49f3f3668a599f",
+      "sizeBytes": 1540
+    },
+    {
+      "relativePath": "scripts/kp_artifact_retention.mjs",
+      "sha256": "d6cfd44ddcbb1dcf4ff68aa641d6a4097475c2802390675a46eb269f6a7cf59c",
+      "sizeBytes": 3819
+    },
+    {
+      "relativePath": "scripts/kp_commercial_lock.mjs",
+      "sha256": "9d527fb60cdbee4eeecfd149238e499c962ca9136cdd1e6443474aecb6136a79",
+      "sizeBytes": 16698
+    },
+    {
+      "relativePath": "scripts/kp_diagram_layout.mjs",
+      "sha256": "791e473604fa0f956d7747816c935bdf7f407a5d995df22e4add90b2603a7fea",
+      "sizeBytes": 38384
+    },
+    {
+      "relativePath": "scripts/kp_diagram_renderer.mjs",
+      "sha256": "41599395352a6d9589f13ae281e0bf46c0ef9fd5c098bf85d4f7307735f6c7b9",
+      "sizeBytes": 21056
+    },
+    {
+      "relativePath": "scripts/kp_grounded_content.mjs",
+      "sha256": "777e2bbf5e7ddc229891e1ccc388ef66406a0c970fc69a5b462a1f2e0e3ab167",
+      "sizeBytes": 82729
+    },
+    {
+      "relativePath": "scripts/kp_pdf_config.mjs",
+      "sha256": "352c1cd268f9b207258acc10dac3c0f927306f40cd652f33639d4a8c7c7aeae7",
+      "sizeBytes": 6276
+    },
+    {
+      "relativePath": "scripts/kp_pdf_content_qa.mjs",
+      "sha256": "1b2d56fb4a37a63a8557d0284d891d7eab0c5bc0dc4d60a6ef9e411df136d97a",
+      "sizeBytes": 33131
+    },
+    {
+      "relativePath": "scripts/kp_pdf_fidelity_qa.mjs",
+      "sha256": "d707efb430a9b69067372a8d8e2f232c0cb12de095fd71110012e3aeaebd799e",
+      "sizeBytes": 60269
+    },
+    {
+      "relativePath": "scripts/kp_pdf_premium_template.mjs",
+      "sha256": "e8e840ac3c912f1ae1f0aff1c4931e57b8d6b7441e687f9a97c88d4626fba5c9",
+      "sizeBytes": 139311
+    },
+    {
+      "relativePath": "scripts/kp_pdf_promotion.mjs",
+      "sha256": "b8944cc13eb55fc91dca662cad5124568ebf771d735ba338903007584983309c",
+      "sizeBytes": 8895
+    },
+    {
+      "relativePath": "scripts/kp_pdf_quality_gate.mjs",
+      "sha256": "15d6fe49cea4a317fd33a1052f2fee40e6438560155e8a6f2b5bcb6e06bb4eab",
+      "sizeBytes": 45802
+    },
+    {
+      "relativePath": "scripts/kp_pdf_reference_locale.mjs",
+      "sha256": "99e070cf7f98d5ea74b3d78cc447b2a8fb3bcaa9d2135e3efe4b7c2cded9cad0",
+      "sizeBytes": 138482
+    },
+    {
+      "relativePath": "scripts/kp_pdf_reference_renderer.mjs",
+      "sha256": "676c7fdbd534740ff7f9ac70d709707e507e78921661a9963fa8987e0c8b01c5",
+      "sizeBytes": 298236
+    },
+    {
+      "relativePath": "scripts/kp_pdf_semantic_qa.mjs",
+      "sha256": "8f0bed8cdae97ac7827d6f9eedb943ea25dc3b1d47ecca0513739f932a310614",
+      "sizeBytes": 116490
+    },
+    {
+      "relativePath": "scripts/kp_pdf_visual_qa.mjs",
+      "sha256": "070158bbb93b90d8a3d790e665ed578ca66f58a16023c0f771f520519d93b173",
+      "sizeBytes": 91840
+    },
+    {
+      "relativePath": "scripts/kp_presentation_planner.mjs",
+      "sha256": "227e19342f748a40b71473d03b3d2d605fb00b80fe8c3bd9fb21752a17220c0f",
+      "sizeBytes": 47118
+    },
+    {
+      "relativePath": "scripts/kp_product_map_model.mjs",
+      "sha256": "43d3fe0669a4982975196630dd41492d4657b5f3072e6b7e04d6fbab41f1e9a3",
+      "sizeBytes": 8817
+    },
+    {
+      "relativePath": "scripts/kp_proposal_package.mjs",
+      "sha256": "bba23406e6c556518a9b3d7d6fb29411cbc48198c45b960c0f442a6adfe230ae",
+      "sizeBytes": 11145
+    },
+    {
+      "relativePath": "scripts/kp_reference_analyzer.mjs",
+      "sha256": "07419a6cd4d34d173701e6ee1f62f985c2fbd02c527686634a4cc8f2ab0c3a58",
+      "sizeBytes": 13427
+    },
+    {
+      "relativePath": "scripts/kp_reference_capture.mjs",
+      "sha256": "3b4e7d77cde38b47c83f6aea51b5d0e8d264e4ce990c501f44b13e6ef7a3ed6b",
+      "sizeBytes": 21271
+    },
+    {
+      "relativePath": "scripts/kp_reference_classifier.mjs",
+      "sha256": "67432a9e874c3d5b54904608707ee850ff2cf6ff55c3930aeade8c8f2c85e300",
+      "sizeBytes": 9604
+    },
+    {
+      "relativePath": "scripts/kp_reference_contracts.mjs",
+      "sha256": "5454d8840ddb759905ed717783fc9f31035b3365ef22f1d8b58b122a6f0adf4b",
+      "sizeBytes": 7395
+    },
+    {
+      "relativePath": "scripts/kp_reference_merge.mjs",
+      "sha256": "005847e4410e87a5fe257d9935254b88a479f6dbb68e4f1447ce29a81589f7cf",
+      "sizeBytes": 14977
+    },
+    {
+      "relativePath": "scripts/kp_reference_runtime.mjs",
+      "sha256": "c61362067b6636d6c0434d83da3c239878d75b144ed1dc3e401ee9085b7d3877",
+      "sizeBytes": 10931
+    },
+    {
+      "relativePath": "scripts/kp_reference_store.mjs",
+      "sha256": "cea2b0aa2917037a9beb4e691284b901234b8fb634e41eee39a73d0c66c08168",
+      "sizeBytes": 33220
+    },
+    {
+      "relativePath": "scripts/kp_render_safety.mjs",
+      "sha256": "b6d2b315a2a555a8cd30338b60dae7654fd72ddbb62ab83c5e2a98cbb9433342",
+      "sizeBytes": 1079
+    },
+    {
+      "relativePath": "scripts/kp_request_status.mjs",
+      "sha256": "bc1d55bd89b8775ab1d45180195a80f6122aadb03fa32768132351ed27553b53",
+      "sizeBytes": 3599
+    },
+    {
+      "relativePath": "scripts/kp_request_workspace.mjs",
+      "sha256": "3b199aae80f34aa87e4bbd692ff85320d96797b7a2b7c0f7f6eff13b0d219867",
+      "sizeBytes": 3969
+    },
+    {
+      "relativePath": "scripts/kp_seller_entailment.mjs",
+      "sha256": "771116bc3f806be0b54037e1e4bb116ecdc806cfe6595e341f40a5b222dbbf30",
+      "sizeBytes": 1602
+    },
+    {
+      "relativePath": "scripts/kp_semantic_model.mjs",
+      "sha256": "1b8d17e051dd09147cbd5e892fcfe5132ed101c1a0d838ba3c47ab4f611cdce8",
+      "sizeBytes": 48465
+    },
+    {
+      "relativePath": "scripts/kp_source_domains.mjs",
+      "sha256": "d6547c6eeb7ffaa464dba59c024b20ad571df9c300df8449261d259fca6d23a1",
+      "sizeBytes": 348
+    },
+    {
+      "relativePath": "scripts/kp_team_capacity.mjs",
+      "sha256": "4d11a36e1dff698e7e1e55b081aa55e77b72872cc60ae3c53fa157acadff59b9",
+      "sizeBytes": 9380
+    },
+    {
+      "relativePath": "scripts/kp_visual_style_profile.mjs",
+      "sha256": "b3754f70307005bbfa55922d28e21133fa5e18b017a553d34adad653b069b032",
+      "sizeBytes": 1006
+    },
+    {
+      "relativePath": "scripts/kp_visualization_planner.mjs",
+      "sha256": "a21c70d8aa3a112564d664f91c9e47a6930b412a3ab6d03979d3edf4ea566d37",
+      "sizeBytes": 61146
+    },
+    {
+      "relativePath": "scripts/kp_visualization_validator.mjs",
+      "sha256": "1c60bbcf15d361185e30abd633a57f80ab21ba6d139cea0981a3c29c15d8f1f8",
+      "sizeBytes": 36908
+    },
+    {
+      "relativePath": "scripts/kpi_pdf_client.mjs",
+      "sha256": "c1bf50d87c94ece3c24103306d442aa92148e66f3315ac214672367d8f23e2f4",
+      "sizeBytes": 411507
+    }
+  ]
+}

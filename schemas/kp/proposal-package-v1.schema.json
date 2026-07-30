@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://udevs.local/schemas/kp/proposal-package-v1.schema.json",
+  "title": "KP ProposalPackage v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "packageId", "requestContext", "proposalModel", "semanticModel", "visualStyleProfile", "presentationPlan", "visualizationSpecs", "commercialLockHash", "packageHash", "renderContract"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "packageId": { "type": "string", "pattern": "^KPPKG-[A-Za-z0-9._-]+$" },
+    "requestContext": { "$ref": "request-context-v1.schema.json" },
+    "proposalModel": { "$ref": "proposal-model-v3.schema.json" },
+    "semanticModel": { "$ref": "proposal-semantic-model-v1.schema.json" },
+    "visualStyleProfile": { "$ref": "visual-style-profile-v1.schema.json" },
+    "presentationPlan": { "$ref": "presentation-plan-v1.schema.json" },
+    "visualizationSpecs": {
+      "type": "array",
+      "items": { "$ref": "visualization-spec-v1.schema.json" }
+    },
+    "commercialLockHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "packageHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "renderContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rendererVersion", "pageCount", "width", "height", "aspectRatio", "forbidCoverPrice"],
+      "properties": {
+        "rendererVersion": { "const": "v5" },
+        "pageCount": { "type": "integer", "minimum": 2, "maximum": 50 },
+        "width": { "const": 1440 },
+        "height": { "const": 960 },
+        "aspectRatio": { "const": 1.5 },
+        "forbidCoverPrice": { "const": true }
+      }
+    }
+  }
+}

@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://udevs.local/schemas/kp/proposal-model-v3.schema.json",
+  "title": "KP ProposalModel v3",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schemaVersion", "requestId", "title", "visualReferences", "commercialLockState", "commercialLockHash", "renderContract"],
+  "properties": {
+    "schemaVersion": { "const": "3.0" },
+    "requestId": { "type": "string", "pattern": "^KP-[0-9]{8}-[A-Z0-9]{6,32}$" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "visualReferences": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifestId", "manifestPath", "styleProfileId", "styleProfilePath", "mode", "primaryStyleSourceId", "usableReferenceCount", "warnings"],
+      "properties": {
+        "manifestId": { "type": ["string", "null"] },
+        "manifestPath": { "type": ["string", "null"] },
+        "styleProfileId": { "type": ["string", "null"] },
+        "styleProfilePath": { "type": ["string", "null"] },
+        "mode": { "enum": ["explicit_full", "explicit_partial", "none"] },
+        "primaryStyleSourceId": { "type": ["string", "null"] },
+        "usableReferenceCount": { "type": "integer", "minimum": 0 },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "commercialLockState": { "enum": ["locked", "unlocked"] },
+    "commercialLockHash": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+    "renderContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rendererVersion", "pageCount", "width", "height", "aspectRatio", "forbidCoverPrice"],
+      "properties": {
+        "rendererVersion": { "const": "v5" },
+        "pageCount": { "type": "integer", "minimum": 2, "maximum": 50 },
+        "width": { "const": 1440 },
+        "height": { "const": 960 },
+        "aspectRatio": { "const": 1.5 },
+        "forbidCoverPrice": { "const": true }
+      }
+    },
+    "narrative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executiveSummary", "problemStatement", "valueProposition", "whyNow", "deliveryApproach", "closingStatement"],
+      "properties": {
+        "executiveSummary": { "type": "string", "minLength": 1, "maxLength": 1200 },
+        "problemStatement": { "type": "string", "minLength": 1, "maxLength": 1200 },
+        "valueProposition": { "type": "string", "minLength": 1, "maxLength": 1200 },
+        "whyNow": { "type": "string", "minLength": 1, "maxLength": 1200 },
+        "deliveryApproach": { "type": "string", "minLength": 1, "maxLength": 1200 },
+        "closingStatement": { "type": "string", "minLength": 1, "maxLength": 1200 }
+      }
+    },
+    "claimLedger": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "text", "truthStatus", "sourceIds", "derivationRuleId"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "text": { "type": "string", "minLength": 1, "maxLength": 600 },
+          "truthStatus": { "enum": ["explicit", "verified", "single_source", "recommended", "inferred", "assumed", "unknown"] },
+          "sourceIds": { "type": "array", "items": { "type": "string" } },
+          "evidenceExcerpt": { "type": "string", "maxLength": 360 },
+          "claimNature": { "enum": ["observed", "reported", "estimate", "forecast", "scenario", null] },
+          "derivationRuleId": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "teamPlan": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "people": { "type": "number", "minimum": 0 },
+        "roleCount": { "type": "integer", "minimum": 0 },
+        "roles": { "type": "array", "items": { "type": ["string", "object"] } },
+        "roleAllocations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "role": { "type": "string" },
+              "monthlyFte": { "type": "array", "items": { "type": "number", "minimum": 0 } },
+              "peakFte": { "type": "number", "minimum": 0 },
+              "fteMonths": { "type": "number", "minimum": 0 }
+            }
+          }
+        },
+        "monthCount": { "type": "integer", "minimum": 0 },
+        "monthlyTotals": { "type": "array", "items": { "type": "number", "minimum": 0 } },
+        "peakMonth": { "type": ["integer", "null"], "minimum": 1 },
+        "fteMonths": { "type": "number", "minimum": 0 },
+        "peakFte": { "type": "number", "minimum": 0 }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "commercialLockState": { "const": "locked" } } },
+      "then": { "properties": { "commercialLockHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" } } }
+    },
+    {
+      "if": { "properties": { "commercialLockState": { "const": "unlocked" } } },
+      "then": { "properties": { "commercialLockHash": { "type": "null" } } }
+    }
+  ]
+}

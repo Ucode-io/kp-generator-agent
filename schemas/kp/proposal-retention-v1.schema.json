@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://udevs.local/schemas/kp/proposal-retention-v1.schema.json",
+  "title": "KP ProposalRetention v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "requestId", "state", "artifactRelativePaths", "retainUntil", "legalHold", "createdAt", "updatedAt"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "requestId": { "type": "string", "pattern": "^KP-[0-9]{8}-[A-Z0-9]{6,32}$" },
+    "state": { "enum": ["active", "retired"] },
+    "artifactRelativePaths": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "retainUntil": { "type": "string", "format": "date-time" },
+    "legalHold": { "type": "boolean" },
+    "retiredAt": { "type": ["string", "null"], "format": "date-time" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

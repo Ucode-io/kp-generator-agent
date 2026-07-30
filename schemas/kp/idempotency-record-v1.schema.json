@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://udevs.local/schemas/kp/idempotency-record-v1.schema.json",
+  "title": "KP IdempotencyRecord v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "tenantScopeHash", "idempotencyKeyHash", "requestId", "state", "ownerInstanceIdHash", "claimedAt", "attemptCount", "executionStartedAt", "heartbeatAt", "leaseExpiresAt", "executionIds", "artifact", "failure", "retryAfter", "delivery"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "tenantScopeHash": { "type": "string", "pattern": "^(hmac-sha256:v1:|sha256:)[0-9a-f]{64}$" },
+    "idempotencyKeyHash": { "type": "string", "pattern": "^(hmac-sha256:v1:|sha256:)[0-9a-f]{64}$" },
+    "requestId": { "type": "string", "pattern": "^KP-[0-9]{8}-[A-Z0-9]{6,32}$" },
+    "state": { "enum": ["running", "deferred", "ready", "failed"] },
+    "ownerInstanceIdHash": { "type": ["string", "null"], "pattern": "^(hmac-sha256:v1:|sha256:)[0-9a-f]{64}$" },
+    "claimedAt": { "type": "string", "format": "date-time" },
+    "attemptCount": { "type": "integer", "minimum": 1 },
+    "executionStartedAt": { "type": ["string", "null"], "format": "date-time" },
+    "heartbeatAt": { "type": ["string", "null"], "format": "date-time" },
+    "leaseExpiresAt": { "type": ["string", "null"], "format": "date-time" },
+    "executionIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "artifact": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["executionId", "executionVariant", "relativePath", "sha256", "qaReportSha256", "proposalRecordSha256", "sizeBytes", "pageCount"],
+      "properties": {
+        "executionId": { "type": "string", "minLength": 1 },
+        "executionVariant": { "type": "string", "minLength": 1 },
+        "relativePath": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "qaReportSha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "proposalRecordSha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "sizeBytes": { "type": "integer", "minimum": 1 },
+        "pageCount": { "type": "integer", "minimum": 2, "maximum": 50 }
+      }
+    },
+    "failure": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["code", "stage", "retryable", "publicMessageKey", "message", "failedAt"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "stage": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "retryable": { "type": "boolean" },
+        "publicMessageKey": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 800 },
+        "failedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "retryAfter": { "type": ["string", "null"], "format": "date-time" },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "attemptId", "startedAt", "sentAt", "transportMessageIdHash"],
+      "properties": {
+        "status": { "enum": ["not_sent", "sending", "sent", "unknown"] },
+        "attemptId": { "type": ["string", "null"], "minLength": 8 },
+        "startedAt": { "type": ["string", "null"], "format": "date-time" },
+        "sentAt": { "type": ["string", "null"], "format": "date-time" },
+        "transportMessageIdHash": { "type": ["string", "null"], "pattern": "^(hmac-sha256:v1:|sha256:)[0-9a-f]{64}$" }
+      }
+    }
+  }
+}
