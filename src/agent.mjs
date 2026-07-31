@@ -34,6 +34,12 @@ export function agentConfig(env = process.env) {
     KP_DISABLE_WEB_RESEARCH: env.KP_DISABLE_WEB_RESEARCH || "1",
     KP_REFERENCE_VISION_PROVIDER: env.KP_REFERENCE_VISION_PROVIDER || "openai",
     KP_REFERENCE_VISION_MODEL: env.KP_REFERENCE_VISION_MODEL || "gpt-4.1-mini",
+    KP_DYNAMIC_COLOR_PALETTES_ENABLED: env.KP_DYNAMIC_COLOR_PALETTES_ENABLED || "0",
+    KP_REFERENCE_PALETTE_AI_ENABLED: env.KP_REFERENCE_PALETTE_AI_ENABLED || "1",
+    KP_REFERENCE_PALETTE_AI_PROVIDER: env.KP_REFERENCE_PALETTE_AI_PROVIDER || "auto",
+    KP_REFERENCE_PALETTE_AI_MODEL: env.KP_REFERENCE_PALETTE_AI_MODEL || "",
+    KP_REFERENCE_PALETTE_AI_MIN_CONFIDENCE: env.KP_REFERENCE_PALETTE_AI_MIN_CONFIDENCE || "0.55",
+    KP_REFERENCE_PALETTE_AI_TIMEOUT_MS: env.KP_REFERENCE_PALETTE_AI_TIMEOUT_MS || "20000",
   };
 }
 
@@ -44,7 +50,10 @@ export async function generateProposal(input = {}, hooks = {}) {
   const locale = normalizeLocale(input.locale);
   const { contracts, runtime, store, pdf } = await engine();
   const requestId = contracts.createRequestId(new Date(), crypto.randomBytes(6).toString("hex"));
-  const env = agentConfig({ ...process.env, ...(input.env || {}) });
+  const paletteOverride = typeof input.dynamicColorPalettesEnabled === "boolean"
+    ? { KP_DYNAMIC_COLOR_PALETTES_ENABLED: input.dynamicColorPalettesEnabled ? "1" : "0" }
+    : {};
+  const env = agentConfig({ ...process.env, ...(input.env || {}), ...paletteOverride });
   const requestTemp = path.join(AGENT_ROOT, "tmp", "requests", requestId);
   const outputRoot = path.resolve(input.outputRoot || path.join(AGENT_ROOT, "reports", "agent-kp"));
   await fs.mkdir(requestTemp, { recursive: true });
@@ -163,6 +172,12 @@ export async function generateProposal(input = {}, hooks = {}) {
     workspace: result.meta?.workspace || null,
     qaReportPath: result.meta?.qaReportPath || null,
     referenceMode: storedEvidenceBundle.selectionTrace?.mode || "none",
+    theme: {
+      source: result.meta?.themeSource || null,
+      referenceUrl: result.meta?.referenceUrl || "",
+      palette: result.meta?.themeTokens || null,
+      warnings: result.meta?.themeWarnings || [],
+    },
   };
 }
 

@@ -1,23 +1,39 @@
 import "dotenv/config";
 import http from "node:http";
+import fs from "node:fs/promises";
 import { generateProposal } from "./agent.mjs";
+import { checkBearerAuthorization, normalizeConfiguredApiKey } from "./auth.mjs";
 
 const host = process.env.KP_AGENT_HOST || "127.0.0.1";
 const port = Number(process.env.KP_AGENT_PORT || 8787);
 const maxBodyBytes = Number(process.env.KP_AGENT_MAX_BODY_BYTES || 25 * 1024 * 1024);
-const apiKey = String(process.env.KP_AGENT_API_KEY || "");
+const apiKey = normalizeConfiguredApiKey(process.env.KP_AGENT_API_KEY);
 let queue = Promise.resolve();
+const frontendPath = new URL("../public/index.html", import.meta.url);
 
 const server = http.createServer(async (request, response) => {
   try {
+    if (request.method === "GET" && (request.url === "/" || request.url === "/index.html")) {
+      const html = await fs.readFile(frontendPath);
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+      });
+      response.end(html);
+      return;
+    }
     if (request.method === "GET" && request.url === "/health") {
       return json(response, 200, { ok: true, service: "kp-generator-agent", status: "ready" });
     }
     if (request.method !== "POST" || request.url !== "/v1/proposals") {
       return json(response, 404, { ok: false, error: { code: "NOT_FOUND", message: "Route not found" } });
     }
-    if (apiKey && request.headers.authorization !== `Bearer ${apiKey}`) {
-      return json(response, 401, { ok: false, error: { code: "UNAUTHORIZED", message: "Bearer token is required" } });
+    const authorization = checkBearerAuthorization(apiKey, request.headers.authorization);
+    if (!authorization.ok) {
+      const message = authorization.reason === "required"
+        ? "Bearer token is required. Use KP_AGENT_API_KEY from the service environment."
+        : "Bearer token is invalid. Use KP_AGENT_API_KEY, not an application user JWT.";
+      return json(response, 401, { ok: false, error: { code: "UNAUTHORIZED", message } });
     }
     const input = JSON.parse(await readBody(request, maxBodyBytes));
     const task = () => generateProposal(input, {

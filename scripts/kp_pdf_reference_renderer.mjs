@@ -1,4 +1,7 @@
 import crypto from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { layoutVisualization } from "./kp_diagram_layout.mjs";
 import { renderVisualization } from "./kp_diagram_renderer.mjs";
 import {
@@ -21,6 +24,23 @@ import {
 import { canonicalizeTeamPlan } from "./kp_team_capacity.mjs";
 
 export const KP_PDF_REFERENCE_RENDERER_VERSION = "reference-driven-v5";
+
+const RENDERER_DIR = path.dirname(fileURLToPath(import.meta.url));
+const UDEVS_BACKGROUND_DIR = path.resolve(RENDERER_DIR, "..", "assets", "kp-backgrounds");
+const UDEVS_BACKGROUND_FILES = Object.freeze({
+  cover: "udevs-cover-background.png",
+  content: "udevs-content-background.png",
+});
+const backgroundDataUriCache = new Map();
+
+function udevsBackgroundDataUri(kind) {
+  if (backgroundDataUriCache.has(kind)) return backgroundDataUriCache.get(kind);
+  const fileName = UDEVS_BACKGROUND_FILES[kind];
+  if (!fileName) throw new Error(`Unknown Udevs background kind: ${kind}`);
+  const value = `data:image/png;base64,${readFileSync(path.join(UDEVS_BACKGROUND_DIR, fileName)).toString("base64")}`;
+  backgroundDataUriCache.set(kind, value);
+  return value;
+}
 
 const DEFAULT_TOTAL_PAGES = 21;
 const LAYOUT_FAMILIES = new Set([
@@ -88,6 +108,15 @@ const PAGE_INTENTS = Object.freeze([
   "payment_stages",
   "close",
 ]);
+const PAGE_COMPOSITION_BY_KIND = Object.freeze({
+  cover: "split",
+  opening_manifesto: "dark",
+  chapter_why_now: "dark",
+  chapter_product: "dark",
+  architecture: "dark",
+  chapter_delivery: "dark",
+  close: "dark",
+});
 const PAGE_EYEBROWS = Object.freeze([
   "COMMERCIAL PROPOSAL",
   "DECISION SUMMARY",
@@ -160,25 +189,33 @@ export function resolveStyleTokens(styleProfile = {}) {
   const displayFallback = resolveFontStack(typography.displayClass || typography.displayFontToken);
   const bodyFallback = resolveFontStack(typography.bodyClass || typography.bodyFontToken || "humanist_sans");
   const metadataFallback = resolveFontStack(typography.metadataClass || typography.metadataFontToken || "monospace");
-  const background = strictColor(canvas.background, "#0A0A10", "/canvas/background");
-  const surface = strictColor(canvas.surface1, "#17141F", "/canvas/surface1");
-  const surface2 = strictColor(canvas.surface2, "#241B3D", "/canvas/surface2");
-  const text = strictColor(canvas.textPrimary, "#F2EFE6", "/canvas/textPrimary");
-  const primary = strictColor(accents.primary, "#7C5CFF", "/accents/primary");
-  const textBackgrounds = [background, surface, surface2];
+  const decorativePrimary = strictColor(accents.decorativePrimary, accents.primary || "#0052FF", "/accents/decorativePrimary");
+  const decorativeSecondary = strictColor(accents.decorativeSecondary, accents.secondary || canvas.textPrimary || "#0D1117", "/accents/decorativeSecondary");
+  const backgroundStyle = styleProfile.layout?.backgroundStyle === "udevs_screenshot"
+    ? "udevs_screenshot"
+    : "dynamic_brand";
+  const lightPalette = resolveLightPagePalette({
+    canvas,
+    primary: decorativePrimary,
+    secondary: decorativeSecondary,
+    preferSecondaryText: backgroundStyle === "udevs_screenshot",
+  });
+  const darkPalette = resolveDarkPagePalette({
+    primary: decorativePrimary,
+    secondary: decorativeSecondary,
+  });
+  const splitPalette = Object.freeze({ ...darkPalette });
   return Object.freeze({
-    background,
-    surface,
-    surface2,
-    text,
-    muted: ensureTextContrast(strictColor(canvas.textSecondary, "#A39CAD", "/canvas/textSecondary"), textBackgrounds, text),
-    rule: strictColor(canvas.rule, "#342D42", "/canvas/rule"),
-    primary,
-    brandDeep: ensureTextContrast(primary, textBackgrounds, text),
-    secondary: ensureTextContrast(strictColor(accents.secondary, "#A78BFA", "/accents/secondary"), textBackgrounds, primary),
-    warning: ensureTextContrast(strictColor(accents.warning, "#D9A94E", "/accents/warning"), textBackgrounds, primary),
-    critical: ensureTextContrast(strictColor(accents.critical, "#F0705A", "/accents/critical"), textBackgrounds, text),
-    positive: ensureTextContrast(strictColor(accents.positive, "#4ED9A4", "/accents/positive"), textBackgrounds, primary),
+    ...lightPalette,
+    decorativePrimary,
+    decorativeSecondary,
+    decorativeTertiary: decorativeSecondary,
+    backgroundStyle,
+    compositions: Object.freeze({
+      light: Object.freeze(lightPalette),
+      dark: Object.freeze(darkPalette),
+      split: splitPalette,
+    }),
     displayStack: safeCssFontStack(typography.displayStack, displayFallback),
     bodyStack: safeCssFontStack(typography.bodyStack, bodyFallback),
     metadataStack: safeCssFontStack(typography.metadataStack, metadataFallback),
@@ -192,6 +229,165 @@ export function resolveStyleTokens(styleProfile = {}) {
     radiusMd: 12,
     radiusLg: 18,
   });
+}
+
+function resolveLightPagePalette({ canvas = {}, primary, secondary, preferSecondaryText = false }) {
+  const requestedBackground = strictColor(canvas.background, "#FFFFFF", "/canvas/background");
+  const background = relativeLuminanceHex(requestedBackground) >= 0.72 ? requestedBackground : "#FFFFFF";
+  const requestedText = strictColor(canvas.textPrimary, "#171717", "/canvas/textPrimary");
+  const text = firstExactContrastColor(
+    preferSecondaryText
+      ? [secondary, requestedText, "#07080D", primary, "#000000"]
+      : [primary, secondary, requestedText, "#171717", "#000000"],
+    [background],
+    4.75,
+  );
+  const requestedSurface = strictColor(canvas.surface1, mixHex(background, primary, 0.035), "/canvas/surface1");
+  const requestedSurface2 = strictColor(canvas.surface2, mixHex(background, primary, 0.07), "/canvas/surface2");
+  const surface = ensureSurfaceContrast(
+    relativeLuminanceHex(requestedSurface) >= 0.62 ? requestedSurface : mixHex(background, primary, 0.035),
+    text,
+    background,
+    4.75,
+  );
+  const surface2 = ensureSurfaceContrast(
+    relativeLuminanceHex(requestedSurface2) >= 0.58 ? requestedSurface2 : mixHex(background, primary, 0.07),
+    text,
+    background,
+    4.75,
+  );
+  const textBackgrounds = [background, surface, surface2];
+  const mutedCandidate = strictColor(canvas.textSecondary, mixHex(text, background, 0.28), "/canvas/textSecondary");
+  const requestedRule = strictColor(canvas.rule, mixHex(background, text, 0.14), "/canvas/rule");
+  const rule = contrastRatioHex(requestedRule, background) >= 1.18
+    ? requestedRule
+    : mixHex(background, text, 0.16);
+  return semanticPalette({
+    background,
+    surface,
+    surface2,
+    text,
+    muted: ensureTextContrast(mutedCandidate, textBackgrounds, text, 4.5),
+    rule,
+    element: primary,
+    secondaryText: text,
+  });
+}
+
+function resolveDarkPagePalette({ primary, secondary }) {
+  const darkChoice = chooseDarkBackground(primary, secondary);
+  const background = darkChoice.background;
+  const element = darkChoice.source === "primary" ? secondary : primary;
+  const text = firstExactContrastColor(["#FFFFFF", secondary, primary, "#000000"], [background], 4.75);
+  const surface = ensureSurfaceContrast(mixHex(background, text, 0.055), text, background, 4.75);
+  const surface2 = ensureSurfaceContrast(mixHex(background, text, 0.095), text, background, 4.75);
+  const textBackgrounds = [background, surface, surface2];
+  const secondaryText = textBackgrounds.every((color) => contrastRatioHex(element, color) >= 4.5)
+    ? element
+    : text;
+  return semanticPalette({
+    background,
+    surface,
+    surface2,
+    text,
+    muted: ensureTextContrast(mixHex(text, background, 0.28), textBackgrounds, text, 4.5),
+    rule: mixHex(background, text, 0.2),
+    element,
+    secondaryText,
+  });
+}
+
+function semanticPalette({
+  background,
+  surface,
+  surface2,
+  text,
+  muted,
+  rule,
+  element,
+  secondaryText,
+}) {
+  const elementSoft = mixHex(background, element, 0.12);
+  const textOnAccent = firstExactContrastColor([text, "#000000", "#FFFFFF"], [element], 4.5);
+  const textOnAccentSoft = firstExactContrastColor([text, "#000000", "#FFFFFF"], [elementSoft], 4.5);
+  return {
+    background,
+    surface,
+    surface2,
+    text,
+    textOnAccent,
+    textOnAccentSoft,
+    muted,
+    rule,
+    primary: element,
+    brandDeep: text,
+    secondary: secondaryText,
+    warning: text,
+    critical: text,
+    positive: text,
+  };
+}
+
+function chooseDarkBackground(primary, secondary) {
+  const candidates = [
+    { color: secondary, source: "secondary", priority: 0 },
+    { color: primary, source: "primary", priority: 1 },
+  ].map((candidate) => ({
+    ...candidate,
+    luminance: relativeLuminanceHex(candidate.color),
+    whiteContrast: contrastRatioHex(candidate.color, "#FFFFFF"),
+  }));
+  const exact = candidates
+    .filter((candidate) => candidate.whiteContrast >= 4.75)
+    .sort((left, right) => left.priority - right.priority || left.luminance - right.luminance)[0];
+  if (exact) return { background: exact.color, source: exact.source };
+
+  const base = candidates.sort((left, right) => left.luminance - right.luminance || left.priority - right.priority)[0];
+  for (let step = 1; step <= 18; step += 1) {
+    const candidate = mixHex(base.color, "#000000", step / 20);
+    if (contrastRatioHex(candidate, "#FFFFFF") >= 4.75) {
+      return { background: candidate, source: base.source };
+    }
+  }
+  return { background: "#171717", source: "neutral" };
+}
+
+function firstExactContrastColor(candidates, backgrounds, minimum = 4.75) {
+  const surfaces = array(backgrounds).map((color) => strictColor(color, "#FFFFFF", "internal"));
+  for (const value of candidates) {
+    const candidate = strictColor(value, "#000000", "internal");
+    if (surfaces.every((background) => contrastRatioHex(candidate, background) >= minimum)) return candidate;
+  }
+  return ensureTextContrast(candidates[0], surfaces, candidates.at(-1) || "#000000", minimum);
+}
+
+function ensureSurfaceContrast(surfaceColor, textColor, fallbackBackground, minimum = 4.6) {
+  const surface = strictColor(surfaceColor, "#FFFFFF", "internal");
+  const text = strictColor(textColor, "#000000", "internal");
+  const fallback = strictColor(fallbackBackground, "#FFFFFF", "internal");
+  if (contrastRatioHex(text, surface) >= minimum) return surface;
+  for (let step = 1; step <= 10; step += 1) {
+    const candidate = mixHex(surface, fallback, step / 10);
+    if (contrastRatioHex(text, candidate) >= minimum) return candidate;
+  }
+  return fallback;
+}
+
+function pageCompositionForKind(pageKind = "", tokens = null) {
+  if (tokens?.backgroundStyle === "udevs_screenshot") return "light";
+  return PAGE_COMPOSITION_BY_KIND[String(pageKind || "")] || "light";
+}
+
+function pageStyleTokens(tokens, pageKind) {
+  const composition = pageCompositionForKind(pageKind, tokens);
+  const palette = tokens?.compositions?.[composition] || tokens;
+  return {
+    ...tokens,
+    ...palette,
+    decorativePrimary: palette.background,
+    decorativeSecondary: palette.primary,
+    decorativeTertiary: palette.primary,
+  };
 }
 
 export function buildReferenceDrivenProposalHtml(input = {}) {
@@ -262,7 +458,9 @@ export function renderPageFromPlan(pagePlan, inputs = {}) {
   const pageNumber = pagePlan.pageNumber;
   const totalPages = Number(inputs.totalPages || inputs.presentationPlan?.pageCount || DEFAULT_TOTAL_PAGES);
   const content = inputs.content || buildContentContext(normalizeRendererInput(inputs), inputs.tokens || resolveStyleTokens(inputs.visualStyleProfile || {}));
-  const tokens = inputs.tokens || resolveStyleTokens(inputs.visualStyleProfile || {});
+  const baseTokens = inputs.tokens || resolveStyleTokens(inputs.visualStyleProfile || {});
+  const composition = pageCompositionForKind(pagePlan.kind, baseTokens);
+  const tokens = pageStyleTokens(baseTokens, pagePlan.kind);
   const dynamicRules = inputs.dynamicRules || [];
   const visualizationSpec = inputs.visualizationSpec || findVisualizationSpec(inputs.visualizationSpecs, pageNumber);
   const isVisualizationPage = Boolean(pagePlan.visualizationSpecId || pagePlan.visualizationId);
@@ -284,7 +482,7 @@ export function renderPageFromPlan(pagePlan, inputs = {}) {
   const title = resolvePageTitle(pagePlan, content, visualizationSpec);
   const badge = resolvePageBadge(pagePlan, content, visualizationSpec);
   const body = isVisualizationPage
-    ? renderSemanticPage(visualizationSpec, pagePlan, inputs.safeStyleProfile || safeDiagramStyleProfile(inputs.visualStyleProfile || {}, tokens), dynamicRules, content)
+    ? renderSemanticPage(visualizationSpec, pagePlan, safeDiagramStyleProfile(inputs.visualStyleProfile || {}, tokens), dynamicRules, content)
     : renderContentPage(pagePlan, content, tokens, dynamicRules);
   const family = strictLayoutFamily(pagePlan.layoutFamily);
   const storyIndex = pageKindIndex(pagePlan.kind);
@@ -301,8 +499,9 @@ export function renderPageFromPlan(pagePlan, inputs = {}) {
         ? " cover-title-medium"
         : " cover-title-short"
     : "";
+  const backgroundClass = baseTokens.backgroundStyle === "udevs_screenshot" ? " background-udevs-screenshot" : "";
   const pageHtml = [
-    '<section class="page kp-page layout-' + family + " intent-" + intentClass + '" data-page-number="' + pageNumber + '" data-page-kind="' + escapeHtmlAttribute(pagePlan.kind) + '" data-explicitly-requested="' + String(explicitlyRequested) + '" data-layout-family="' + family + '">',
+    '<section class="page kp-page composition-' + composition + backgroundClass + " layout-" + family + " intent-" + intentClass + '" data-page-number="' + pageNumber + '" data-page-kind="' + escapeHtmlAttribute(pagePlan.kind) + '" data-page-composition="' + composition + '" data-explicitly-requested="' + String(explicitlyRequested) + '" data-layout-family="' + family + '">',
     '<header class="page-header"><span>' + e(pageEyebrow) + '</span><strong>' + padPage(pageNumber) + " / " + totalPages + "</strong></header>",
     '<div class="page-title-row"><div>' + pageKickerHtml + '<h1 class="page-title' + coverTitleClass + '">' + renderTitleMarkup(title) + '</h1></div><span class="page-badge">' + e(badge) + "</span></div>",
     '<div class="page-body">' + body + "</div>",
@@ -610,16 +809,80 @@ function timeAxisTickLabel(unit, value, locale = "en") {
   return prefix + value;
 }
 
+function pagePaletteDeclarations(palette = {}) {
+  return [
+    ["background", palette.background],
+    ["surface", palette.surface],
+    ["surface-2", palette.surface2],
+    ["text", palette.text],
+    ["text-on-element", palette.textOnAccent],
+    ["text-on-element-soft", palette.textOnAccentSoft],
+    ["muted", palette.muted],
+    ["rule", palette.rule],
+    ["element", palette.primary],
+    ["brand-deep", palette.brandDeep],
+    ["secondary-text", palette.secondary],
+    ["warning", palette.warning],
+    ["critical", palette.critical],
+    ["positive", palette.positive],
+  ].map(([name, value]) => "--kp-page-" + name + ":" + value).join(";");
+}
+
+function pageCssVariableTokens(tokens) {
+  return {
+    ...tokens,
+    background: "var(--kp-page-background)",
+    surface: "var(--kp-page-surface)",
+    surface2: "var(--kp-page-surface-2)",
+    text: "var(--kp-page-text)",
+    textOnAccent: "var(--kp-page-text-on-element)",
+    textOnAccentSoft: "var(--kp-page-text-on-element-soft)",
+    muted: "var(--kp-page-muted)",
+    rule: "var(--kp-page-rule)",
+    primary: "var(--kp-page-element)",
+    decorativePrimary: "var(--kp-page-background)",
+    decorativeSecondary: "var(--kp-page-element)",
+    decorativeTertiary: "var(--kp-page-element)",
+    brandDeep: "var(--kp-page-brand-deep)",
+    secondary: "var(--kp-page-secondary-text)",
+    warning: "var(--kp-page-warning)",
+    critical: "var(--kp-page-critical)",
+    positive: "var(--kp-page-positive)",
+  };
+}
+
 export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
-  const t = resolveStyleTokens(styleProfile);
+  const resolved = resolveStyleTokens(styleProfile);
+  const t = pageCssVariableTokens(resolved);
+  const lightPalette = resolved.compositions.light;
+  const darkPalette = resolved.compositions.dark;
+  const splitPalette = resolved.compositions.split;
+  const udevsScreenshotRules = resolved.backgroundStyle === "udevs_screenshot"
+    ? [
+        '.page.background-udevs-screenshot,.kp-page.background-udevs-screenshot{background-color:#FFFFFF;background-image:url("' + udevsBackgroundDataUri("content") + '");background-repeat:no-repeat;background-position:center;background-size:cover}',
+        '.page.background-udevs-screenshot[data-page-kind="cover"],.kp-page.background-udevs-screenshot[data-page-kind="cover"]{background-image:url("' + udevsBackgroundDataUri("cover") + '")}',
+        ".page.background-udevs-screenshot::before,.page.background-udevs-screenshot::after{display:none}",
+        ".page.background-udevs-screenshot>.page-header,.page.background-udevs-screenshot>.page-title-row,.page.background-udevs-screenshot>.page-body{position:relative;z-index:1}",
+        ".page.background-udevs-screenshot>.page-footer{z-index:1}",
+      ]
+    : [];
   const css = [
     "@page{size:15in 10in;margin:0}",
+    ":root{--kp-brand-primary:" + resolved.decorativePrimary + ";--kp-brand-secondary:" + resolved.decorativeSecondary + ";--kp-brand-accent:" + resolved.decorativeSecondary + ";--kp-brand-background:" + lightPalette.background + ";--kp-brand-surface:" + lightPalette.surface + ";" + pagePaletteDeclarations(lightPalette) + "}",
+    '.page[data-page-composition="light"],.kp-page[data-page-composition="light"]{' + pagePaletteDeclarations(lightPalette) + "}",
+    '.page[data-page-composition="dark"],.kp-page[data-page-composition="dark"]{' + pagePaletteDeclarations(darkPalette) + "}",
+    '.page[data-page-composition="split"],.kp-page[data-page-composition="split"]{' + pagePaletteDeclarations(splitPalette) + "}",
     "*{box-sizing:border-box}",
     "html,body{margin:0;padding:0;width:1440px;background:" + t.background + ";color:" + t.text + ";font-family:" + t.bodyStack + "}",
     ".proposal{width:1440px}",
-    ".page,.kp-page{box-sizing:border-box;position:relative;overflow:hidden;width:1440px;height:960px;padding:" + t.pagePaddingTop + "px " + t.pagePaddingX + "px " + t.pagePaddingBottom + "px;background:" + t.background + ";break-after:page;page-break-after:always}",
+    ".page,.kp-page{box-sizing:border-box;position:relative;overflow:hidden;width:1440px;height:960px;padding:" + t.pagePaddingTop + "px " + t.pagePaddingX + "px " + t.pagePaddingBottom + "px;background:" + t.background + ";color:" + t.text + ";break-after:page;page-break-after:always}",
     ".page:last-child,.kp-page:last-child{break-after:auto;page-break-after:auto}",
-    ".page::before{content:'';position:absolute;right:-160px;top:-220px;width:580px;height:580px;border-radius:50%;background:radial-gradient(circle," + alphaHex(t.primary, 0.18) + " 0%,transparent 68%);pointer-events:none}",
+    ".page::before{content:'';position:absolute;right:-160px;top:-220px;width:580px;height:580px;border-radius:50%;background:radial-gradient(circle," + alphaHex(t.decorativeTertiary, 0.18) + " 0%,transparent 68%);pointer-events:none}",
+    ".page::after{content:'';position:absolute;left:-210px;bottom:-290px;width:520px;height:520px;border-radius:44% 56% 63% 37%;background:radial-gradient(circle," + alphaHex(t.decorativeTertiary, 0.10) + " 0%,transparent 70%);transform:rotate(-14deg);pointer-events:none}",
+    ...udevsScreenshotRules,
+    '.page[data-page-composition="split"]::after{left:0;right:0;bottom:0;width:100%;height:30%;border-radius:0;background:var(--kp-page-element);transform:none}',
+    '.page[data-page-composition="split"]>.page-header,.page[data-page-composition="split"]>.page-title-row,.page[data-page-composition="split"]>.page-body,.page[data-page-composition="split"]>.page-footer{position:relative;z-index:1}',
+    '.page[data-page-composition="split"]>.page-footer{border-top-color:color-mix(in srgb,var(--kp-page-text-on-element) 55%,transparent);background:var(--kp-page-element);color:var(--kp-page-text-on-element)}',
     ".page-header{height:34px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid " + t.rule + ";color:" + t.muted + ";font:700 10px/1 " + t.metadataStack + ";letter-spacing:.13em}",
     ".page-title-row{min-height:154px;display:flex;justify-content:space-between;gap:40px;align-items:flex-start;padding-top:24px}",
     ".page-title-row>div{max-width:1030px}",
@@ -772,7 +1035,7 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".market-missing-input{display:grid;grid-template-columns:22px 1fr;gap:8px;align-items:start}",
     ".market-missing-input>span{color:" + t.warning + ";font:700 8px/1.3 " + t.metadataStack + "}",
     ".market-missing-input>p{margin:0;color:" + t.text + ";font-size:9px;line-height:1.28}",
-    ".market-model{min-width:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:12px;padding:17px 18px 15px;border:1px solid " + t.rule + ";border-radius:" + t.radiusLg + "px;background:linear-gradient(145deg," + alphaHex(t.surface2, .92) + "," + alphaHex(t.surface, .84) + ")}",
+    ".market-model{min-width:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:12px;padding:17px 18px 15px;border:1px solid " + t.rule + ";border-radius:" + t.radiusLg + "px;background:linear-gradient(145deg," + t.surface2 + "," + t.surface + ")}",
     ".market-context{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding-bottom:10px;border-bottom:1px solid " + t.rule + "}",
     ".market-context>strong{max-width:68%;font-size:11px;line-height:1.35;text-align:right}",
     ".market-sizing-funnel{width:100%!important;height:100%!important;min-height:0;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:11px;background:transparent!important;color:" + t.text + "!important}",
@@ -869,7 +1132,7 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".viz-edges{position:absolute;left:0;top:0;z-index:2}",
     ".viz-edge-labels{position:absolute;left:0;top:0;z-index:3}",
     ".viz-nodes{position:absolute;left:0;top:0;z-index:4}",
-    ".viz-node{position:absolute;display:flex;flex-direction:column;justify-content:center;gap:5px;padding:11px 13px;border:2px solid;border-radius:" + t.radiusSm + "px;background:" + alphaHex(t.background, .94) + ";font-size:13px;line-height:1.18}",
+    ".viz-node{position:absolute;display:flex;flex-direction:column;justify-content:center;gap:5px;padding:11px 13px;border:2px solid;border-radius:" + t.radiusSm + "px;background:" + t.background + ";font-size:13px;line-height:1.18}",
     ".viz-node span{overflow-wrap:normal;word-break:normal;hyphens:none}",
     ".viz-node small{font:700 9px/1 " + t.metadataStack + ";color:" + t.muted + "}",
     ".viz-mindmap{background:linear-gradient(90deg," + alphaHex(t.surface2, .34) + " 0," + alphaHex(t.background, .96) + " 38%," + alphaHex(t.background, .99) + " 100%)!important}",
@@ -879,10 +1142,10 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".viz-mindmap-node{padding:6px 10px;border-width:1.5px;border-radius:" + Math.max(10, t.radiusSm + 2) + "px;background:" + alphaHex(t.background, .97) + ";font-size:14px;line-height:1.12;box-shadow:none;overflow:hidden}",
     ".viz-mindmap-node span{display:block;overflow-wrap:normal;word-break:normal;hyphens:none}",
     ".viz-mindmap-node small{display:none}",
-    ".viz-mindmap .viz-node-core{padding-left:14px;border-width:2.5px;background:var(--viz-node-tint," + alphaHex(t.surface2, .96) + ");font-size:15px;font-weight:800;box-shadow:0 0 0 5px var(--viz-node-tint," + alphaHex(t.surface2, .5) + ")}",
-    ".viz-mindmap .viz-node-domain{border-left-width:5px;background:var(--viz-node-tint," + alphaHex(t.surface2, .8) + ");font-weight:700}",
-    ".viz-mindmap .viz-node-capability{border-color:var(--viz-node-soft,var(--viz-node-color));background:" + alphaHex(t.background, .98) + ";font-weight:650}",
-    ".viz-mindmap .viz-node-subfunction{border-width:1px;border-color:var(--viz-node-soft,var(--viz-node-color));background:var(--viz-node-tint," + alphaHex(t.surface2, .46) + ");color:" + t.muted + "}",
+    ".viz-mindmap .viz-node-core{padding-left:14px;border-width:2.5px;background:" + t.surface2 + ";font-size:15px;font-weight:800;box-shadow:0 0 0 5px var(--viz-node-tint," + alphaHex(t.surface2, .5) + ")}",
+    ".viz-mindmap .viz-node-domain{border-left-width:5px;background:" + t.surface + ";font-weight:700}",
+    ".viz-mindmap .viz-node-capability{border-color:var(--viz-node-soft,var(--viz-node-color));background:" + t.background + ";font-weight:650}",
+    ".viz-mindmap .viz-node-subfunction{border-width:1px;border-color:var(--viz-node-soft,var(--viz-node-color));background:" + t.surface2 + ";color:" + t.muted + "}",
     // Compact (zoomed-out) scale keeps a 12-row decomposition on one page.
     ".viz-mindmap-dense .viz-mindmap-node{padding:4px 8px;border-radius:8px;font-size:11px;line-height:1.16}",
     ".viz-mindmap-dense .viz-node-core{padding-left:11px;font-size:12.5px;box-shadow:0 0 0 4px var(--viz-node-tint," + alphaHex(t.surface2, .5) + ")}",
@@ -905,9 +1168,9 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".viz-bpmn-node span{display:block;overflow-wrap:normal;word-break:normal;hyphens:none}",
     ".viz-bpmn-node-risk{background:" + alphaHex(t.surface2, .76) + "}",
     ".viz-bpmn .viz-node-start_event,.viz-bpmn .viz-node-end_event,.viz-bpmn .viz-node-gateway{display:grid;grid-template-rows:40px minmax(0,1fr);align-items:start;justify-items:center;gap:2px;padding:0 3px;border:0!important;border-radius:0;background:transparent;overflow:hidden}",
-    ".viz-bpmn .viz-node-start_event::before,.viz-bpmn .viz-node-end_event::before{content:'';grid-row:1;width:34px;height:34px;align-self:center;border:2px solid var(--viz-node-color);border-radius:50%;background:" + alphaHex(t.background, .98) + "}",
+    ".viz-bpmn .viz-node-start_event::before,.viz-bpmn .viz-node-end_event::before{content:'';grid-row:1;width:34px;height:34px;align-self:center;border:2px solid var(--viz-node-color);border-radius:50%;background:" + t.background + "}",
     ".viz-bpmn .viz-node-end_event::before{border:4px double var(--viz-node-color)}",
-    ".viz-bpmn .viz-node-gateway::before{content:'';grid-row:1;width:34px;height:34px;align-self:center;border:2px solid var(--viz-node-color);background:" + alphaHex(t.background, .98) + ";transform:rotate(45deg)}",
+    ".viz-bpmn .viz-node-gateway::before{content:'';grid-row:1;width:34px;height:34px;align-self:center;border:2px solid var(--viz-node-color);background:" + t.background + ";transform:rotate(45deg)}",
     ".viz-bpmn .viz-node-start_event span,.viz-bpmn .viz-node-end_event span,.viz-bpmn .viz-node-gateway span{grid-row:2;align-self:start;font-size:12px;line-height:1.08;text-align:center}",
     ".viz-architecture .viz-groups{z-index:1}",
     ".viz-architecture-legend{position:absolute;left:0;top:0;right:0;height:72px;display:grid;grid-template-columns:184px repeat(5,1fr);background:" + alphaHex(t.surface2, .92) + ";border-bottom:1px solid " + t.rule + "}",
@@ -925,7 +1188,7 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".viz-architecture-layer-label strong{margin-top:8px;color:" + t.text + ";font-size:11px;line-height:1.15}",
     ".viz-architecture .viz-edges{z-index:3}",
     ".viz-architecture .viz-nodes{z-index:4}",
-    ".viz-architecture .viz-node{padding:7px 10px;border-width:1.5px;background:" + alphaHex(t.background, .97) + ";font-size:12px;line-height:1.12;box-shadow:0 7px 18px " + alphaHex(t.background, .24) + ";overflow:hidden}",
+    ".viz-architecture .viz-node{padding:7px 10px;border-width:1.5px;background:" + t.background + ";font-size:12px;line-height:1.12;box-shadow:0 7px 18px " + alphaHex(t.background, .24) + ";overflow:hidden}",
     ".viz-architecture .viz-node small{font-size:8px}",
     ".viz-gantt-axis,.viz-gantt-labels,.viz-gantt-grid{position:absolute;inset:0;pointer-events:none}",
     ".viz-gantt-axis{z-index:2}",
@@ -992,7 +1255,7 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".client-dependencies-summary{display:grid;grid-template-columns:116px 146px 146px minmax(0,1fr);gap:10px}",
     ".client-dependency-metric{display:flex;min-width:0;flex-direction:column;justify-content:space-between;padding:13px 14px;border:1px solid " + t.rule + ";border-top:3px solid " + t.primary + ";border-radius:" + t.radiusSm + "px;background:" + alphaHex(t.surface, .86) + "}",
     ".client-dependency-metric:nth-child(2){border-top-color:" + t.warning + "}",
-    ".client-dependency-metric:nth-child(3){border-top-color:" + t.secondary + "}",
+    ".client-dependency-metric:nth-child(3){border-top-color:" + t.primary + "}",
     ".client-dependency-metric span{color:" + t.muted + ";font:700 8px/1.15 " + t.metadataStack + ";letter-spacing:.04em}",
     ".client-dependency-metric strong{font:700 27px/.95 " + t.displayStack + "}",
     ".client-dependencies-principle{display:flex;min-width:0;flex-direction:column;justify-content:center;padding:14px 18px;border-left:3px solid " + t.primary + ";background:" + alphaHex(t.surface2, .72) + "}",
@@ -1040,7 +1303,7 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".function-price-deadline{color:" + t.secondary + ";font:700 8.5px/1.2 " + t.metadataStack + ";letter-spacing:.02em}",
     ".function-price-scope{display:inline-flex;justify-self:start;align-items:center;min-height:23px;padding:5px 8px;border:1px solid " + t.rule + ";border-radius:999px;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";white-space:nowrap}",
     ".function-price-scope-requested,.function-price-scope-in_scope{color:" + t.positive + ";border-color:" + alphaHex(t.positive, .48) + ";background:" + alphaHex(t.positive, .07) + "}",
-    ".function-price-scope-recommended{color:" + t.secondary + ";border-color:" + alphaHex(t.secondary, .48) + ";background:" + alphaHex(t.secondary, .07) + "}",
+    ".function-price-scope-recommended{color:" + t.secondary + ";border-color:" + alphaHex(t.primary, .48) + ";background:" + alphaHex(t.primary, .07) + "}",
     ".function-price-scope-deferred,.function-price-scope-out_of_scope{color:" + t.critical + ";border-color:" + alphaHex(t.critical, .45) + ";background:" + alphaHex(t.critical, .07) + "}",
     ".function-price-cost{display:flex;min-width:0;flex-direction:column;align-items:flex-end;gap:4px;text-align:right}",
     ".function-price-cost strong{font:700 11px/1 " + t.metadataStack + ";white-space:nowrap}",
@@ -1066,7 +1329,7 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".team-capacity-metric span{position:relative;z-index:1;display:block;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.08em;text-transform:uppercase}",
     ".team-capacity-metric strong{position:relative;z-index:1;display:block;margin-top:11px;font:700 25px/1 " + t.displayStack + ";letter-spacing:-.025em}",
     ".team-capacity-metric small{position:relative;z-index:1;display:block;margin-top:5px;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.04em}",
-    ".team-capacity-metric.is-peak{border-top-color:" + t.secondary + ";background:" + alphaHex(t.primary, .08) + "}",
+    ".team-capacity-metric.is-peak{border-top-color:" + t.primary + ";background:" + alphaHex(t.primary, .08) + "}",
     ".team-capacity-metric.is-peak strong{color:" + t.secondary + "}",
     ".team-capacity-table{min-height:0;overflow:hidden;display:flex;flex-direction:column}",
     ".team-month-count-2{--team-month-count:2}",
@@ -1094,20 +1357,20 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".team-month-cell.team-fte-level-1{border-color:" + alphaHex(t.primary, .16) + ";background:" + alphaHex(t.primary, .06) + "}",
     ".team-month-cell.team-fte-level-2{border-color:" + alphaHex(t.primary, .3) + ";background:" + alphaHex(t.primary, .14) + "}",
     ".team-month-cell.team-fte-level-3{border-color:" + alphaHex(t.primary, .5) + ";background:" + alphaHex(t.primary, .26) + "}",
-    ".team-month-cell.team-fte-level-4{border-color:" + alphaHex(t.primary, .8) + ";background:" + alphaHex(t.primary, .4) + "}",
-    ".team-month-cell.is-peak-month{border-color:" + alphaHex(t.secondary, .5) + "}",
+    ".team-month-cell.team-fte-level-4{border-color:" + alphaHex(t.primary, .8) + ";background:" + alphaHex(t.primary, .4) + ";color:" + t.text + "}",
+    ".team-month-cell.is-peak-month{border-color:" + alphaHex(t.primary, .5) + "}",
     ".team-capacity-total{flex:0 0 48px;background:" + alphaHex(t.surface2, .7) + "}",
     ".team-capacity-total-label strong{display:block;font:700 8.5px/1 " + t.metadataStack + ";letter-spacing:.045em;text-transform:uppercase}",
     ".team-capacity-total-label small{display:block;margin-top:4px;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + "}",
     ".team-month-total{height:30px;display:flex;align-items:center;justify-content:center;border:1px solid " + t.rule + ";border-radius:" + Math.max(4, t.radiusSm - 2) + "px;font:700 9px/1 " + t.metadataStack + "}",
-    ".team-month-total.is-peak{border-color:" + t.secondary + ";color:" + t.secondary + ";background:" + alphaHex(t.primary, .13) + "}",
+    ".team-month-total.is-peak{border-color:" + t.primary + ";color:" + t.text + ";background:" + alphaHex(t.primary, .13) + "}",
     ".team-capacity-note{display:grid;grid-template-columns:180px 1fr auto;gap:16px;align-items:center;padding:10px 14px;border-left:3px solid " + t.primary + ";background:" + alphaHex(t.surface2, .76) + "}",
     ".team-capacity-note>span{color:" + t.secondary + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.09em}",
     ".team-capacity-note>strong{font-size:9px;line-height:1.25}",
     ".team-capacity-note>small{color:" + t.muted + ";font:700 8px/1.2 " + t.metadataStack + ";text-align:right}",
     ".project-price-layout{height:100%;display:grid;grid-template-rows:minmax(0,1fr) 82px;gap:12px}",
     ".project-price-ledger{min-height:0;overflow:hidden;display:flex;flex-direction:column;border:1px solid " + t.rule + ";border-radius:" + t.radiusMd + "px;background:" + alphaHex(t.surface, .94) + "}",
-    ".project-price-summary{flex:0 0 68px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px;align-items:center;padding:0 18px;border-bottom:1px solid " + t.rule + ";background:linear-gradient(90deg," + alphaHex(t.primary, .18) + "," + alphaHex(t.surface2, .76) + ")}",
+    ".project-price-summary{flex:0 0 68px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px;align-items:center;padding:0 18px;border-bottom:1px solid " + t.rule + ";background:linear-gradient(90deg," + t.surface2 + "," + t.surface + ")}",
     ".project-price-summary-copy{min-width:0}",
     ".project-price-summary-copy span{display:block;color:" + t.secondary + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.1em;text-transform:uppercase}",
     ".project-price-summary-copy strong{display:block;margin-top:7px;font:700 20px/1.05 " + t.displayStack + ";letter-spacing:-.02em}",
@@ -1185,7 +1448,7 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".layout-chapter_opener .page-title{font-size:34px;color:" + t.muted + "}",
     ".layout-evidence_table .page-title{max-width:900px}",
     ".layout-commercial_hero .page-title{font-size:40px}",
-    ".layout-decision_close::before{background:radial-gradient(circle," + alphaHex(t.warning, .16) + " 0%,transparent 68%)}",
+    ".layout-decision_close::before{background:radial-gradient(circle," + alphaHex(t.decorativeTertiary, .16) + " 0%,transparent 68%)}",
     ...dynamicRules,
   ];
   return css.join("\n");
@@ -3700,6 +3963,9 @@ function safeDiagramStyleProfile(profile, tokens) {
       positive: tokens.positive,
       warning: tokens.warning,
       critical: tokens.critical,
+      decorativePrimary: tokens.background,
+      decorativeSecondary: tokens.primary,
+      decorativeTertiary: tokens.primary,
     },
   };
 }
@@ -3759,8 +4025,8 @@ function renderReadinessScript() {
     "var revision=0;var bump=function(){revision+=1;};",
     "var mutationObserver=new MutationObserver(bump);mutationObserver.observe(document.body,{subtree:true,childList:true,attributes:true,characterData:true});",
     "var resizeObserver=new ResizeObserver(bump);document.querySelectorAll('.kp-page,.viz-node,.viz-canvas').forEach(function(node){resizeObserver.observe(node);});",
-    "var previous='';var stable=0;",
-    "while(stable<2){await new Promise(function(resolve){requestAnimationFrame(resolve);});",
+    "var previous='';var stable=0;var frames=0;",
+    "while(stable<2&&frames<30){frames+=1;await new Promise(function(resolve){requestAnimationFrame(resolve);});",
     "var rects=Array.from(document.querySelectorAll('.kp-page,.viz-node,.viz-canvas')).map(function(node){var r=node.getBoundingClientRect();return [r.x,r.y,r.width,r.height].map(function(v){return Math.round(v*100)/100;}).join(',');}).join('|');",
     "var signature=revision+':'+rects;if(signature===previous){stable+=1;}else{stable=0;previous=signature;}}",
     "mutationObserver.disconnect();resizeObserver.disconnect();return true;})();",
@@ -4135,6 +4401,11 @@ function safeCssFontStack(value, fallback) {
 }
 
 function alphaHex(hex, alpha) {
+  const cssVariable = String(hex || "").trim();
+  if (/^var\(--kp-page-[a-z0-9-]+\)$/.test(cssVariable)) {
+    const percentage = Number((Math.max(0, Math.min(1, alpha)) * 100).toFixed(2));
+    return "color-mix(in srgb," + cssVariable + " " + percentage + "%,transparent)";
+  }
   const safe = strictColor(hex, "#000000", "internal");
   const value = Math.round(Math.max(0, Math.min(1, alpha)) * 255).toString(16).padStart(2, "0").toUpperCase();
   return safe + value;
@@ -4151,15 +4422,36 @@ function ensureTextContrast(foreground, backgrounds, fallback, minimum = 4.75) {
   const surfaces = array(backgrounds).map((color) => strictColor(color, "#FFFFFF", "internal"));
   const passes = (candidate) => surfaces.every((background) => contrastRatioHex(candidate, background) >= minimum);
   if (passes(base)) return base;
+
+  // Preserve brand identity before falling back to neutral black/white.
+  // Trying both luminance directions matters for vivid palettes: a green
+  // background with a purple content color usually needs a darker purple,
+  // even when the average background luminance would otherwise suggest white.
+  const adjustedBase = closestContrastAdjustment(base, passes, surfaces);
+  if (adjustedBase) return adjustedBase;
   if (passes(safeFallback)) return safeFallback;
+  const adjustedFallback = closestContrastAdjustment(safeFallback, passes, surfaces);
+  if (adjustedFallback) return adjustedFallback;
 
   const backgroundLuminance = surfaces.reduce((sum, color) => sum + relativeLuminanceHex(color), 0) / Math.max(1, surfaces.length);
-  const target = backgroundLuminance >= .5 ? "#000000" : "#FFFFFF";
-  for (let step = 1; step <= 10; step += 1) {
-    const candidate = mixHex(base, target, step / 10);
-    if (passes(candidate)) return candidate;
+  const neutral = backgroundLuminance >= .5 ? "#000000" : "#FFFFFF";
+  return readableTextColor(surfaces[0] || "#FFFFFF", safeFallback, neutral);
+}
+
+function closestContrastAdjustment(base, passes, surfaces = []) {
+  const candidates = [];
+  for (const target of ["#000000", "#FFFFFF"]) {
+    for (let step = 1; step <= 18; step += 1) {
+      const weight = step / 20;
+      const candidate = mixHex(base, target, weight);
+      if (!passes(candidate)) continue;
+      const minimumContrast = Math.min(...surfaces.map((surface) => contrastRatioHex(candidate, surface)));
+      candidates.push({ candidate, weight, minimumContrast });
+      break;
+    }
   }
-  return readableTextColor(surfaces[0] || "#FFFFFF", safeFallback, target);
+  candidates.sort((left, right) => left.weight - right.weight || right.minimumContrast - left.minimumContrast);
+  return candidates[0]?.candidate || "";
 }
 
 function mixHex(left, right, rightWeight) {

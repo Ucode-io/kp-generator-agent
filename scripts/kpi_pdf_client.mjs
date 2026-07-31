@@ -2,6 +2,8 @@ import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { chromium } from "playwright";
 import { transcribeAudioFile } from "./audio_transcription.mjs";
 import {
@@ -60,6 +62,28 @@ const kpSearchCache = new Map();
 const kpSalesReferencePath = path.join(process.cwd(), "data", "kp_sales_references.jsonl");
 const PREMIUM_PROPOSAL_TEMPLATE_VERSION = "marketplace-dark-premium-v4";
 export const KP_PDF_V5_RENDERER_VERSION = "reference-driven-v5";
+
+async function launchKpChromium(options = {}) {
+  const configuredPath = String(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || "").trim();
+  if (configuredPath) return chromium.launch({ ...options, executablePath: configuredPath });
+  try {
+    return await chromium.launch(options);
+  } catch (originalError) {
+    const platformCandidates = process.platform === "darwin"
+      ? [
+          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+          "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ]
+      : process.platform === "linux"
+        ? ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"]
+        : [];
+    for (const executablePath of platformCandidates) {
+      const available = await fs.access(executablePath).then(() => true, () => false);
+      if (available) return chromium.launch({ ...options, executablePath });
+    }
+    throw originalError;
+  }
+}
 
 export function resolveKpPdfRendererMode(env = process.env) {
   const explicit = String(env.KP_PDF_RENDERER_MODE || "").trim().toLowerCase();
@@ -318,7 +342,7 @@ async function fetchUrlText(url = "", limit = 5000) {
 
 async function extractSiteProfile(url = "") {
   if (kpSiteProfileCache.has(url)) return kpSiteProfileCache.get(url);
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchKpChromium({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: Number(process.env.KP_SITE_PROFILE_TIMEOUT_MS || 12_000) });
@@ -547,23 +571,44 @@ function parseCssColor(value = "") {
   const text = String(value || "").trim();
   const rgba = text.match(/^rgba?\(([^)]+)\)$/i);
   if (rgba) {
-    const parts = rgba[1].split(",").map((part) => part.trim());
-    const r = Number.parseFloat(parts[0]);
-    const g = Number.parseFloat(parts[1]);
-    const b = Number.parseFloat(parts[2]);
-    const a = parts[3] === undefined ? 1 : Number.parseFloat(parts[3]);
+    const parts = rgba[1].replace("/", " ").split(/[,\s]+/).map((part) => part.trim()).filter(Boolean);
+    const channel = (part) => String(part || "").endsWith("%")
+      ? Number.parseFloat(part) * 2.55
+      : Number.parseFloat(part);
+    const r = channel(parts[0]);
+    const g = channel(parts[1]);
+    const b = channel(parts[2]);
+    const a = parts[3] === undefined ? 1 : String(parts[3]).endsWith("%") ? Number.parseFloat(parts[3]) / 100 : Number.parseFloat(parts[3]);
     if ([r, g, b, a].every(Number.isFinite) && a > 0.05) {
       return { r: clamp(Math.round(r), 0, 255), g: clamp(Math.round(g), 0, 255), b: clamp(Math.round(b), 0, 255), a };
     }
   }
-  const hex = text.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)?.[1];
+  const hsla = text.match(/^hsla?\(([^)]+)\)$/i);
+  if (hsla) {
+    const parts = hsla[1].replace("/", " ").split(/[,\s]+/).map((part) => part.trim()).filter(Boolean);
+    const hue = ((Number.parseFloat(parts[0]) % 360) + 360) % 360 / 360;
+    const saturation = Number.parseFloat(parts[1]) / 100;
+    const lightness = Number.parseFloat(parts[2]) / 100;
+    const alpha = parts[3] === undefined ? 1 : String(parts[3]).endsWith("%") ? Number.parseFloat(parts[3]) / 100 : Number.parseFloat(parts[3]);
+    if ([hue, saturation, lightness, alpha].every(Number.isFinite) && alpha > 0.05) {
+      const channel = (offset) => {
+        const k = (offset + hue * 12) % 12;
+        const chroma = saturation * Math.min(lightness, 1 - lightness);
+        return Math.round(255 * (lightness - chroma * Math.max(-1, Math.min(k - 3, 9 - k, 1))));
+      };
+      return { r: channel(0), g: channel(8), b: channel(4), a: alpha };
+    }
+  }
+  const hex = text.match(/^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i)?.[1];
   if (hex) {
-    const full = hex.length === 3 ? hex.split("").map((x) => `${x}${x}`).join("") : hex;
+    const full = hex.length <= 4 ? hex.split("").map((x) => `${x}${x}`).join("") : hex;
+    const alpha = full.length === 8 ? Number.parseInt(full.slice(6, 8), 16) / 255 : 1;
+    if (alpha <= 0.05) return null;
     return {
       r: Number.parseInt(full.slice(0, 2), 16),
       g: Number.parseInt(full.slice(2, 4), 16),
       b: Number.parseInt(full.slice(4, 6), 16),
-      a: 1,
+      a: alpha,
     };
   }
   return null;
@@ -603,6 +648,7 @@ const KP_THEME_COLOR_KEYS = [
   "brand", "primary", "brandDeep", "brandDark", "brandTint", "brandSoft",
   "canvas", "surface1", "surface2", "textPrimary", "textSecondary", "rule",
   "secondary", "positive", "warning", "critical",
+  "decorativePrimary", "decorativeSecondary", "decorativeTertiary",
 ];
 const KP_THEME_FONT_KEYS = ["displayStack", "bodyStack", "metadataStack"];
 const GENERIC_FONT_FAMILIES = new Set([
@@ -666,62 +712,83 @@ function normalizedReferenceFontStack(value = "", fallback = "Arial, sans-serif"
     .join(", ");
 }
 
-function knownReferenceTheme(referenceUrl = "") {
-  let host = "";
-  try {
-    host = new URL(referenceUrl).hostname.toLowerCase().replace(/^www\./, "");
-  } catch {}
-  if (host === "shopify.com" || host.endsWith(".shopify.com")) {
-    // Stable Shopify brand archetype for proposals. The public homepage is
-    // campaign-driven and changes between light and dark treatments; the KP
-    // contract intentionally keeps the recognizable white + Shopify green
-    // system requested by the product owner.
-    return {
-      brand: "#008060",
-      primary: "#008060",
-      brandDeep: "#004C3F",
-      brandDark: "#002E25",
-      brandTint: "#EAF7F1",
-      brandSoft: "#F3FAF7",
-      canvas: "#FFFFFF",
-      surface1: "#F6F6F2",
-      surface2: "#EAF7F1",
-      textPrimary: "#202223",
-      textSecondary: "#5C5F62",
-      rule: "#D8E2DC",
-      secondary: "#004C3F",
-      positive: "#008060",
-      warning: "#8A5200",
-      critical: "#B42318",
-      displayStack: "NeueHaasGrotesk, \"Helvetica Neue\", Helvetica, Arial, sans-serif",
-      bodyStack: "Inter, \"Helvetica Neue\", Helvetica, Arial, sans-serif",
-      metadataStack: "SFMono-Regular, Menlo, Consolas, monospace",
-    };
-  }
-  if (host === "uzum.uz" || host.endsWith(".uzum.uz")) {
-    return {
-      brand: "#7000FF",
-      primary: "#7000FF",
-      brandDeep: "#4F00B8",
-      brandDark: "#310073",
-      brandTint: "#EEE7FF",
-      brandSoft: "#F8F5FF",
-      canvas: "#FFFFFF",
-      surface1: "#F7F6FA",
-      surface2: "#EEE7FF",
-      textPrimary: "#17141F",
-      textSecondary: "#5E5968",
-      rule: "#DED9E8",
-      secondary: "#4F00B8",
-      positive: "#137A4A",
-      warning: "#8A5200",
-      critical: "#B42318",
-      displayStack: "Inter, Arial, sans-serif",
-      bodyStack: "Inter, Arial, sans-serif",
-      metadataStack: "SFMono-Regular, Menlo, Consolas, monospace",
-    };
-  }
-  return null;
+export function udevsFallbackTheme() {
+  return {
+    brand: "#0052FF",
+    primary: "#0052FF",
+    brandDeep: "#0039B3",
+    brandDark: "#0039B3",
+    brandTint: "#F3F6FF",
+    brandSoft: "#E9EFFF",
+    canvas: "#FFFFFF",
+    surface1: "#FFFFFF",
+    surface2: "#F3F6FF",
+    textPrimary: "#07080D",
+    textSecondary: "#666666",
+    rule: "#DCE4F5",
+    secondary: "#07080D",
+    positive: "#0052FF",
+    warning: "#07080D",
+    critical: "#0052FF",
+    decorativePrimary: "#0052FF",
+    decorativeSecondary: "#07080D",
+    decorativeTertiary: "#DCE6FF",
+    displayStack: "Inter, Arial, sans-serif",
+    bodyStack: "Inter, Arial, sans-serif",
+    metadataStack: "SFMono-Regular, Menlo, Consolas, monospace",
+  };
+}
+
+export function dynamicColorPalettesEnabled(env = process.env) {
+  return ["1", "true", "on", "yes"].includes(
+    String(env.KP_DYNAMIC_COLOR_PALETTES_ENABLED ?? "0").trim().toLowerCase(),
+  );
+}
+
+function udevsStaticThemeResult() {
+  return {
+    themeTokens: udevsFallbackTheme(),
+    themeSource: { kind: "udevs_static", reference: "screenshot_visual_system" },
+    themeWarnings: ["Dynamic website palettes are disabled; the fixed Udevs screenshot palette and background system were applied."],
+    referenceUrl: "",
+  };
+}
+
+export function applyUdevsScreenshotVisualSystem(profile = {}) {
+  const tokens = udevsFallbackTheme();
+  const warnings = [
+    ...(profile.warnings || []),
+    "Dynamic website palettes are disabled; the fixed Udevs screenshot palette and background system were applied.",
+  ];
+  return {
+    ...profile,
+    canvas: {
+      ...(profile.canvas || {}),
+      mode: "light",
+      background: tokens.canvas,
+      surface1: tokens.surface1,
+      surface2: tokens.surface2,
+      textPrimary: tokens.textPrimary,
+      textSecondary: tokens.textSecondary,
+      rule: tokens.rule,
+    },
+    accents: {
+      ...(profile.accents || {}),
+      primary: tokens.primary,
+      secondary: tokens.secondary,
+      positive: tokens.positive,
+      warning: tokens.warning,
+      critical: tokens.critical,
+      decorativePrimary: tokens.decorativePrimary,
+      decorativeSecondary: tokens.decorativeSecondary,
+      decorativeTertiary: tokens.decorativeTertiary,
+    },
+    layout: {
+      ...(profile.layout || {}),
+      backgroundStyle: "udevs_screenshot",
+    },
+    warnings: [...new Set(warnings)],
+  };
 }
 
 function weightedSnapshotChoice(rows, valueKey, scoreForRow, predicate = () => true) {
@@ -749,21 +816,252 @@ function weightedSnapshotFont(rows, predicate, fallback) {
   return normalizedReferenceFontStack(selected, fallback);
 }
 
-function tokensFromReferenceVisuals({ canvas, accent, textPrimary, displayStack, bodyStack } = {}) {
+function colorDistance(left, right) {
+  if (!left || !right) return 1;
+  const delta = Math.sqrt(
+    ((left.r - right.r) ** 2)
+    + ((left.g - right.g) ** 2)
+    + ((left.b - right.b) ** 2),
+  );
+  return delta / Math.sqrt(3 * (255 ** 2));
+}
+
+function snapshotDescriptor(row = {}) {
+  return [
+    row.tag,
+    row.role,
+    row.id,
+    row.className,
+    row.ariaLabel,
+    row.name,
+    row.pseudo,
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function extractCssColors(value = "") {
+  return [...String(value || "").matchAll(/#[0-9a-f]{3,8}\b|(?:rgb|hsl)a?\([^)]+\)/gi)]
+    .map((match) => parseCssColor(match[0]))
+    .filter(Boolean);
+}
+
+function addSnapshotPaletteCandidate(candidates, color, {
+  score = 1,
+  descriptor = "",
+  source = "element",
+  textCandidate = false,
+} = {}) {
+  const rgb = typeof color === "string" ? parseCssColor(color) : color;
+  if (!rgb || rgb.a <= 0.2) return;
+  const hex = rgbToHex(rgb);
+  const hsl = rgbToHsl(rgb);
+  const brandSignal = /brand|logo|identity|theme/.test(descriptor);
+  const secondarySignal = /secondary|alternate|contrast|dark|nav|header|footer|text/.test(descriptor);
+  const tertiarySignal = /accent|promo|sale|discount|danger|error|critical|alert|warning|success|positive|badge/.test(descriptor);
+  const primarySignal = /primary|main|maincolor|cta|button|btn/.test(descriptor)
+    || (brandSignal && !secondarySignal && !tertiarySignal);
+  const chromatic = hsl.saturation >= 0.12 && hsl.lightness >= 0.035 && hsl.lightness <= 0.965;
+  if (!chromatic && !brandSignal && !primarySignal && !secondarySignal && !tertiarySignal && !textCandidate) return;
+  const row = candidates.get(hex) || {
+    rgb,
+    hex,
+    score: 0,
+    primaryScore: 0,
+    secondaryScore: 0,
+    tertiaryScore: 0,
+    textScore: 0,
+    roleScore: 0,
+    sources: new Set(),
+  };
+  const saturationWeight = 0.55 + hsl.saturation * 1.45;
+  const safeScore = Math.max(0.01, Number(score) || 0.01);
+  row.score += safeScore * saturationWeight;
+  row.primaryScore += safeScore * saturationWeight * (primarySignal ? 5 : brandSignal ? 4 : 1);
+  row.secondaryScore += safeScore * (secondarySignal ? 5 : 1) * (0.8 + hsl.saturation);
+  row.tertiaryScore += safeScore * saturationWeight * (tertiarySignal ? 6 : 1);
+  if (textCandidate) row.textScore += safeScore;
+  if (brandSignal || primarySignal || secondarySignal || tertiarySignal) row.roleScore += safeScore;
+  row.sources.add(source);
+  candidates.set(hex, row);
+}
+
+function selectSnapshotPalette(snapshot, rows, { canvas, textPrimary } = {}) {
+  const candidates = new Map();
+  for (const row of rows) {
+    const tag = String(row.tag || "").toLowerCase();
+    const descriptor = snapshotDescriptor(row);
+    const interactive = ["a", "button"].includes(tag) || /button|btn|primary|brand|accent|cta|logo|promo|sale/.test(descriptor);
+    const areaFactor = 1 + Math.min(3, Math.log10(Math.max(10, Number(row.area || 10))) / 2);
+    for (const [key, base] of [
+      ["backgroundColor", interactive ? 8 : 1.2],
+      ["color", interactive ? 5 : 0.65],
+      ["borderColor", interactive ? 3.5 : 0.45],
+      ["outlineColor", interactive ? 2.5 : 0.25],
+      ["fill", /logo|svg|icon/.test(descriptor) ? 9 : 2.5],
+      ["stroke", /logo|svg|icon/.test(descriptor) ? 7 : 1.8],
+    ]) {
+      const colorDescriptor = key === "color"
+        ? descriptor.replace(/\b(?:primary|maincolor|main|cta|button|btn|brand|logo)\b/g, "")
+        : descriptor;
+      addSnapshotPaletteCandidate(candidates, row[key], {
+        score: base * areaFactor,
+        descriptor: colorDescriptor,
+        source: `element:${key}`,
+        textCandidate: key === "color" && Number(row.textLength || 0) > 0,
+      });
+    }
+  }
+  for (const variable of Array.isArray(snapshot.cssVariables) ? snapshot.cssVariables.slice(0, 240) : []) {
+    const descriptor = String(variable?.name || "").toLowerCase();
+    for (const color of extractCssColors(variable?.value || "")) {
+      addSnapshotPaletteCandidate(candidates, color, {
+        score: /primary|brand|main|accent|secondary|success|warning|danger|error/.test(descriptor) ? 22 : 4,
+        descriptor,
+        source: "css-variable",
+      });
+    }
+  }
+  for (const declaration of Array.isArray(snapshot.styleColors) ? snapshot.styleColors.slice(0, 320) : []) {
+    const descriptor = String(declaration?.selector || "").toLowerCase();
+    for (const color of extractCssColors(declaration?.value || "")) {
+      addSnapshotPaletteCandidate(candidates, color, {
+        score: /brand|logo|primary|accent|promo|sale|discount|danger|error|success|warning/.test(descriptor) ? 14 : 5,
+        descriptor,
+        source: "stylesheet-role",
+      });
+    }
+  }
+  for (const logoColor of Array.isArray(snapshot.logoColors) ? snapshot.logoColors.slice(0, 12) : []) {
+    addSnapshotPaletteCandidate(candidates, logoColor?.color, {
+      score: 28 + Math.min(30, Math.log10(Math.max(1, Number(logoColor?.count || 1))) * 12),
+      descriptor: "primary brand logo",
+      source: "logo-pixels",
+    });
+  }
+  for (const color of extractCssColors(snapshot.themeColor || "")) {
+    addSnapshotPaletteCandidate(candidates, color, {
+      score: 34,
+      descriptor: "primary brand theme-color",
+      source: "theme-color",
+    });
+  }
+  if (textPrimary) {
+    addSnapshotPaletteCandidate(candidates, textPrimary, {
+      score: 10,
+      descriptor: "secondary text",
+      source: "dominant-text",
+      textCandidate: true,
+    });
+  }
+  if (canvas && rgbToHsl(canvas).saturation >= 0.08) {
+    addSnapshotPaletteCandidate(candidates, canvas, {
+      score: 8,
+      descriptor: "secondary background",
+      source: "canvas",
+    });
+  }
+
+  const all = [...candidates.values()].filter((candidate) => {
+    if (!canvas) return true;
+    const distance = colorDistance(candidate.rgb, canvas);
+    return distance >= 0.035 || candidate.roleScore > 0 || candidate.textScore > 0;
+  });
+  if (!all.length) return { palette: [], candidates: [] };
+  const chromatic = all.filter((candidate) => {
+    const hsl = rgbToHsl(candidate.rgb);
+    return hsl.saturation >= 0.12 && hsl.lightness >= 0.035 && hsl.lightness <= 0.965;
+  });
+  const primaryPool = chromatic.length ? chromatic : all;
+  const declaredLogoColors = (Array.isArray(snapshot.logoColors) ? snapshot.logoColors : [])
+    .map((row) => parseCssColor(row?.color))
+    .filter(Boolean)
+    .map((color) => candidates.get(rgbToHex(color)))
+    .filter(Boolean);
+  const declaredThemeColor = extractCssColors(snapshot.themeColor || "")
+    .map((color) => rgbToHex(color))
+    .map((hex) => candidates.get(hex))
+    .find((candidate) => candidate && rgbToHsl(candidate.rgb).saturation >= 0.12);
+  const primary = declaredThemeColor
+    || declaredLogoColors[0]
+    || [...primaryPool].sort((left, right) => right.primaryScore - left.primaryScore || right.score - left.score)[0];
+  const remaining = all.filter((candidate) => candidate.hex !== primary?.hex);
+  const hueDistance = (left, right) => {
+    const delta = Math.abs(rgbToHsl(left).hue - rgbToHsl(right).hue);
+    return Math.min(delta, 1 - delta);
+  };
+  const secondaryLogoColor = declaredLogoColors.find((candidate) => candidate.hex !== primary?.hex
+    && hueDistance(candidate.rgb, primary?.rgb) >= 0.12);
+  const secondary = secondaryLogoColor
+    || [...remaining].sort((left, right) => {
+    const leftRank = left.secondaryScore + left.textScore * 2 + left.score * 0.25 + colorDistance(left.rgb, primary?.rgb) * 28;
+    const rightRank = right.secondaryScore + right.textScore * 2 + right.score * 0.25 + colorDistance(right.rgb, primary?.rgb) * 28;
+    return rightRank - leftRank;
+  })[0];
+  const tertiaryCandidates = remaining.filter((candidate) => candidate.hex !== secondary?.hex);
+  const chromaticTertiaryCandidates = tertiaryCandidates.filter((candidate) => {
+    const hsl = rgbToHsl(candidate.rgb);
+    return hsl.saturation >= 0.18 && colorDistance(candidate.rgb, primary?.rgb) >= 0.06;
+  });
+  const tertiaryLogoColor = declaredLogoColors.find((candidate) => candidate.hex !== primary?.hex
+    && candidate.hex !== secondary?.hex
+    && hueDistance(candidate.rgb, primary?.rgb) >= 0.12
+    && hueDistance(candidate.rgb, secondary?.rgb) >= 0.1);
+  const tertiary = tertiaryLogoColor
+    || [...(chromaticTertiaryCandidates.length ? chromaticTertiaryCandidates : tertiaryCandidates)].sort((left, right) => {
+    const leftDistance = Math.min(colorDistance(left.rgb, primary?.rgb), colorDistance(left.rgb, secondary?.rgb));
+    const rightDistance = Math.min(colorDistance(right.rgb, primary?.rgb), colorDistance(right.rgb, secondary?.rgb));
+    const leftRank = left.tertiaryScore + left.score * 0.3 + leftDistance * 32;
+    const rightRank = right.tertiaryScore + right.score * 0.3 + rightDistance * 32;
+    return rightRank - leftRank;
+  })[0];
+  const selected = [primary, secondary, tertiary].filter(Boolean);
+  const selectedRank = new Map(selected.map((candidate, index) => [candidate.hex, index]));
+  const rankedCandidates = [...all]
+    .sort((left, right) => {
+      const leftSelected = selectedRank.has(left.hex) ? selectedRank.get(left.hex) : 99;
+      const rightSelected = selectedRank.has(right.hex) ? selectedRank.get(right.hex) : 99;
+      if (leftSelected !== rightSelected) return leftSelected - rightSelected;
+      const leftRank = Math.max(left.primaryScore, left.secondaryScore, left.tertiaryScore) + left.textScore + left.score * 0.35;
+      const rightRank = Math.max(right.primaryScore, right.secondaryScore, right.tertiaryScore) + right.textScore + right.score * 0.35;
+      return rightRank - leftRank;
+    })
+    .slice(0, 18)
+    .map((candidate) => ({
+      color: candidate.hex,
+      sources: [...candidate.sources].sort(),
+      primaryScore: Number(candidate.primaryScore.toFixed(2)),
+      secondaryScore: Number(candidate.secondaryScore.toFixed(2)),
+      textScore: Number(candidate.textScore.toFixed(2)),
+    }));
+  return {
+    palette: selected.map((candidate) => candidate.rgb),
+    candidates: rankedCandidates,
+  };
+}
+
+function semanticPaletteColor(palette, predicate, fallback) {
+  return palette.find((color) => predicate(rgbToHsl(color))) || fallback;
+}
+
+function tokensFromReferenceVisuals({ canvas, surfaces = [], palette = [], textPrimary, displayStack, bodyStack } = {}) {
   const safeCanvas = canvas || parseCssColor("#FFFFFF");
   const dark = relativeRgbLuminance(safeCanvas) < 0.42;
   const defaultText = parseCssColor(dark ? "#F5F5F2" : "#171717");
   const safeText = contrastSafeRgb(textPrimary, safeCanvas, 7, defaultText);
-  const defaultAccent = parseCssColor(dark ? "#A78BFA" : "#3155FF");
+  const defaultAccent = parseCssColor("#0052FF");
+  const observedPalette = palette.filter(Boolean);
+  const rawPrimary = observedPalette[0] || defaultAccent;
+  const rawSecondary = observedPalette[1] || safeText;
+  const rawTertiary = observedPalette[2] || mixRgb(rawPrimary, rawSecondary, 0.5);
   // The brand accent is split in two: `vividAccent` keeps the site's real
   // saturation for decorative surfaces (borders, fills, tints, heat maps,
   // watermark numerals) and only needs to stay visible against the canvas;
   // `textAccent` is the darkened contrast-safe variant that colors text.
   // Forcing 4.5:1 onto the decorative accent is what turned a bright yellow
   // site (texnomart.uz) into a muddy olive deck.
-  const vividAccent = contrastSafeRgb(accent, safeCanvas, 1.4, defaultAccent);
-  const textAccent = contrastSafeRgb(accent, safeCanvas, 4.5, defaultAccent);
-  const surface1 = mixRgb(safeCanvas, safeText, dark ? 0.08 : 0.035);
+  const vividAccent = contrastSafeRgb(rawPrimary, safeCanvas, 1.2, defaultAccent);
+  const textAccent = contrastSafeRgb(rawPrimary, safeCanvas, 4.5, defaultAccent);
+  const observedSurface = surfaces.find((surface) => colorDistance(surface, safeCanvas) >= 0.025);
+  const surface1 = observedSurface || mixRgb(safeCanvas, safeText, dark ? 0.08 : 0.035);
   const surface2 = mixRgb(safeCanvas, vividAccent, dark ? 0.16 : 0.09);
   const rule = mixRgb(safeCanvas, safeText, dark ? 0.2 : 0.14);
   // Secondary text and accents also sit on tinted panels (surface2 and
@@ -771,10 +1069,13 @@ function tokensFromReferenceVisuals({ canvas, accent, textPrimary, displayStack,
   // tint the renderer produces, not just the bare canvas.
   const strongestTint = mixRgb(safeCanvas, vividAccent, dark ? 0.22 : 0.16);
   const secondaryText = contrastSafeRgb(mixRgb(safeText, safeCanvas, 0.32), strongestTint, 4.6, safeText);
-  const secondaryAccent = contrastSafeRgb(mixRgb(textAccent, safeText, 0.24), strongestTint, 4.6, textAccent);
-  const positive = contrastSafeRgb(parseCssColor(dark ? "#4ED9A4" : "#137A4A"), strongestTint, 4.6, textAccent);
-  const warning = contrastSafeRgb(parseCssColor(dark ? "#F1C75B" : "#8A5200"), strongestTint, 4.6, textAccent);
-  const critical = contrastSafeRgb(parseCssColor(dark ? "#FF8A7A" : "#B42318"), strongestTint, 4.6, textAccent);
+  const secondaryAccent = contrastSafeRgb(rawSecondary, strongestTint, 4.6, textAccent);
+  const green = semanticPaletteColor(observedPalette, ({ hue, saturation }) => saturation >= 0.2 && hue >= 0.2 && hue <= 0.5, rawSecondary);
+  const yellow = semanticPaletteColor(observedPalette, ({ hue, saturation }) => saturation >= 0.2 && hue >= 0.05 && hue <= 0.2, rawTertiary);
+  const red = semanticPaletteColor(observedPalette, ({ hue, saturation }) => saturation >= 0.2 && (hue <= 0.05 || hue >= 0.9), rawTertiary);
+  const positive = contrastSafeRgb(green, strongestTint, 4.6, textAccent);
+  const warning = contrastSafeRgb(yellow, strongestTint, 4.6, textAccent);
+  const critical = contrastSafeRgb(red, strongestTint, 4.6, textAccent);
   return {
     brand: rgbToHex(vividAccent),
     primary: rgbToHex(vividAccent),
@@ -792,16 +1093,17 @@ function tokensFromReferenceVisuals({ canvas, accent, textPrimary, displayStack,
     positive: rgbToHex(positive),
     warning: rgbToHex(warning),
     critical: rgbToHex(critical),
+    decorativePrimary: rgbToHex(rawPrimary),
+    decorativeSecondary: rgbToHex(rawSecondary),
+    decorativeTertiary: rgbToHex(rawTertiary),
     displayStack: normalizedReferenceFontStack(displayStack, "Arial, sans-serif"),
     bodyStack: normalizedReferenceFontStack(bodyStack, "Arial, sans-serif"),
     metadataStack: "SFMono-Regular, Menlo, Consolas, monospace",
   };
 }
 
-export function deriveReferenceThemeFromSnapshot(snapshot = {}, { referenceUrl = "" } = {}) {
-  const preset = knownReferenceTheme(referenceUrl || snapshot.url || "");
-  if (preset) return { ...preset };
-  const rows = Array.isArray(snapshot.rows) ? snapshot.rows.filter((row) => row && typeof row === "object").slice(0, 240) : [];
+function analyzeReferenceThemeSnapshot(snapshot = {}, { referenceUrl = "" } = {}) {
+  const rows = Array.isArray(snapshot.rows) ? snapshot.rows.filter((row) => row && typeof row === "object").slice(0, 640) : [];
   if (!rows.length) throw new Error("reference style snapshot did not contain usable visual data");
   const largeTags = new Set(["html", "body", "main", "section", "header", "footer"]);
   const canvas = weightedSnapshotChoice(
@@ -816,26 +1118,32 @@ export function deriveReferenceThemeFromSnapshot(snapshot = {}, { referenceUrl =
     (row) => Math.max(1, Number(row.textLength || 0)) * (/^h[1-3]$/.test(String(row.tag || "").toLowerCase()) ? 2.5 : 1),
     (rgb) => rgbContrastRatio(rgb, canvas) >= 4.5,
   );
-  const accentCandidates = [];
-  for (const row of rows) {
-    const tag = String(row.tag || "").toLowerCase();
-    const role = `${row.role || ""} ${row.className || ""}`.toLowerCase();
-    const interactive = ["a", "button"].includes(tag) || /button|btn|primary|brand|accent|cta|logo/.test(role);
-    for (const [key, base] of [["backgroundColor", interactive ? 10 : 1], ["color", interactive ? 5 : 0.5], ["borderColor", interactive ? 3 : 0.25]]) {
-      const rgb = parseCssColor(row[key]);
-      if (!rgb) continue;
-      const hsl = rgbToHsl(rgb);
-      if (hsl.saturation < 0.24 || hsl.lightness < 0.1 || hsl.lightness > 0.9) continue;
-      if (rgbContrastRatio(rgb, canvas) < 1.35) continue;
-      accentCandidates.push({ ...row, candidateColor: rgbToHex(rgb), score: base * (0.5 + hsl.saturation) * (1 + Math.min(2, Number(row.area || 0) / 30_000)) });
-    }
-  }
-  const themeColor = parseCssColor(snapshot.themeColor);
-  if (themeColor) accentCandidates.push({ candidateColor: rgbToHex(themeColor), score: 8 });
-  const accent = weightedSnapshotChoice(accentCandidates, "candidateColor", (row) => row.score) || parseCssColor("#3155FF");
+  const surfaceRows = rows.filter((row) => largeTags.has(String(row.tag || "").toLowerCase()));
+  const surfaces = [...new Map(surfaceRows
+    .map((row) => parseCssColor(row.backgroundColor))
+    .filter((color) => color && color.a > 0.25)
+    .map((color) => [rgbToHex(color), color])).values()];
+  const paletteSelection = selectSnapshotPalette(snapshot, rows, { canvas, textPrimary });
   const displayStack = weightedSnapshotFont(rows, (row) => /^h[1-3]$/.test(String(row.tag || "").toLowerCase()), "Arial, sans-serif");
   const bodyStack = weightedSnapshotFont(rows, (row) => /^(?:body|main|p|li|a|button|span)$/.test(String(row.tag || "").toLowerCase()), displayStack);
-  return tokensFromReferenceVisuals({ canvas, accent, textPrimary, displayStack, bodyStack });
+  const visualInputs = {
+    canvas,
+    surfaces,
+    palette: paletteSelection.palette,
+    textPrimary,
+    displayStack,
+    bodyStack,
+  };
+  return {
+    themeTokens: tokensFromReferenceVisuals(visualInputs),
+    candidates: paletteSelection.candidates,
+    visualInputs,
+    referenceUrl,
+  };
+}
+
+export function deriveReferenceThemeFromSnapshot(snapshot = {}, { referenceUrl = "" } = {}) {
+  return analyzeReferenceThemeSnapshot(snapshot, { referenceUrl }).themeTokens;
 }
 
 function darkThemeTokensFromAccent(value = "") {
@@ -925,49 +1233,638 @@ function cssVariables(theme = {}) {
       --shadow-cover-hero: 0 1px 2px rgba(16,24,40,0.04), 0 20px 44px -28px rgba(16,24,40,0.3);`;
 }
 
-export async function extractReferenceTheme(referenceUrl = "") {
+function paletteAiEnabled(env = process.env) {
+  return String(env.KP_REFERENCE_PALETTE_AI_ENABLED ?? "1").trim() !== "0";
+}
+
+function normalizedPaletteCandidates(candidates = []) {
+  const seen = new Set();
+  const normalized = [];
+  for (const candidate of Array.isArray(candidates) ? candidates : []) {
+    const color = String(candidate?.color || candidate || "").trim().toUpperCase();
+    if (!/^#[0-9A-F]{6}$/.test(color) || seen.has(color)) continue;
+    seen.add(color);
+    normalized.push({
+      color,
+      sources: Array.isArray(candidate?.sources)
+        ? candidate.sources.map((source) => safeText(source, 60)).filter(Boolean).slice(0, 6)
+        : [],
+      primaryScore: Number(candidate?.primaryScore || 0),
+      secondaryScore: Number(candidate?.secondaryScore || 0),
+      textScore: Number(candidate?.textScore || 0),
+    });
+    if (normalized.length >= 18) break;
+  }
+  return normalized;
+}
+
+function paletteAiErrorReason(error) {
+  if (error?.name === "AbortError") return "timeout";
+  const status = Number(error?.status || error?.response?.status || 0);
+  const message = String(error?.message || "").toLowerCase();
+  if (status === 401 || status === 403 || /api key|authentication|unauthorized|forbidden/.test(message)) return "authentication_failed";
+  if (status === 408) return "timeout";
+  if (status === 429 || /rate limit/.test(message)) return "rate_limited";
+  if (status >= 500) return "provider_unavailable";
+  if (status >= 400) return "provider_request_rejected";
+  return "provider_request_failed";
+}
+
+function resolvePaletteAiProvider(env = process.env, client = null) {
+  if (client?.messages?.create) return "anthropic";
+  if (client?.responses?.create) return "openai";
+  const configured = String(env.KP_REFERENCE_PALETTE_AI_PROVIDER || "auto").trim().toLowerCase();
+  if (configured === "anthropic" || configured === "openai") return configured;
+  if (env.ANTHROPIC_API_KEY || String(env.OPENAI_API_KEY || "").startsWith("sk-ant-")) return "anthropic";
+  return "openai";
+}
+
+function paletteAiApiKey(provider, env = process.env) {
+  if (provider === "anthropic") {
+    return String(env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY || "").trim();
+  }
+  return String(env.OPENAI_API_KEY || "").trim();
+}
+
+function paletteAiModel(provider, env = process.env) {
+  const configured = String(env.KP_REFERENCE_PALETTE_AI_MODEL || "").trim();
+  if (configured) return configured;
+  if (provider === "anthropic") return String(env.CLAUDE_MODEL || "claude-sonnet-4-5").trim();
+  return String(env.KP_REFERENCE_VISION_MODEL || "gpt-4.1-mini").trim();
+}
+
+export async function classifyBrandPaletteWithAi({
+  screenshot = null,
+  candidates = [],
+  referenceUrl = "",
+} = {}, {
+  env = process.env,
+  client = null,
+} = {}) {
+  const normalizedCandidates = normalizedPaletteCandidates(candidates);
+  if (!paletteAiEnabled(env)) return { applied: false, attempted: false, reason: "disabled" };
+  if (!screenshot) return { applied: false, attempted: false, reason: "screenshot_missing" };
+  if (normalizedCandidates.length < 2) return { applied: false, attempted: false, reason: "candidate_set_too_small" };
+
+  const provider = resolvePaletteAiProvider(env, client);
+  const apiKey = paletteAiApiKey(provider, env);
+  const model = paletteAiModel(provider, env);
+  if (!client && !apiKey) return { applied: false, attempted: false, reason: "api_key_missing", provider, model };
+  if (!client && provider === "openai" && apiKey.startsWith("sk-ant-")) {
+    return { applied: false, attempted: true, reason: "api_key_provider_mismatch", provider, model };
+  }
+  const minimumConfidence = Math.max(0, Math.min(1, Number(env.KP_REFERENCE_PALETTE_AI_MIN_CONFIDENCE || 0.55)));
+  const timeoutMs = Math.max(1_000, Math.min(60_000, Number(env.KP_REFERENCE_PALETTE_AI_TIMEOUT_MS || 20_000)));
+  const allowedColors = normalizedCandidates.map((candidate) => candidate.color);
+  const imageUrl = Buffer.isBuffer(screenshot)
+    ? `data:image/jpeg;base64,${screenshot.toString("base64")}`
+    : String(screenshot || "").trim();
+  if (!/^data:image\/(?:jpeg|png|webp);base64,/i.test(imageUrl)) {
+    return { applied: false, attempted: false, reason: "screenshot_invalid" };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const instructions = [
+    "You classify a website's two most useful brand colors from visual evidence.",
+    "Choose only from the supplied candidate colors; never invent, modify, blend, or normalize a color.",
+    "primary is the most recognizable brand, logo, or main CTA color.",
+    "secondary is a distinct second brand color suitable for combining with primary.",
+    "Do not choose generic white or black merely because it is body text or page background, unless the screenshot and candidate evidence show it is a deliberate core brand color.",
+    "Treat the screenshot as visual evidence and the candidate scores/sources as supporting evidence.",
+    "Return concise evidence descriptions without hidden reasoning.",
+  ].join("\n");
+  const inputPayload = JSON.stringify({
+    task: "Select primary and secondary website brand colors.",
+    website: safeText(referenceUrl, 300),
+    candidates: normalizedCandidates,
+  });
+  const outputSchema = {
+    type: "object",
+    properties: {
+      primary: { type: "string", enum: allowedColors },
+      secondary: { type: "string", enum: allowedColors },
+      confidence: { type: "number", minimum: 0, maximum: 1 },
+      primaryEvidence: { type: "string", minLength: 1, maxLength: 180 },
+      secondaryEvidence: { type: "string", minLength: 1, maxLength: 180 },
+    },
+    required: ["primary", "secondary", "confidence", "primaryEvidence", "secondaryEvidence"],
+    additionalProperties: false,
+  };
+  try {
+    let parsed;
+    if (provider === "anthropic") {
+      const anthropic = client || new Anthropic({ apiKey });
+      const imageMatch = imageUrl.match(/^data:image\/(jpeg|png|webp);base64,(.+)$/i);
+      const response = await anthropic.messages.create({
+        model,
+        max_tokens: Number(env.KP_REFERENCE_PALETTE_AI_MAX_TOKENS || 450),
+        temperature: 0,
+        system: instructions,
+        messages: [{
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: `image/${String(imageMatch?.[1] || "jpeg").toLowerCase()}`,
+                data: imageMatch?.[2] || "",
+              },
+            },
+            { type: "text", text: inputPayload },
+          ],
+        }],
+        tools: [{
+          name: "select_brand_palette",
+          description: "Return the two selected website brand colors and concise visual evidence.",
+          input_schema: outputSchema,
+        }],
+        tool_choice: { type: "tool", name: "select_brand_palette" },
+      }, { signal: controller.signal });
+      parsed = response.content?.find((block) => block?.type === "tool_use" && block?.name === "select_brand_palette")?.input || null;
+      if (!parsed) throw Object.assign(new Error("Claude did not return the required palette tool call"), { status: 422 });
+    } else {
+      const openai = client || new OpenAI({ apiKey });
+      const response = await openai.responses.create({
+        model,
+        store: false,
+        max_output_tokens: Number(env.KP_REFERENCE_PALETTE_AI_MAX_TOKENS || 450),
+        instructions,
+        input: [{
+          role: "user",
+          content: [
+            { type: "input_text", text: inputPayload },
+            {
+              type: "input_image",
+              image_url: imageUrl,
+              detail: "low",
+            },
+          ],
+        }],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "website_brand_palette",
+            strict: true,
+            schema: outputSchema,
+          },
+        },
+      }, { signal: controller.signal });
+      parsed = JSON.parse(String(response.output_text || "{}"));
+    }
+    const primary = String(parsed.primary || "").toUpperCase();
+    const secondary = String(parsed.secondary || "").toUpperCase();
+    const confidence = Number(parsed.confidence);
+    if (!allowedColors.includes(primary) || !allowedColors.includes(secondary)) {
+      return { applied: false, attempted: true, reason: "candidate_constraint_failed", provider, model };
+    }
+    if (primary === secondary) {
+      return { applied: false, attempted: true, reason: "colors_not_distinct", provider, model };
+    }
+    if (!Number.isFinite(confidence) || confidence < minimumConfidence) {
+      return { applied: false, attempted: true, reason: "confidence_too_low", confidence, provider, model };
+    }
+    return {
+      applied: true,
+      attempted: true,
+      mode: "ai_vision",
+      provider,
+      model,
+      primary,
+      secondary,
+      confidence: Number(confidence.toFixed(3)),
+      primaryEvidence: safeText(parsed.primaryEvidence, 180),
+      secondaryEvidence: safeText(parsed.secondaryEvidence, 180),
+    };
+  } catch (error) {
+    return { applied: false, attempted: true, reason: paletteAiErrorReason(error), provider, model };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function classifyBrandPaletteFromDomainWithAi({
+  referenceUrl = "",
+  captureFailure = "",
+} = {}, {
+  env = process.env,
+  client = null,
+} = {}) {
+  if (!paletteAiEnabled(env)) return { applied: false, attempted: false, reason: "disabled" };
+  const normalizedUrl = normalizedPublicBrandUrl(referenceUrl);
+  if (!normalizedUrl) return { applied: false, attempted: false, reason: "reference_url_invalid" };
+
+  const provider = resolvePaletteAiProvider(env, client);
+  const apiKey = paletteAiApiKey(provider, env);
+  const model = paletteAiModel(provider, env);
+  if (!client && !apiKey) return { applied: false, attempted: false, reason: "api_key_missing", provider, model };
+  if (!client && provider === "openai" && apiKey.startsWith("sk-ant-")) {
+    return { applied: false, attempted: true, reason: "api_key_provider_mismatch", provider, model };
+  }
+
+  const minimumConfidence = Math.max(0, Math.min(1, Number(
+    env.KP_REFERENCE_PALETTE_AI_DOMAIN_MIN_CONFIDENCE
+      || env.KP_REFERENCE_PALETTE_AI_MIN_CONFIDENCE
+      || 0.55,
+  )));
+  const timeoutMs = Math.max(1_000, Math.min(60_000, Number(
+    env.KP_REFERENCE_PALETTE_AI_DOMAIN_TIMEOUT_MS
+      || env.KP_REFERENCE_PALETTE_AI_TIMEOUT_MS
+      || 20_000,
+  )));
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const instructions = [
+    "You identify the two core brand colors of a public website when direct automated access to the site is unavailable.",
+    "Use the website domain, recognizable company identity, and your reliable public knowledge of the brand.",
+    "Return exact six-digit hexadecimal colors in #RRGGBB format.",
+    "Prefer exact canonical or published digital brand tokens; never replace an uncertain token with a visually similar CSS framework, Material, or generic UI color.",
+    "primary is the most recognizable logo, identity, or main CTA color.",
+    "secondary is a distinct supporting brand color suitable for combining with primary.",
+    "Do not choose generic white or black merely as a convenient background or text color unless it is deliberately central to the brand identity.",
+    "Do not invent a plausible category palette. If the identity is uncertain, lower confidence instead.",
+    "Evidence descriptions must state that they come from known brand identity or domain inference, not from a successful live-site inspection.",
+    "Return concise evidence descriptions without hidden reasoning.",
+  ].join("\n");
+  const inputPayload = JSON.stringify({
+    task: "Return the primary and secondary brand palette for this website.",
+    website: normalizedUrl,
+    domain: new URL(normalizedUrl).hostname,
+    liveAccess: "unavailable",
+    accessFailure: safeText(captureFailure, 180),
+  });
+  const colorSchema = { type: "string", pattern: "^#[0-9A-Fa-f]{6}$" };
+  const outputSchema = {
+    type: "object",
+    properties: {
+      primary: colorSchema,
+      secondary: colorSchema,
+      confidence: { type: "number", minimum: 0, maximum: 1 },
+      primaryEvidence: { type: "string", minLength: 1, maxLength: 180 },
+      secondaryEvidence: { type: "string", minLength: 1, maxLength: 180 },
+    },
+    required: ["primary", "secondary", "confidence", "primaryEvidence", "secondaryEvidence"],
+    additionalProperties: false,
+  };
+
+  try {
+    let parsed;
+    if (provider === "anthropic") {
+      const anthropic = client || new Anthropic({ apiKey });
+      const response = await anthropic.messages.create({
+        model,
+        max_tokens: Number(env.KP_REFERENCE_PALETTE_AI_MAX_TOKENS || 450),
+        temperature: 0,
+        system: instructions,
+        messages: [{
+          role: "user",
+          content: [{ type: "text", text: inputPayload }],
+        }],
+        tools: [{
+          name: "select_brand_palette",
+          description: "Return two known website brand colors and concise provenance.",
+          input_schema: outputSchema,
+        }],
+        tool_choice: { type: "tool", name: "select_brand_palette" },
+      }, { signal: controller.signal });
+      parsed = response.content?.find((block) => block?.type === "tool_use" && block?.name === "select_brand_palette")?.input || null;
+      if (!parsed) throw Object.assign(new Error("Claude did not return the required palette tool call"), { status: 422 });
+    } else {
+      const openai = client || new OpenAI({ apiKey });
+      const response = await openai.responses.create({
+        model,
+        store: false,
+        max_output_tokens: Number(env.KP_REFERENCE_PALETTE_AI_MAX_TOKENS || 450),
+        instructions,
+        input: [{
+          role: "user",
+          content: [{ type: "input_text", text: inputPayload }],
+        }],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "website_domain_brand_palette",
+            strict: true,
+            schema: outputSchema,
+          },
+        },
+      }, { signal: controller.signal });
+      parsed = JSON.parse(String(response.output_text || "{}"));
+    }
+
+    const primary = String(parsed.primary || "").toUpperCase();
+    const secondary = String(parsed.secondary || "").toUpperCase();
+    const confidence = Number(parsed.confidence);
+    if (!/^#[0-9A-F]{6}$/.test(primary) || !/^#[0-9A-F]{6}$/.test(secondary)) {
+      return { applied: false, attempted: true, reason: "invalid_color_format", provider, model };
+    }
+    if (primary === secondary) {
+      return { applied: false, attempted: true, reason: "colors_not_distinct", provider, model };
+    }
+    if (!Number.isFinite(confidence) || confidence < minimumConfidence) {
+      return { applied: false, attempted: true, reason: "confidence_too_low", confidence, provider, model };
+    }
+    return {
+      applied: true,
+      attempted: true,
+      mode: "ai_domain_fallback",
+      provider,
+      model,
+      primary,
+      secondary,
+      confidence: Number(confidence.toFixed(3)),
+      primaryEvidence: safeText(parsed.primaryEvidence, 180),
+      secondaryEvidence: safeText(parsed.secondaryEvidence, 180),
+    };
+  } catch (error) {
+    return { applied: false, attempted: true, reason: paletteAiErrorReason(error), provider, model };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function themeWithPaletteSelection(analysis, decision) {
+  if (!decision?.applied) {
+    return {
+      ...analysis.themeTokens,
+      paletteSelection: {
+        mode: "deterministic",
+        aiAttempted: decision?.attempted === true,
+        reason: decision?.reason || "not_attempted",
+        provider: decision?.provider || "",
+        model: decision?.model || "",
+      },
+    };
+  }
+  const primary = parseCssColor(decision.primary);
+  const secondary = parseCssColor(decision.secondary);
+  const tertiary = analysis.visualInputs.palette.find((color) => {
+    const hex = rgbToHex(color);
+    return hex !== decision.primary && hex !== decision.secondary;
+  }) || mixRgb(primary, secondary, 0.5);
+  const themeTokens = tokensFromReferenceVisuals({
+    ...analysis.visualInputs,
+    palette: [primary, secondary, tertiary],
+  });
+  return {
+    ...themeTokens,
+    paletteSelection: {
+      mode: "ai_vision",
+      aiAttempted: true,
+      provider: decision.provider,
+      model: decision.model,
+      confidence: decision.confidence,
+      primaryEvidence: decision.primaryEvidence,
+      secondaryEvidence: decision.secondaryEvidence,
+    },
+  };
+}
+
+function themeFromDomainPaletteDecision(decision, { captureFailure = "" } = {}) {
+  const primary = parseCssColor(decision.primary);
+  const secondary = parseCssColor(decision.secondary);
+  const generated = tokensFromReferenceVisuals({
+    canvas: primary,
+    surfaces: [mixRgb(primary, secondary, 0.07)],
+    palette: [primary, secondary, secondary],
+    textPrimary: secondary,
+  });
+  const {
+    displayStack: _displayStack,
+    bodyStack: _bodyStack,
+    metadataStack: _metadataStack,
+    ...themeTokens
+  } = generated;
+  return {
+    ...themeTokens,
+    brand: decision.primary,
+    primary: decision.primary,
+    brandDeep: decision.secondary,
+    secondary: decision.secondary,
+    canvas: decision.primary,
+    decorativePrimary: decision.primary,
+    decorativeSecondary: decision.secondary,
+    decorativeTertiary: decision.secondary,
+    paletteSelection: {
+      mode: "ai_domain_fallback",
+      aiAttempted: true,
+      provider: decision.provider,
+      model: decision.model,
+      confidence: decision.confidence,
+      primaryEvidence: decision.primaryEvidence,
+      secondaryEvidence: decision.secondaryEvidence,
+      captureFailure: safeText(captureFailure, 180),
+    },
+  };
+}
+
+export async function extractReferenceTheme(referenceUrl = "", options = {}) {
   if (!referenceUrl) return {};
+  const env = options.env || process.env;
   const normalizedUrl = normalizedPublicBrandUrl(referenceUrl);
   if (!normalizedUrl) throw new Error("Brand palette URL is not a safe public HTTP(S) URL.");
-  const preset = knownReferenceTheme(normalizedUrl);
-  if (preset) return { ...preset };
   let browser;
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await launchKpChromium({ headless: true });
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
-    await page.goto(normalizedUrl, { waitUntil: "domcontentloaded", timeout: Number(process.env.KP_REFERENCE_THEME_TIMEOUT_MS || 12_000) });
-    await page.waitForTimeout(700);
+    const navigation = await page.goto(normalizedUrl, { waitUntil: "domcontentloaded", timeout: Number(env.KP_REFERENCE_THEME_TIMEOUT_MS || 12_000) });
+    if (navigation && navigation.status() >= 400) {
+      throw new Error(`reference website returned HTTP ${navigation.status()}`);
+    }
+    await page.waitForTimeout(Number(env.KP_REFERENCE_THEME_SETTLE_MS || 1_500));
+    const accessState = await page.evaluate(() => ({
+      url: location.href,
+      title: document.title,
+      text: String(document.body?.innerText || "").replace(/\s+/g, " ").slice(0, 700),
+    }));
+    const accessText = `${accessState.title} ${accessState.text} ${accessState.url}`.toLowerCase();
+    if (/showcaptcha|captcha|not a robot|access to our service has been temporarily blocked|access denied|forbidden|too many requests|cf-chl-|challenge-platform|verify you are human/.test(accessText)) {
+      throw new Error("reference website returned an anti-bot or access-denied page");
+    }
     const snapshot = await page.evaluate(() => {
       const selectors = [
-        "html", "body", "header", "nav", "main", "section", "footer", "h1", "h2", "h3", "p", "li", "span", "a", "button",
-        "[class*=btn]", "[class*=button]", "[class*=primary]", "[class*=brand]", "[class*=accent]", "[class*=card]",
+        "[class*=brand]", "[class*=logo]", "[class*=primary]", "[class*=secondary]", "[class*=accent]", "[class*=promo]",
+        "[class*=sale]", "[class*=discount]", "[class*=success]", "[class*=danger]", "[class*=warning]", "[role=button]",
+        "button", "svg", "svg path", "svg circle", "svg rect", "header", "nav", "main", "section", "footer", "h1", "h2", "h3",
+        "a", "p", "li", "span", "html", "body",
+        "[class*=btn]", "[class*=button]", "[class*=card]",
       ];
-      const nodes = [...new Set(selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector)).slice(0, 60)))].slice(0, 240);
+      const priorityNodes = selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector)).slice(0, 90));
+      const generalNodes = Array.from(document.querySelectorAll("body *")).filter((node, index) => index < 900);
+      const nodes = [...new Set([...priorityNodes, ...generalNodes])].slice(0, 640);
       const rows = [];
-      for (const node of nodes) {
+      const pushRow = (node, pseudo = "") => {
         const rect = node.getBoundingClientRect();
-        if (rect.width < 1 || rect.height < 1 || rect.bottom < 0 || rect.top > innerHeight * 2) continue;
-        const style = getComputedStyle(node);
-        if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity || 1) < 0.05) continue;
+        if (rect.width < 1 || rect.height < 1 || rect.bottom < 0 || rect.top > innerHeight * 2.5) return;
+        const style = getComputedStyle(node, pseudo || null);
+        if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity || 1) < 0.05) return;
+        if (pseudo && (!style.content || style.content === "none" || style.content === "normal")) return;
         rows.push({
           tag: node.tagName.toLowerCase(),
           role: node.getAttribute("role") || "",
-          className: String(node.className || "").slice(0, 180),
+          id: String(node.id || "").slice(0, 100),
+          className: String(node.className?.baseVal || node.className || "").slice(0, 220),
+          ariaLabel: String(node.getAttribute("aria-label") || "").slice(0, 140),
+          pseudo,
           area: Math.round(Math.min(innerWidth * innerHeight, rect.width * rect.height)),
           textLength: String(node.textContent || "").trim().slice(0, 500).length,
           color: style.color,
           backgroundColor: style.backgroundColor,
           borderColor: style.borderColor,
+          outlineColor: style.outlineColor,
+          fill: style.fill,
+          stroke: style.stroke,
           fontFamily: style.fontFamily,
           fontWeight: Number.parseInt(style.fontWeight, 10) || 400,
         });
+      };
+      for (const node of nodes) {
+        pushRow(node);
+        if (rows.length < 620) pushRow(node, "::before");
+        if (rows.length < 630) pushRow(node, "::after");
+        if (rows.length >= 640) break;
       }
-      const themeColor = document.querySelector("meta[name='theme-color']")?.getAttribute("content");
-      return { url: location.href, themeColor: themeColor || "", rows };
+      const cssVariables = [];
+      const styleColors = [];
+      const logoColors = [];
+      const seenVariables = new Set();
+      const seenStyleColors = new Set();
+      const addVariable = (name, value) => {
+        const safeName = String(name || "").trim();
+        const safeValue = String(value || "").trim();
+        const key = `${safeName}:${safeValue}`;
+        if (!safeName.startsWith("--") || !safeValue || seenVariables.has(key)) return;
+        if (!/brand|primary|secondary|accent|theme|main|success|positive|warning|danger|error|critical/i.test(safeName)) return;
+        seenVariables.add(key);
+        cssVariables.push({ name: safeName.slice(0, 140), value: safeValue.slice(0, 240) });
+      };
+      const rootStyle = getComputedStyle(document.documentElement);
+      for (const property of rootStyle) addVariable(property, rootStyle.getPropertyValue(property));
+      const inspectRules = (rules) => {
+        for (const rule of Array.from(rules || []).slice(0, 500)) {
+          if (rule.style) {
+            for (const property of rule.style) addVariable(property, rule.style.getPropertyValue(property));
+            const selector = String(rule.selectorText || "");
+            if (/brand|logo|primary|secondary|accent|promo|sale|discount|danger|error|critical|success|positive|warning|badge|price|gold|yellow|red|green/i.test(selector)) {
+              for (const property of ["color", "background", "background-color", "border-color", "outline-color", "fill", "stroke"]) {
+                const value = rule.style.getPropertyValue(property);
+                const key = `${selector}:${property}:${value}`;
+                if (!value || seenStyleColors.has(key)) continue;
+                seenStyleColors.add(key);
+                styleColors.push({ selector: selector.slice(0, 220), property, value: value.slice(0, 260) });
+              }
+            }
+          }
+          if (rule.cssRules) inspectRules(rule.cssRules);
+          if (cssVariables.length >= 240 && styleColors.length >= 320) return;
+        }
+      };
+      for (const sheet of Array.from(document.styleSheets).slice(0, 40)) {
+        try {
+          inspectRules(sheet.cssRules);
+        } catch {}
+        if (cssVariables.length >= 240 && styleColors.length >= 320) break;
+      }
+      const logoBuckets = new Map();
+      const logoImages = [...new Set([
+        ...document.querySelectorAll("img[class*=logo],img[alt*=logo i],img[src*=logo i],header [class*=logo] img,nav [class*=logo] img"),
+      ])].filter((image) => {
+        const rect = image.getBoundingClientRect();
+        return rect.width >= 16 && rect.height >= 12 && rect.top >= -120 && rect.top <= innerHeight * 0.6;
+      }).slice(0, 12);
+      for (const image of logoImages) {
+        if (!image.complete || !image.naturalWidth || !image.naturalHeight) continue;
+        const scale = Math.min(1, 240 / Math.max(image.naturalWidth, image.naturalHeight));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        if (!context) continue;
+        try {
+          context.drawImage(image, 0, 0, canvas.width, canvas.height);
+          const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+          const step = Math.max(4, Math.floor(pixels.length / 30_000 / 4) * 4);
+          for (let index = 0; index < pixels.length; index += step) {
+            const red = pixels[index];
+            const green = pixels[index + 1];
+            const blue = pixels[index + 2];
+            const alpha = pixels[index + 3];
+            const max = Math.max(red, green, blue);
+            const min = Math.min(red, green, blue);
+            if (alpha < 96 || max - min < 28 || max < 35 || min > 235) continue;
+            const key = `${Math.round(red / 16) * 16},${Math.round(green / 16) * 16},${Math.round(blue / 16) * 16}`;
+            const bucket = logoBuckets.get(key) || { red: 0, green: 0, blue: 0, count: 0 };
+            bucket.red += red;
+            bucket.green += green;
+            bucket.blue += blue;
+            bucket.count += 1;
+            logoBuckets.set(key, bucket);
+          }
+        } catch {}
+      }
+      const rankedLogoColors = [...logoBuckets.values()]
+        .filter((bucket) => bucket.count >= 2)
+        .sort((left, right) => right.count - left.count);
+      for (const bucket of rankedLogoColors) {
+        const rgb = {
+          red: Math.round(bucket.red / bucket.count),
+          green: Math.round(bucket.green / bucket.count),
+          blue: Math.round(bucket.blue / bucket.count),
+        };
+        const distanceFromExisting = logoColors.every((row) => {
+          const match = row.color.match(/^#(..)(..)(..)$/);
+          if (!match) return true;
+          const existing = match.slice(1).map((value) => Number.parseInt(value, 16));
+          const distance = Math.sqrt(
+            ((rgb.red - existing[0]) ** 2)
+            + ((rgb.green - existing[1]) ** 2)
+            + ((rgb.blue - existing[2]) ** 2),
+          ) / 441.7;
+          return distance >= 0.12;
+        });
+        if (!distanceFromExisting) continue;
+        const color = `#${[rgb.red, rgb.green, rgb.blue].map((value) => value.toString(16).padStart(2, "0")).join("").toUpperCase()}`;
+        logoColors.push({ color, count: bucket.count });
+        if (logoColors.length >= 6) break;
+      }
+      const themeColor = Array.from(document.querySelectorAll("meta[name='theme-color']"))
+        .map((node) => node.getAttribute("content"))
+        .find(Boolean);
+      return { url: location.href, themeColor: themeColor || "", rows, cssVariables, styleColors, logoColors };
     });
-    return deriveReferenceThemeFromSnapshot(snapshot, { referenceUrl: normalizedUrl });
+    const screenshot = await page.screenshot({
+      type: "jpeg",
+      quality: 68,
+      fullPage: false,
+      animations: "disabled",
+    });
+    const analysis = analyzeReferenceThemeSnapshot(snapshot, { referenceUrl: normalizedUrl });
+    const decision = await classifyBrandPaletteWithAi({
+      screenshot,
+      candidates: analysis.candidates,
+      referenceUrl: normalizedUrl,
+    }, {
+      env,
+      client: options.client || null,
+    });
+    return themeWithPaletteSelection(analysis, decision);
   } catch (error) {
-    throw new Error(`Brand URL palette extraction failed for ${hostLabel(normalizedUrl)}: ${safeText(error.message, 180)}`);
+    const captureFailure = safeText(error.message, 180);
+    const domainDecision = await classifyBrandPaletteFromDomainWithAi({
+      referenceUrl: normalizedUrl,
+      captureFailure,
+    }, {
+      env,
+      client: options.client || null,
+    });
+    if (domainDecision.applied) {
+      return themeFromDomainPaletteDecision(domainDecision, { captureFailure });
+    }
+    const domainFallbackReason = domainDecision.reason
+      ? `; AI domain fallback was not applied (${safeText(domainDecision.reason, 80)})`
+      : "";
+    throw new Error(`Brand URL palette extraction failed for ${hostLabel(normalizedUrl)}: ${captureFailure}${domainFallbackReason}`);
   } finally {
     if (browser) await browser.close();
   }
@@ -1189,7 +2086,32 @@ async function themeFromBrandAttachments(evidenceBundle = null) {
   return { themeTokens: {}, source: null, warnings };
 }
 
+function resolvedUrlTheme(kind, url, themeTokens, warnings = []) {
+  const paletteSelection = themeTokens?.paletteSelection || { mode: "deterministic", aiAttempted: false };
+  const nextWarnings = [...warnings];
+  if (paletteSelection.mode === "ai_domain_fallback") {
+    nextWarnings.push(`Direct website palette extraction was unavailable (${safeText(paletteSelection.captureFailure || "access blocked", 120)}); AI domain knowledge supplied the provisional colors.`);
+  } else if (paletteSelection.aiAttempted && paletteSelection.mode !== "ai_vision") {
+    nextWarnings.push(`AI palette classification was not accepted (${safeText(paletteSelection.reason || "unknown", 120)}); deterministic website colors were retained.`);
+  }
+  return {
+    themeTokens,
+    themeSource: {
+      kind: paletteSelection.mode === "ai_domain_fallback" ? "ai_domain_fallback" : kind,
+      reference: url,
+      paletteSelection,
+    },
+    themeWarnings: nextWarnings,
+    referenceUrl: url,
+  };
+}
+
 async function resolveKpBrandTheme({ options = {}, groundedBrief = {}, preliminaryLinks = {}, progress = async () => {} } = {}) {
+  const env = options.env || process.env;
+  if (!dynamicColorPalettesEnabled(env)) {
+    await progress("Dynamic website palettes are off; Udevs screenshot colors and background are applied.");
+    return udevsStaticThemeResult();
+  }
   const explicit = normalizedExplicitThemeTokens(options.themeTokens);
   const warnings = [...explicit.warnings];
   if (Object.keys(explicit.tokens).length) {
@@ -1216,13 +2138,8 @@ async function resolveKpBrandTheme({ options = {}, groundedBrief = {}, prelimina
   for (const url of uniqueUrls(brandUrls)) {
     try {
       await progress(`Reference brand ranglari olinmoqda: ${hostLabel(url)}.`);
-      const themeTokens = await extractReferenceTheme(url);
-      return {
-        themeTokens,
-        themeSource: { kind: "brand_url", reference: url },
-        themeWarnings: warnings,
-        referenceUrl: url,
-      };
+      const themeTokens = await extractReferenceTheme(url, { env, client: options.paletteAiClient || null });
+      return resolvedUrlTheme("brand_url", url, themeTokens, warnings);
     } catch (error) {
       const warning = safeThemeWarningReason(error, [url]);
       warnings.push(`Brand URL ${hostLabel(url)} palette extraction failed; fallback continued. ${warning}`);
@@ -1255,14 +2172,9 @@ async function resolveKpBrandTheme({ options = {}, groundedBrief = {}, prelimina
   for (const url of uniqueUrls(analogUrls)) {
     try {
       await progress(`Brand evidence yo'q; analog ranglari olinmoqda: ${hostLabel(url)}.`);
-      const themeTokens = await extractReferenceTheme(url);
+      const themeTokens = await extractReferenceTheme(url, { env, client: options.paletteAiClient || null });
       warnings.push(`No explicit brand palette was available; ${hostLabel(url)} was used as a provisional analog palette.`);
-      return {
-        themeTokens,
-        themeSource: { kind: "analog_url", reference: url },
-        themeWarnings: warnings,
-        referenceUrl: url,
-      };
+      return resolvedUrlTheme("analog_url", url, themeTokens, warnings);
     } catch (error) {
       const warning = safeThemeWarningReason(error, [url]);
       warnings.push(`Analog URL ${hostLabel(url)} palette extraction failed; fallback continued. ${warning}`);
@@ -1286,14 +2198,9 @@ async function resolveKpBrandTheme({ options = {}, groundedBrief = {}, prelimina
   for (const url of uniqueUrls(remainingUrls)) {
     try {
       await progress(`Reference sayt ranglari olinmoqda: ${hostLabel(url)}.`);
-      const themeTokens = await extractReferenceTheme(url);
+      const themeTokens = await extractReferenceTheme(url, { env, client: options.paletteAiClient || null });
       warnings.push(`No explicit brand palette was available; ${hostLabel(url)} from the request was used as a provisional palette source.`);
-      return {
-        themeTokens,
-        themeSource: { kind: "client_site_url", reference: url },
-        themeWarnings: warnings,
-        referenceUrl: url,
-      };
+      return resolvedUrlTheme("client_site_url", url, themeTokens, warnings);
     } catch (error) {
       const warning = safeThemeWarningReason(error, [url]);
       warnings.push(`Request URL ${hostLabel(url)} palette extraction failed; fallback continued. ${warning}`);
@@ -1302,11 +2209,11 @@ async function resolveKpBrandTheme({ options = {}, groundedBrief = {}, prelimina
   }
 
   if (rawBrandUrls.length || rawAnalogUrls.length || remainingUrls.length || (options.evidenceBundle?.files || []).some((file) => isLikelyBrandAttachment(file, options.evidenceBundle))) {
-    warnings.push("No usable brand accent could be derived; the default premium theme was applied.");
+    warnings.push("No usable site palette could be derived; the Udevs palette was applied.");
   }
   return {
-    themeTokens: {},
-    themeSource: { kind: "default", reference: "Udevs premium fallback" },
+    themeTokens: udevsFallbackTheme(),
+    themeSource: { kind: "udevs_fallback", reference: "https://udevs.io/" },
     themeWarnings: warnings,
     referenceUrl: brandUrls[0] || analogUrls[0] || remainingUrls[0] || "",
   };
@@ -8257,7 +9164,7 @@ async function buildKpiPdfReportLegacy(question = "KP PDF generation", progress 
     });
     await progress("KP commercial proposal PDF render qilinyapti.");
     failureStage = "browser_launch";
-    const browser = await chromium.launch({ headless: true });
+    const browser = await launchKpChromium({ headless: true });
     try {
       const page = await browser.newPage({ viewport: { width: 1440, height: 960 }, deviceScaleFactor: 1 });
       failureStage = "dom_render";
@@ -8391,6 +9298,7 @@ export async function buildKpiPdfReport(question = "KP PDF generation", progress
 
 async function buildKpiPdfReportV5(question = "KP PDF generation", progress = async () => {}, options = {}) {
   const config = options.config || resolveKpPdfConfig(options.env || process.env);
+  const dynamicPalettes = dynamicColorPalettesEnabled(options.env || process.env);
   await progress("KP v5: request workspace tayyorlanyapti.");
   const requestContext = normalizeV5RequestContext(options.requestContext, { question, config });
   const referenceMode = options.storedEvidenceBundle?.selectionTrace?.mode || requestContext.routing?.referenceModeHint || "none";
@@ -8416,7 +9324,9 @@ async function buildKpiPdfReportV5(question = "KP PDF generation", progress = as
     || groundedBriefForTheme.analog?.url?.value
     || (preliminaryThemeLinks.urls || []).length,
   );
-  if (!suppliedStyleProfile && referenceMode === "none" && hasUrlThemeReference) {
+  if (!dynamicPalettes) {
+    analogTheme = udevsStaticThemeResult();
+  } else if (!suppliedStyleProfile && referenceMode === "none" && hasUrlThemeReference) {
     analogTheme = await resolveKpBrandTheme({
       options,
       groundedBrief: groundedBriefForTheme,
@@ -8424,7 +9334,10 @@ async function buildKpiPdfReportV5(question = "KP PDF generation", progress = as
       progress,
     });
   }
-  const styleProfile = normalizeV5StyleProfile(suppliedStyleProfile, { referenceMode, analogTheme });
+  const normalizedStyleProfile = normalizeV5StyleProfile(suppliedStyleProfile, { referenceMode, analogTheme });
+  const styleProfile = dynamicPalettes
+    ? normalizedStyleProfile
+    : applyUdevsScreenshotVisualSystem(normalizedStyleProfile);
   const visualReferences = {
     manifestId: options.manifest?.manifestId || null,
     manifestPath: options.manifest ? "contracts/evidence-manifest.json" : null,
@@ -8438,12 +9351,15 @@ async function buildKpiPdfReportV5(question = "KP PDF generation", progress = as
 
   status = await setStatus(workspace, status, "planning", { progress: 20 });
   const v3Base = normalizeLegacyModelForV5(legacyModel, requestContext.requestId);
-  if (["analog_url", "brand_url", "client_site_url"].includes(analogTheme?.themeSource?.kind)) {
+  if (["analog_url", "brand_url", "client_site_url", "ai_domain_fallback"].includes(analogTheme?.themeSource?.kind)) {
+    const domainFallback = analogTheme.themeSource.kind === "ai_domain_fallback";
     v3Base.brandProfile = {
       ...(v3Base.brandProfile || {}),
       themeSource: analogTheme.themeSource,
       themeWarnings: analogTheme.themeWarnings || [],
-      sourceStatus: "provisional_reference_palette_and_typography",
+      sourceStatus: domainFallback
+        ? "provisional_ai_domain_palette"
+        : "provisional_reference_palette_and_typography",
     };
   }
   v3Base.documentMetadata = {
@@ -8553,7 +9469,7 @@ async function buildKpiPdfReportV5(question = "KP PDF generation", progress = as
   const htmlPath = path.join(workspace, "candidate", "proposal.html");
   const candidatePdfPath = path.join(workspace, "candidate", "proposal.candidate.pdf");
   await fs.writeFile(htmlPath, html, "utf8");
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchKpChromium({ headless: true });
   let domQa;
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 960 }, deviceScaleFactor: 1 });
@@ -8598,6 +9514,18 @@ async function buildKpiPdfReportV5(question = "KP PDF generation", progress = as
       rolloutEpoch: config.rolloutEpoch,
       htmlPath,
       outputMode: "html",
+      themeSource: analogTheme?.themeSource || { kind: "udevs_fallback", reference: "https://udevs.io/" },
+      referenceUrl: analogTheme?.referenceUrl || "",
+      themeWarnings: analogTheme?.themeWarnings || styleProfile.warnings || [],
+      themeTokens: {
+        primary: styleProfile.accents.decorativePrimary || styleProfile.accents.primary,
+        secondary: styleProfile.accents.decorativeSecondary || styleProfile.accents.secondary,
+        // The active renderer is intentionally two-color: secondary replaces
+        // the previously exposed accent role.
+        accent: styleProfile.accents.decorativeSecondary || styleProfile.accents.secondary,
+        background: styleProfile.canvas.background,
+        surface: styleProfile.canvas.surface1,
+      },
     },
   };
 }
@@ -9019,10 +9947,10 @@ export function normalizeV5StyleProfile(profile = null, { referenceMode = "none"
     error.retryable = false;
     throw error;
   }
-  const tokens = analogTheme?.themeTokens || {};
-  const sourceKind = analogTheme?.themeSource?.kind || "default";
-  const urlDriven = Boolean(["analog_url", "brand_url", "client_site_url"].includes(sourceKind) && parseCssColor(tokens.brand || tokens.primary));
-  const canvasColor = parseCssColor(tokens.canvas || "#0A0A10");
+  const tokens = analogTheme?.themeTokens || udevsFallbackTheme();
+  const sourceKind = analogTheme?.themeSource?.kind || "udevs_fallback";
+  const urlDriven = Boolean(["analog_url", "brand_url", "client_site_url", "ai_domain_fallback"].includes(sourceKind) && parseCssColor(tokens.brand || tokens.primary));
+  const canvasColor = parseCssColor(tokens.canvas || "#0D1117");
   const canvasMode = relativeRgbLuminance(canvasColor) < 0.42 ? "dark" : "light";
   const hasReferenceTypography = Boolean(tokens.displayStack || tokens.bodyStack);
   const fallbackFields = urlDriven
@@ -9040,20 +9968,23 @@ export function normalizeV5StyleProfile(profile = null, { referenceMode = "none"
     referenceIds: [],
     confidence: urlDriven ? (hasReferenceTypography ? 0.82 : 0.7) : 0.35,
     canvas: {
-      mode: urlDriven ? canvasMode : "dark",
-      background: tokens.canvas || "#0A0A10",
-      surface1: tokens.surface1 || "#17141F",
-      surface2: tokens.surface2 || tokens.brandTint || "#241B3D",
-      textPrimary: tokens.textPrimary || "#F2EFE6",
-      textSecondary: tokens.textSecondary || "#A39CAD",
-      rule: tokens.rule || "#342D42",
+      mode: canvasMode,
+      background: tokens.canvas || "#0D1117",
+      surface1: tokens.surface1 || "#151B24",
+      surface2: tokens.surface2 || tokens.brandTint || "#10295A",
+      textPrimary: tokens.textPrimary || "#FFFFFF",
+      textSecondary: tokens.textSecondary || "#B7C2D0",
+      rule: tokens.rule || "#2B3542",
     },
     accents: {
-      primary: tokens.brand || tokens.primary || "#7C5CFF",
-      secondary: tokens.secondary || tokens.brandDeep || "#A78BFA",
-      positive: tokens.positive || "#4ED9A4",
-      warning: tokens.warning || "#D9A94E",
-      critical: tokens.critical || "#F0705A",
+      primary: tokens.brand || tokens.primary || "#0052FF",
+      secondary: tokens.secondary || tokens.brandDeep || "#FFFFFF",
+      positive: tokens.positive || tokens.brandDeep || "#8AB0FF",
+      warning: tokens.warning || tokens.textPrimary || "#FFFFFF",
+      critical: tokens.critical || tokens.brandDeep || "#8AB0FF",
+      decorativePrimary: tokens.decorativePrimary || tokens.brand || tokens.primary || "#0052FF",
+      decorativeSecondary: tokens.decorativeSecondary || tokens.secondary || tokens.textPrimary || "#0D1117",
+      decorativeTertiary: tokens.decorativeTertiary || tokens.critical || tokens.brandDeep || "#FFFFFF",
     },
     typography: {
       displayStack: normalizedReferenceFontStack(tokens.displayStack, "Arial, Helvetica, sans-serif"),
@@ -9066,13 +9997,32 @@ export function normalizeV5StyleProfile(profile = null, { referenceMode = "none"
     },
     // The URL controls brand expression only. Layout, spacing, borders,
     // radii and page composition remain renderer-owned design decisions.
-    layout: { families: ["cover_asymmetric", "editorial_split", "connected_graph", "evidence_table", "timeline", "commercial_hero", "decision_close"], density: "balanced", alignment: "left_editorial", gridColumns: 12, whitespaceRatio: 0.4 },
+    layout: {
+      families: ["cover_asymmetric", "editorial_split", "connected_graph", "evidence_table", "timeline", "commercial_hero", "decision_close"],
+      density: "balanced",
+      alignment: "left_editorial",
+      gridColumns: 12,
+      whitespaceRatio: 0.4,
+      backgroundStyle: ["udevs_static", "udevs_fallback"].includes(sourceKind) ? "udevs_screenshot" : "dynamic_brand",
+    },
     components: {},
     diagramGrammar: {},
     provenance: urlDriven ? [{ sourceKind, source: analogTheme.themeSource.reference, aspects: hasReferenceTypography ? ["palette", "typography"] : ["palette"] }] : [],
     fallbackFields,
     conflicts: [],
-    warnings: urlDriven ? [...(analogTheme.themeWarnings || []), "Reference URL colors and typography are provisional; layout and component geometry remain the proposal renderer's own system."] : [],
+    warnings: urlDriven
+      ? [
+          ...(analogTheme.themeWarnings || []),
+          hasReferenceTypography
+            ? "Reference URL colors and typography are provisional; layout and component geometry remain the proposal renderer's own system."
+            : "Reference URL colors are provisional; typography, layout, and component geometry remain the proposal renderer's own system.",
+        ]
+      : [
+          ...(analogTheme?.themeWarnings || []),
+          analogTheme?.referenceUrl
+            ? "The client website palette was unavailable; the Udevs palette was applied."
+            : "No client website was supplied; the Udevs palette was applied.",
+        ],
   };
   return fallback;
 }

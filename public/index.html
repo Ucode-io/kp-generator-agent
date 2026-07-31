@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KP Generator API Test</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0d1117;
+      color: #f8fafc;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; background: #0d1117; }
+    main { width: min(1560px, calc(100% - 24px)); margin: 24px auto 48px; }
+    h1 { margin: 0; font-size: clamp(24px, 4vw, 40px); letter-spacing: -.04em; }
+    .lead { margin: 8px 0 24px; color: #94a3b8; }
+    form, .result { border: 1px solid #273244; border-radius: 16px; background: #141b25; }
+    form { display: grid; grid-template-columns: minmax(0, 1fr) 180px; gap: 14px; padding: 18px; }
+    label { display: grid; gap: 7px; color: #cbd5e1; font-size: 13px; font-weight: 700; }
+    label:first-child { grid-column: 1 / -1; }
+    textarea, input, select, button {
+      width: 100%;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      background: #0d1117;
+      color: #f8fafc;
+      font: inherit;
+    }
+    textarea { min-height: 112px; resize: vertical; padding: 13px; line-height: 1.45; }
+    input, select, button { min-height: 44px; padding: 0 12px; }
+    .toggle-field { align-content: end; }
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      min-height: 44px;
+      gap: 10px;
+      padding: 0 12px;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      background: #0d1117;
+      color: #f8fafc;
+      font-weight: 600;
+    }
+    .toggle-row input { width: 18px; min-height: 18px; margin: 0; accent-color: #0052ff; }
+    button { align-self: end; border-color: #0052ff; background: #0052ff; font-weight: 800; cursor: pointer; }
+    button:disabled { cursor: wait; opacity: .6; }
+    .status { min-height: 24px; margin: 14px 2px; color: #94a3b8; font-size: 14px; }
+    .status.error { color: #fb7185; }
+    .result { display: none; overflow: hidden; }
+    .result.visible { display: block; }
+    .result-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; padding: 16px 18px; border-bottom: 1px solid #273244; }
+    .meta { display: grid; gap: 4px; }
+    .meta strong { font-size: 15px; }
+    .meta span { color: #94a3b8; font-size: 12px; overflow-wrap: anywhere; }
+    .palette { display: flex; flex-wrap: wrap; gap: 8px; }
+    .swatch { min-width: 92px; overflow: hidden; border: 1px solid #334155; border-radius: 9px; background: #0d1117; }
+    .swatch-color { height: 30px; }
+    .swatch-label { display: block; padding: 5px 7px; color: #cbd5e1; font: 11px/1.2 ui-monospace, monospace; }
+    .preview-stage {
+      position: relative;
+      width: 100%;
+      height: clamp(680px, 86vh, 1080px);
+      overflow: hidden;
+      background: #fff;
+    }
+    iframe {
+      position: absolute;
+      top: 0;
+      left: 0;
+      display: block;
+      width: 1460px;
+      border: 0;
+      background: white;
+      transform: scale(var(--preview-scale, 1));
+      transform-origin: top left;
+    }
+    @media (max-width: 720px) {
+      form { grid-template-columns: 1fr; }
+      label:first-child { grid-column: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>KP Generator API Test</h1>
+    <p class="lead">Динамические палитры по умолчанию выключены: любой домен получает палитру и фон Udevs со скриншота.</p>
+    <form id="generator-form">
+      <label>
+        Промпт
+        <textarea id="prompt" required>Сделай мне маркетплейс КП для https://uzum.uz/ бюджет 100$к 3 месяца</textarea>
+      </label>
+      <label>
+        KP_AGENT_API_KEY (если включён)
+        <input id="api-key" type="password" autocomplete="off" placeholder="Ключ из .env, не пользовательский JWT">
+      </label>
+      <label>
+        Язык
+        <select id="locale">
+          <option value="ru-RU">Русский</option>
+          <option value="uz-Latn">O‘zbekcha</option>
+          <option value="en">English</option>
+        </select>
+      </label>
+      <label class="toggle-field">
+        Динамические палитры сайта
+        <span class="toggle-row">
+          <input id="dynamic-palettes" type="checkbox">
+          <span id="dynamic-palettes-label">Off — использовать стиль Udevs</span>
+        </span>
+      </label>
+      <button id="submit" type="submit">Сгенерировать</button>
+    </form>
+    <div id="status" class="status" role="status"></div>
+    <section id="result" class="result" aria-live="polite">
+      <div class="result-head">
+        <div class="meta">
+          <strong id="result-title">Готово</strong>
+          <span id="result-source"></span>
+        </div>
+        <div id="palette" class="palette"></div>
+      </div>
+      <div id="preview-stage" class="preview-stage">
+        <iframe id="preview" title="Сгенерированное коммерческое предложение"></iframe>
+      </div>
+    </section>
+  </main>
+  <script>
+    const form = document.querySelector("#generator-form");
+    const submit = document.querySelector("#submit");
+    const status = document.querySelector("#status");
+    const result = document.querySelector("#result");
+    const previewStage = document.querySelector("#preview-stage");
+    const preview = document.querySelector("#preview");
+    const palette = document.querySelector("#palette");
+    const resultTitle = document.querySelector("#result-title");
+    const resultSource = document.querySelector("#result-source");
+    const dynamicPalettes = document.querySelector("#dynamic-palettes");
+    const dynamicPalettesLabel = document.querySelector("#dynamic-palettes-label");
+
+    dynamicPalettes.addEventListener("change", () => {
+      dynamicPalettesLabel.textContent = dynamicPalettes.checked
+        ? "On — брать палитру сайта"
+        : "Off — использовать стиль Udevs";
+    });
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      submit.disabled = true;
+      result.classList.remove("visible");
+      status.className = "status";
+      status.textContent = "Генерация запущена. Анализ сайта и сборка HTML могут занять несколько минут…";
+      const apiKey = document.querySelector("#api-key").value
+        .trim()
+        .replace(/^(?:Bearer\s+)+/i, "")
+        .trim();
+      try {
+        const response = await fetch("/v1/proposals", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+          },
+          body: JSON.stringify({
+            prompt: document.querySelector("#prompt").value.trim(),
+            locale: document.querySelector("#locale").value,
+            dynamicColorPalettesEnabled: dynamicPalettes.checked,
+          }),
+        });
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error?.message || `HTTP ${response.status}`);
+        }
+        resultTitle.textContent = payload.title || payload.requestId;
+        const source = payload.theme?.source;
+        const selection = source?.paletteSelection;
+        const selectionLabel = source?.kind === "udevs_static"
+          ? " · fixed Udevs screenshot system"
+          : ["ai_vision", "ai_domain_fallback"].includes(selection?.mode)
+          ? ` · AI ${selection.mode === "ai_domain_fallback" ? "domain " : ""}${selection.provider || ""}/${selection.model || ""}${Number.isFinite(selection.confidence) ? ` (${Math.round(selection.confidence * 100)}%)` : ""}`
+          : selection?.aiAttempted
+            ? ` · deterministic (${selection.reason || "AI fallback"})`
+            : " · deterministic";
+        resultSource.textContent = source
+          ? `Палитра: ${source.kind} · ${source.reference || payload.theme.referenceUrl || ""}${selectionLabel}`
+          : "Источник палитры не указан";
+        renderPalette(payload.theme?.palette || {});
+        preview.srcdoc = payload.html || "";
+        result.classList.add("visible");
+        requestAnimationFrame(fitPreview);
+        status.textContent = `Готово · ${payload.pageCount || "—"} страниц · QA ${payload.qaStatus || "—"}`;
+      } catch (error) {
+        status.className = "status error";
+        status.textContent = error.message || String(error);
+      } finally {
+        submit.disabled = false;
+      }
+    });
+
+    function renderPalette(colors) {
+      const entries = [
+        ["primary", colors.primary],
+        ["secondary", colors.secondary],
+        ["accent", colors.accent],
+        ["background", colors.background],
+        ["surface", colors.surface],
+      ].filter((entry) => /^#[0-9a-f]{6}$/i.test(entry[1] || ""));
+      palette.replaceChildren(...entries.map(([label, color]) => {
+        const swatch = document.createElement("div");
+        swatch.className = "swatch";
+        const sample = document.createElement("div");
+        sample.className = "swatch-color";
+        sample.style.backgroundColor = color;
+        const caption = document.createElement("span");
+        caption.className = "swatch-label";
+        caption.textContent = `${label} ${color}`;
+        swatch.append(sample, caption);
+        return swatch;
+      }));
+    }
+
+    function fitPreview() {
+      const viewportWidth = 1460;
+      const availableWidth = Math.max(1, previewStage.clientWidth);
+      const scale = Math.min(1, availableWidth / viewportWidth);
+      previewStage.style.setProperty("--preview-scale", String(scale));
+      preview.style.height = `${Math.max(960, previewStage.clientHeight / scale)}px`;
+    }
+
+    preview.addEventListener("load", () => {
+      try {
+        preview.contentDocument.documentElement.style.overflowX = "hidden";
+        preview.contentDocument.body.style.overflowX = "hidden";
+      } catch {
+        // srcdoc is same-origin, but keep preview sizing resilient.
+      }
+      fitPreview();
+    });
+    new ResizeObserver(fitPreview).observe(previewStage);
+  </script>
+</body>
+</html>

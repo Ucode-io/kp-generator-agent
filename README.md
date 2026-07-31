@@ -28,8 +28,40 @@ python3 -m pip install pillow pypdf
 cp .env.example .env
 ```
 
-`OPENAI_API_KEY` is needed only for image/PDF style-reference analysis.
-Plain prompt-to-PDF generation works without it.
+`OPENAI_API_KEY` enables image/PDF style-reference analysis and AI-assisted
+website palette classification. For compatibility with the existing
+deployment, an Anthropic `sk-ant-*` key may remain in this historical variable;
+the palette classifier detects it automatically. `ANTHROPIC_API_KEY` is also
+supported and takes precedence for Anthropic.
+
+Dynamic website palettes are disabled by default:
+
+```env
+KP_DYNAMIC_COLOR_PALETTES_ENABLED=0
+```
+
+In this mode every proposal uses the fixed light Udevs palette and the
+screenshot-derived decorative background system, regardless of the domain in
+the prompt. Set the value to `1` or `on` to restore website palette detection.
+The HTTP request may override the environment for one generation with
+`"dynamicColorPalettesEnabled": true` or `false`.
+
+When dynamic palettes are enabled, website colors are extracted
+deterministically first; when the live page is readable, the model may only
+choose from those observed colors. If anti-bot protection prevents a live
+snapshot, the model can return a provisional palette from the public
+domain/brand identity. This second path is exposed as `ai_domain_fallback`;
+without an accepted AI result, the Udevs fallback remains.
+
+Set `KP_REFERENCE_PALETTE_AI_ENABLED=0` to disable AI palette classification.
+`KP_REFERENCE_PALETTE_AI_PROVIDER=auto` selects Anthropic for `sk-ant-*` keys
+and OpenAI otherwise. The model, confidence threshold, and timeout can be
+configured with `KP_REFERENCE_PALETTE_AI_MODEL`,
+`KP_REFERENCE_PALETTE_AI_MIN_CONFIDENCE`, and
+`KP_REFERENCE_PALETTE_AI_TIMEOUT_MS`. Domain-fallback acceptance and timeout
+can be configured separately with
+`KP_REFERENCE_PALETTE_AI_DOMAIN_MIN_CONFIDENCE` and
+`KP_REFERENCE_PALETTE_AI_DOMAIN_TIMEOUT_MS`.
 
 ## CLI
 
@@ -56,6 +88,11 @@ result.
 ```bash
 npm start
 ```
+
+Open `http://127.0.0.1:8787/` for the single-page API test frontend. It sends
+the prompt to `/v1/proposals`, exposes an Off/On control for dynamic website
+palettes, shows the active palette, and renders the returned proposal HTML in
+an iframe.
 
 Health:
 
@@ -91,6 +128,28 @@ Generate with an uploaded base64 reference:
 ```
 
 If `KP_AGENT_API_KEY` is set, send `Authorization: Bearer <key>`.
+
+## Website palette behavior
+
+- Every safe public URL in the prompt is treated as palette evidence.
+- The agent reads live CSS variables, `theme-color`, visible backgrounds,
+  buttons, brand/logo SVG colors, and promo/status accents.
+- The three strongest role-aware colors are passed to the renderer as
+  `primary`, `secondary`, and `accent`; page decorations and gradients use the
+  same tokens.
+- Backgrounds and decorative elements retain the selected brand colors. When
+  that pair is not readable as foreground/background, the text color is
+  dynamically lightened or darkened toward an accessible variant while
+  preserving the original brand hue whenever possible; neutral black/white is
+  used only when no hue-preserving variant clears the contrast gate.
+- Odd pages use `primary` as the background and `secondary` for content. Even
+  pages use a white background and `primary` for content; primary-colored text
+  is darkened dynamically when the original token is not readable on white.
+- There is no domain-to-color lookup table. If the website cannot be loaded,
+  the configured model may supply a provisional `ai_domain_fallback` palette.
+  If that result is unavailable or below the confidence threshold, the Udevs
+  palette is used. A prompt without a website always uses Udevs.
+- The API response exposes the applied values under `theme.palette`.
 
 ## Response
 
