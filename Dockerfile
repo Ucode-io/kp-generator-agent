@@ -1,17 +1,24 @@
-# KP Generator Agent — HTML-only mode (PDF render disabled, see scripts/kpi_pdf_client.mjs).
+# KP Generator Agent — deterministic Chromium PDF render plus post-render QA.
 # Base image ships Node 20+ and a Chromium build matching Playwright 1.61.
 # If this exact patch tag is unavailable, fall back to v1.61.0-jammy.
 FROM mcr.microsoft.com/playwright:v1.61.1-jammy
 
-# python3 is used by the optional KPI-summary extractor; the engine falls back
-# gracefully if it is absent, but installing it avoids the degraded path.
+# G5 PDF QA uses Poppler for page rasters and Python for text/font/image checks.
+# These are runtime requirements: without them a generated candidate cannot be
+# validated and therefore must not be promoted for download.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 \
+ && apt-get install -y --no-install-recommends python3 python3-pip poppler-utils \
  && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-pdf-qa.txt ./
+RUN python3 -m pip install --no-cache-dir --requirement requirements-pdf-qa.txt
+RUN pdftoppm -v >/dev/null 2>&1 \
+ && python3 -c "import PIL, pdfplumber, pypdf"
 
 ENV NODE_ENV=production \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     CODEX_PYTHON=python3 \
+    PDFTOPPM=/usr/bin/pdftoppm \
     KP_AGENT_HOST=0.0.0.0 \
     KP_AGENT_PORT=8787 \
     KP_DISABLE_WEB_RESEARCH=1 \

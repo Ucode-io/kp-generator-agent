@@ -25,7 +25,9 @@ spec:
       containers:
         - name: kp-generator-agent
           image: gitlab.udevs.io:5050/ucode/kp-generator-agent:latest   # set your built image
-          imagePullPolicy: IfNotPresent
+          # The deployment currently uses the mutable `latest` tag, therefore
+          # every rollout must fetch the rebuilt image containing PDF QA tools.
+          imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 8787

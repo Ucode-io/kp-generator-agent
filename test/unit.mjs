@@ -36,6 +36,10 @@ assert.equal(dynamicColorPalettesEnabled({ KP_DYNAMIC_COLOR_PALETTES_ENABLED: "1
 assert.equal(dynamicColorPalettesEnabled({ KP_DYNAMIC_COLOR_PALETTES_ENABLED: "on" }), true);
 assert.ok((await fs.stat(path.join(AGENT_ROOT, "scripts", "kpi_pdf_client.mjs"))).isFile());
 assert.ok((await fs.stat(path.join(AGENT_ROOT, "schemas", "kp", "request-context-v1.schema.json"))).isFile());
+const dockerfile = await fs.readFile(path.join(AGENT_ROOT, "Dockerfile"), "utf8");
+assert.ok(dockerfile.includes("poppler-utils"));
+assert.ok(dockerfile.includes("requirements-pdf-qa.txt"));
+assert.ok(dockerfile.includes("PDFTOPPM=/usr/bin/pdftoppm"));
 const manifest = JSON.parse(await fs.readFile(path.join(AGENT_ROOT, "engine-manifest.json"), "utf8"));
 assert.ok(manifest.files.length >= 50);
 const normalizedProfile = normalizeProfileContrast({

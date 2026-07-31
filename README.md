@@ -23,8 +23,9 @@ project can call it through HTTP or run it as a CLI process.
 cd kp-generator-agent
 npm install
 npx playwright install chromium
-python3 -m pip install pillow pypdf
-# PDF reference files additionally need pdftoppm (macOS: brew install poppler)
+python3 -m pip install --requirement requirements-pdf-qa.txt
+# Every generated PDF is raster-checked with pdftoppm.
+# macOS: brew install poppler; Debian/Ubuntu: apt-get install poppler-utils
 cp .env.example .env
 ```
 
