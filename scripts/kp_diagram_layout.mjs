@@ -437,15 +437,17 @@ function bpmnExceptionRouteEdges(spec) {
 
 export function layoutArchitecture(spec, canvas) {
   const nodes = {};
-  const legendHeight = 72;
-  const labelWidth = 184;
-  const contentX = labelWidth + 22;
-  const contentWidth = canvas.width - contentX - 24;
-  const layerHeight = (canvas.height - legendHeight) / ARCHITECTURE_LAYER_DEFINITIONS.length;
+  // The proposal reference presents architecture as a centered vertical
+  // stack. Keep layer metadata for semantic QA, but reserve a compact heading
+  // band inside each layer instead of rendering a left-hand table column.
+  const headingHeight = 28;
+  const contentX = 150;
+  const contentWidth = canvas.width - contentX * 2;
+  const layerHeight = canvas.height / ARCHITECTURE_LAYER_DEFINITIONS.length;
   const architectureLayers = ARCHITECTURE_LAYER_DEFINITIONS.map((layer, index) => ({
     ...layer,
     x: 0,
-    y: legendHeight + index * layerHeight,
+    y: index * layerHeight,
     w: canvas.width,
     h: layerHeight,
   }));
@@ -453,9 +455,9 @@ export function layoutArchitecture(spec, canvas) {
     const layerNodes = (spec.nodes || []).filter((node) => architectureLayerIdForNode(node) === layer.id);
     placeArchitectureLayer(layerNodes, nodes, {
       x: contentX,
-      y: layer.y,
+      y: layer.y + headingHeight,
       width: contentWidth,
-      height: layer.h,
+      height: layer.h - headingHeight,
     });
   }
   const layout = buildLayout(spec, canvas, nodes);
@@ -749,23 +751,37 @@ function placeArchitectureLayer(items, nodes, area) {
   const gapX = 14;
   const gapY = 8;
   const innerHeight = Math.max(34, area.height - 24);
-  const nodeHeight = Math.min(52, Math.max(32, (innerHeight - gapY * Math.max(0, rows - 1)) / rows));
-  const nodeWidth = Math.min(210, Math.max(112, (area.width - gapX * Math.max(0, columns - 1)) / columns));
+  const nodeHeight = Math.min(44, Math.max(32, (innerHeight - gapY * Math.max(0, rows - 1)) / rows));
   const totalHeight = rows * nodeHeight + Math.max(0, rows - 1) * gapY;
   const startY = area.y + (area.height - totalHeight) / 2;
   for (let row = 0; row < rows; row += 1) {
     const rowItems = items.slice(row * columns, (row + 1) * columns);
-    const rowWidth = rowItems.length * nodeWidth + Math.max(0, rowItems.length - 1) * gapX;
+    const maxRowWidth = area.width - Math.max(0, rowItems.length - 1) * gapX;
+    const naturalWidths = rowItems.map((item) => architectureNodeWidth(item));
+    const naturalWidth = naturalWidths.reduce((sum, width) => sum + width, 0);
+    const scale = naturalWidth > maxRowWidth ? maxRowWidth / naturalWidth : 1;
+    const widths = naturalWidths.map((width) => Math.max(104, width * scale));
+    const rowWidth = widths.reduce((sum, width) => sum + width, 0) + Math.max(0, rowItems.length - 1) * gapX;
     const startX = area.x + (area.width - rowWidth) / 2;
+    let nodeX = startX;
     rowItems.forEach((item, column) => {
+      const nodeWidth = widths[column];
       nodes[item.id] = {
-        x: startX + column * (nodeWidth + gapX),
+        x: nodeX,
         y: startY + row * (nodeHeight + gapY),
         w: nodeWidth,
         h: nodeHeight,
       };
+      nodeX += nodeWidth + gapX;
     });
   }
+}
+
+function architectureNodeWidth(item) {
+  if (item?.type === "application") return 410;
+  if (item?.type === "service") return 160;
+  const labelLength = Array.from(String(item?.label || "")).length;
+  return Math.min(270, Math.max(112, 34 + labelLength * 6.6));
 }
 
 function routeArchitectureEdges(spec, nodes, canvas, layers) {

@@ -1,61 +1,68 @@
-**Comparison Target**
+# Design QA
 
-- Source visual truth:
-  - `assets/kp-backgrounds/udevs-cover-background.png`
-  - `assets/kp-backgrounds/udevs-content-background.png`
-  - These are the normalized background-only assets derived from the two user-provided screenshots. The requested scope intentionally excludes the screenshots' content layout.
-- Rendered implementation:
-  - `reports/design-qa/udevs-static-uzum-page-01.png`
-  - `reports/design-qa/udevs-static-uzum-page-02.png`
-- Generated HTML: `reports/design-qa/udevs-static-uzum.html`
-- Viewport: 1440 × 960 CSS px, desktop print state, device scale factor 1.
-- Source pixels: 1536 × 1024 each; implementation pixels: 1440 × 960 each. Both use the same 3:2 aspect ratio, so the source was proportionally scaled with no crop or density mismatch.
-- State: `KP_DYNAMIC_COLOR_PALETTES_ENABLED=0`, request domain `https://uzum.uz/`, Russian locale.
+## Comparison target
 
-**Findings**
+- Source visual truth: `/Users/nurmuhammad/Downloads/Texnomart Brend Taklifnomasi/Udevs Hamkorlik Taklifi.dc.html`.
+- Source captures: `tmp/ui-reference/page-01.png` through `tmp/ui-reference/page-10.png`.
+- Rendered implementation: `tmp/ui-implementation/after.html`.
+- Implementation captures: `tmp/ui-implementation/after-01.png` through `tmp/ui-implementation/after-10.png`.
+- Side-by-side comparisons: `tmp/ui-comparison/page-01-comparison.png` through `tmp/ui-comparison/page-10-comparison.png`.
+- Browser: the user's installed Google Chrome, device scale factor 1.
+- State: Russian 10-page marketplace proposal, static Udevs theme.
+- Reference pages render at approximately 1123 × 794 CSS px (A4 landscape). Generated pages retain the renderer's required 1440 × 960 CSS px contract. Full views were fit-normalized into equal comparison panes without cropping.
 
-- No actionable P0, P1, or P2 differences were found in the requested palette and background scope.
-- The cover preserves the white field, faint pale-blue square grid, large pale-blue upper-right circle, and soft lower blue haze.
-- Content pages preserve the white field, faint square grid, and restrained right/bottom blue glow.
-- The active tokens are `#0052FF` for primary elements, `#07080D` for visible text/secondary, `#666666` for muted text, and `#FFFFFF` for background/surfaces.
-- Automated DOM QA passed all 10 pages with no low-contrast, clipping, overflow, or shell-order findings.
-- [P3] Chromium used Arial and Menlo fallbacks because Inter and SFMono-Regular are not installed in the render environment. This does not affect the requested palette/background fidelity.
+## Findings
 
-**Open Questions**
+- No actionable P0, P1, or P2 visual differences remain.
+- [Resolved P1 · layout] Page 3 gateway diamond was clipped by the node wrapper. The gateway now renders outside the wrapper bounds and remains fully visible in the combined comparison.
+- [Resolved P1 · content hierarchy] Page 1 now uses the project name in the top-left header and the reference cover title/decision-document/description hierarchy.
+- [Resolved P1 · colors] The generated pages no longer inherit the dark blue screenshot wash. Cover, white-content, and soft-content pages use source-captured one-tone reference backgrounds.
+- [Resolved P1 · layout] Page 4 architecture changed from a left-labelled table to the reference's centered five-layer vertical stack with compact nodes and simple inter-layer arrows.
+- [Resolved P1 · layout] Page 6 uses the reference dependency summary, grouped rounded rows, three-column alignment, and status pills.
+- [Resolved P1 · layout] Page 8 uses fixed compact table rows, the reference column proportions, metric cards, peak-month emphasis, and solid-blue total row.
+- Typography now follows the reference hierarchy: Sora for display text and Work Sans for body and metadata. Both font families are embedded in the generated HTML.
+- The palette now uses `#1A54FE` as the primary blue, `#0A0A0F` for ink, `#6B6B6B` for secondary text, `#F7F8FC` for soft surfaces, and `#E4E9F7` for rules.
+- Page shells match the reference's compact uppercase header, small page counter, short blue title rule, generous white space, subtle blue grid/haze, and restrained borders and shadows.
+- Cover, product map, BPMN, architecture, org chart, client dependencies, budget, team, roadmap, and payment views use the matching reference treatment for their respective cards, tables, diagrams, summary blocks, and totals.
+- Client dependency state pills are localized and preserve their existing readiness data attributes.
+- [P3] The reference uses A4 landscape while the production renderer has a locked 3:2 page contract. The 3:2 geometry was intentionally preserved because the requested change is UI-only.
+- [P3] Text and diagram geometry differ where the generated proposal contains different semantic data from the static reference. No generation or business logic was changed to force a visual-only match.
 
-- None for the requested scope. Page content and component geometry intentionally remain renderer-owned.
+## Full-view comparison evidence
 
-**Full-view Comparison Evidence**
+- All ten source pages and all ten implementation pages were captured from the same proposal state.
+- Every source/implementation pair was placed together in a single normalized comparison image before judging fidelity.
+- Cover and content backgrounds preserve the same faint grid, upper-right blue haze, lower blue wash, and bottom blue edge.
+- Dense pages retain the source's light table treatment, while the total and peak rows use the same solid-blue emphasis.
 
-- Cover: the source cover asset and page 1 implementation were opened together and compared at the same aspect ratio. Decorative field placement, color balance, and edge treatment remain visible behind the proposal content.
-- Content: the source content asset and page 2 implementation were opened together and compared at the same aspect ratio. The grid remains subtle and the pale-blue wash does not reduce text readability.
+## Focused region evidence
 
-**Focused Region Comparison Evidence**
+- Cover: title hierarchy, eyebrow, supporting copy, metric cards, and decorative field.
+- Page 3 process: gateway diamond, exception caption, lane boundaries, and right-side return route.
+- Page 4 architecture: five centered layer headings, variable-width nodes, application-core emphasis, and vertical arrows.
+- Page 6 dependencies: summary metrics, grouped white rows, column alignment, and blue waiting pills.
+- Page 8 team table: card density, header alignment, fixed row rhythm, highlighted month, and total row.
+- Commercial pages: thin rules, compact columns, blue total rows, rounded payment stages, and large blue grand total.
 
-- Separate crops were not required because the source truth contains only large-scale background decoration; both the top-right and lower-edge decorative regions are clearly readable in the full 1440 × 960 captures.
+## Comparison history
 
-**Interaction and Runtime Checks**
+1. Initial implementation had oversized dashboard-like framing, fallback system fonts, heavier cards, and inconsistent commercial-page emphasis.
+2. The visual layer was replaced with the reference typography, palette, spacing, surface, and emphasis system while keeping page kinds, page count, content model, calculations, and visualization semantics unchanged.
+3. Visual review found an English `Waiting` pill on the Russian page; the presentation label was localized.
+4. DOM QA found a four-pixel payment-total overflow caused by the display-font line box; its line height was corrected without changing payment data.
+5. User review found a clipped page-3 diamond, incorrect page-1 header/copy hierarchy, blue page wash, and reference drift on pages 4, 6, and 8.
+6. The visual shell, architecture geometry, dependency layout, and team table density were corrected without changing proposal data, calculations, page selection, or generation semantics.
+7. All ten source/implementation pairs were re-captured and reviewed after the focused fixes.
 
-- The test frontend sends `dynamicColorPalettesEnabled: false` when the switch is Off.
-- A real HTTP request using a Texnomart prompt returned `theme.source.kind = udevs_static`, the fixed Udevs tokens, the raster background class, 10 pages, and `PASS_DOM_ONLY`.
-- Unit and end-to-end smoke tests passed.
+## Runtime and QA checks
 
-**Comparison History**
-
-- Initial rendered pass: no palette/background P0/P1/P2 mismatches. One implementation-only DOM issue was found before visual comparison: a background stacking rule changed footer positioning.
-- Fix: the background stacking rule now preserves the footer's absolute positioning while retaining the raster layer.
-- Post-fix evidence: smoke QA passed, both rendered screenshots were re-captured, and the source/implementation pairs were compared together.
-
-**Implementation Checklist**
-
-- [x] Fixed Udevs palette is the default.
-- [x] Dynamic palette switch exists globally and per request.
-- [x] Cover and content background assets are embedded in generated HTML.
-- [x] All static-mode pages use the light accessible composition.
-- [x] DOM contrast and overflow QA passes.
-
-**Follow-up Polish**
-
-- Install or bundle Inter if exact screenshot typography becomes part of the requested scope.
+- Generated page count: 10 / 10.
+- Semantic visualizations: 4 / 4.
+- UI hard-check: 10 / 10 pages passed.
+- DOM blockers: 0.
+- DOM errors: 0.
+- DOM warnings: 0.
+- Font resolution: Sora and Work Sans loaded from embedded assets; no fallback was used.
+- No clipping, overflow, broken-image, shell-order, or page-geometry findings remain.
 
 final result: passed

@@ -28,10 +28,22 @@ export const KP_PDF_REFERENCE_RENDERER_VERSION = "reference-driven-v5";
 const RENDERER_DIR = path.dirname(fileURLToPath(import.meta.url));
 const UDEVS_BACKGROUND_DIR = path.resolve(RENDERER_DIR, "..", "assets", "kp-backgrounds");
 const UDEVS_BACKGROUND_FILES = Object.freeze({
-  cover: "udevs-cover-background.png",
-  content: "udevs-content-background.png",
+  cover: "udevs-reference-cover-background.png",
+  content: "udevs-reference-content-white-background.png",
+  contentSoft: "udevs-reference-content-soft-background.png",
 });
 const backgroundDataUriCache = new Map();
+const KP_FONT_DIR = path.resolve(RENDERER_DIR, "..", "assets", "kp-fonts");
+const KP_FONT_FILES = Object.freeze({
+  "sora-400": "sora-400.ttf",
+  "sora-600": "sora-600.ttf",
+  "sora-700": "sora-700.ttf",
+  "sora-800": "sora-800.ttf",
+  "work-sans-400": "work-sans-400.ttf",
+  "work-sans-500": "work-sans-500.ttf",
+  "work-sans-600": "work-sans-600.ttf",
+});
+const fontDataUriCache = new Map();
 
 function udevsBackgroundDataUri(kind) {
   if (backgroundDataUriCache.has(kind)) return backgroundDataUriCache.get(kind);
@@ -40,6 +52,27 @@ function udevsBackgroundDataUri(kind) {
   const value = `data:image/png;base64,${readFileSync(path.join(UDEVS_BACKGROUND_DIR, fileName)).toString("base64")}`;
   backgroundDataUriCache.set(kind, value);
   return value;
+}
+
+function kpFontDataUri(key) {
+  if (fontDataUriCache.has(key)) return fontDataUriCache.get(key);
+  const fileName = KP_FONT_FILES[key];
+  if (!fileName) throw new Error(`Unknown KP font asset: ${key}`);
+  const value = `data:font/ttf;base64,${readFileSync(path.join(KP_FONT_DIR, fileName)).toString("base64")}`;
+  fontDataUriCache.set(key, value);
+  return value;
+}
+
+function kpFontFaceRules() {
+  return [
+    ["Sora", 400, "sora-400"],
+    ["Sora", 600, "sora-600"],
+    ["Sora", 700, "sora-700"],
+    ["Sora", 800, "sora-800"],
+    ["Work Sans", 400, "work-sans-400"],
+    ["Work Sans", 500, "work-sans-500"],
+    ["Work Sans", 600, "work-sans-600"],
+  ].map(([family, weight, key]) => `@font-face{font-family:"${family}";font-style:normal;font-weight:${weight};font-display:block;src:url("${kpFontDataUri(key)}") format("truetype")}`).join("\n");
 }
 
 const DEFAULT_TOTAL_PAGES = 21;
@@ -489,7 +522,9 @@ export function renderPageFromPlan(pagePlan, inputs = {}) {
   const intentClass = safeDomId(pagePlan.intent || pagePlan.kind || PAGE_INTENTS[storyIndex]);
   const explicitlyRequested = array(pagePlan.selectionReasons).includes("explicitly_requested_in_prompt");
   const pageEyebrow = rendererPageEyebrows(content.locale)[storyIndex];
-  const pageKickerHtml = pagePlan.kind === "cover" ? "" : '<span class="page-kicker">' + e(pageEyebrow) + "</span>";
+  const pageKickerHtml = pagePlan.kind === "cover"
+    ? '<span class="cover-title-kicker">' + e(l(content, "DECISION DOCUMENT")) + "</span>"
+    : '<span class="page-kicker">' + e(pageEyebrow) + "</span>";
   const coverTitleClass = pagePlan.kind === "cover"
     ? title.length > 112
       ? " cover-title-extra-long"
@@ -500,10 +535,15 @@ export function renderPageFromPlan(pagePlan, inputs = {}) {
         : " cover-title-short"
     : "";
   const backgroundClass = baseTokens.backgroundStyle === "udevs_screenshot" ? " background-udevs-screenshot" : "";
+  const titleMarkup = pagePlan.kind === "cover"
+    ? '<span class="cover-title-prefix">' + e(l(content, "Commercial proposal")) + ' — </span><span class="cover-title-project">' + renderTitleMarkup(title) + "</span>"
+    : renderTitleMarkup(title);
+  const pageSummary = referencePageSummary(pagePlan, content);
+  const pageSummaryMarkup = pageSummary ? '<p class="page-summary">' + e(pageSummary) + "</p>" : "";
   const pageHtml = [
     '<section class="page kp-page composition-' + composition + backgroundClass + " layout-" + family + " intent-" + intentClass + '" data-page-number="' + pageNumber + '" data-page-kind="' + escapeHtmlAttribute(pagePlan.kind) + '" data-page-composition="' + composition + '" data-explicitly-requested="' + String(explicitlyRequested) + '" data-layout-family="' + family + '">',
-    '<header class="page-header"><span>' + e(pageEyebrow) + '</span><strong>' + padPage(pageNumber) + " / " + totalPages + "</strong></header>",
-    '<div class="page-title-row"><div>' + pageKickerHtml + '<h1 class="page-title' + coverTitleClass + '">' + renderTitleMarkup(title) + '</h1></div><span class="page-badge">' + e(badge) + "</span></div>",
+    '<header class="page-header"><span>' + e(content.projectTitle) + '</span><strong>' + padPage(pageNumber) + " / " + totalPages + "</strong></header>",
+    '<div class="page-title-row"><div>' + pageKickerHtml + '<h1 class="page-title' + coverTitleClass + '">' + titleMarkup + "</h1>" + pageSummaryMarkup + '</div><span class="page-badge">' + e(badge) + "</span></div>",
     '<div class="page-body">' + body + "</div>",
     '<div class="page-footer"><span>' + e(content.projectTitle) + '</span><strong>' + padPage(pageNumber) + "</strong></div>",
     "</section>",
@@ -860,6 +900,7 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
   const udevsScreenshotRules = resolved.backgroundStyle === "udevs_screenshot"
     ? [
         '.page.background-udevs-screenshot,.kp-page.background-udevs-screenshot{background-color:#FFFFFF;background-image:url("' + udevsBackgroundDataUri("content") + '");background-repeat:no-repeat;background-position:center;background-size:cover}',
+        '.page.background-udevs-screenshot[data-page-kind="product_map"],.page.background-udevs-screenshot[data-page-kind="client_dependencies"],.page.background-udevs-screenshot[data-page-kind="team"],.kp-page.background-udevs-screenshot[data-page-kind="product_map"],.kp-page.background-udevs-screenshot[data-page-kind="client_dependencies"],.kp-page.background-udevs-screenshot[data-page-kind="team"]{background-color:#F7F8FC;background-image:url("' + udevsBackgroundDataUri("contentSoft") + '")}',
         '.page.background-udevs-screenshot[data-page-kind="cover"],.kp-page.background-udevs-screenshot[data-page-kind="cover"]{background-image:url("' + udevsBackgroundDataUri("cover") + '")}',
         ".page.background-udevs-screenshot::before,.page.background-udevs-screenshot::after{display:none}",
         ".page.background-udevs-screenshot>.page-header,.page.background-udevs-screenshot>.page-title-row,.page.background-udevs-screenshot>.page-body{position:relative;z-index:1}",
@@ -867,6 +908,7 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
       ]
     : [];
   const css = [
+    kpFontFaceRules(),
     "@page{size:15in 10in;margin:0}",
     ":root{--kp-brand-primary:" + resolved.decorativePrimary + ";--kp-brand-secondary:" + resolved.decorativeSecondary + ";--kp-brand-accent:" + resolved.decorativeSecondary + ";--kp-brand-background:" + lightPalette.background + ";--kp-brand-surface:" + lightPalette.surface + ";" + pagePaletteDeclarations(lightPalette) + "}",
     '.page[data-page-composition="light"],.kp-page[data-page-composition="light"]{' + pagePaletteDeclarations(lightPalette) + "}",
@@ -1449,6 +1491,180 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".layout-evidence_table .page-title{max-width:900px}",
     ".layout-commercial_hero .page-title{font-size:40px}",
     ".layout-decision_close::before{background:radial-gradient(circle," + alphaHex(t.decorativeTertiary, .16) + " 0%,transparent 68%)}",
+    /* Udevs proposal visual system: source-matched typography, spacing,
+       surfaces, and accent hierarchy. Data and semantic geometry stay intact. */
+    'html,body{font-family:"Work Sans",Arial,sans-serif;color:' + t.text + "}",
+    '.page,.kp-page{padding:48px 72px 34px;font-family:"Work Sans",Arial,sans-serif}',
+    ".page-header{height:24px;border-bottom:0;color:" + t.text + ';font:600 13px/1 "Work Sans",Arial,sans-serif;letter-spacing:0;text-transform:uppercase}',
+    ".page-header>strong{color:" + t.muted + ';font:400 12px/1 "Work Sans",Arial,sans-serif;letter-spacing:.03em}',
+    ".page-title-row{position:relative;min-height:132px;padding-top:42px;align-items:flex-start}",
+    ".page-title-row::before{content:'';position:absolute;left:0;top:20px;width:36px;height:5px;border-radius:0;background:" + t.primary + "}",
+    ".page-title-row>div{max-width:1030px}",
+    ".page-kicker{display:none}",
+    '.page-title{max-width:1040px;font-family:"Sora",Arial,sans-serif;font-size:38px;line-height:1.08;font-weight:800;letter-spacing:-.02em;text-wrap:balance}',
+    ".page-badge{max-width:300px;margin-top:-29px;padding:0;border:0;border-radius:0;background:transparent;color:" + t.muted + ';font:500 11px/1.25 "Work Sans",Arial,sans-serif;letter-spacing:0;text-transform:none}',
+    ".page-body{height:710px}",
+    '.page-footer{left:72px;right:72px;bottom:18px;height:14px;padding:0;border:0;opacity:0;font:400 9px/1 "Work Sans",Arial,sans-serif}',
+    ".panel,.panel-soft,.viz-canvas{border-color:" + t.rule + ";border-radius:14px;background:" + t.surface + ";box-shadow:0 16px 34px -24px " + alphaHex(t.primary, .38) + "}",
+    ".eyebrow{font-family:\"Work Sans\",Arial,sans-serif;letter-spacing:.12em}",
+    ".source-chip,.status{font-family:\"Work Sans\",Arial,sans-serif}",
+    ".semantic-note,.org-evidence,.team-capacity-note,.roadmap-stage-disclosure{border-left-color:" + t.primary + ";background:" + alphaHex(t.surface2, .72) + "}",
+
+    ".layout-cover_asymmetric{box-shadow:inset 0 -4px " + t.primary + "}",
+    ".layout-cover_asymmetric .page-header{flex:0 0 24px}",
+    ".layout-cover_asymmetric .page-title-row{flex:0 0 360px;min-height:360px;padding-top:170px}",
+    ".layout-cover_asymmetric .page-title-row::before{display:none}",
+    ".layout-cover_asymmetric .page-title{max-width:1050px;color:" + t.primary + ';font-family:"Sora",Arial,sans-serif;font-size:68px;line-height:1.05;font-weight:800;letter-spacing:-.02em}',
+    ".layout-cover_asymmetric .page-title.cover-title-medium{font-size:62px;line-height:1.06}",
+    ".layout-cover_asymmetric .page-title.cover-title-long{font-size:52px;line-height:1.06}",
+    ".layout-cover_asymmetric .page-title.cover-title-extra-long{font-size:44px;line-height:1.08}",
+    ".layout-cover_asymmetric .page-badge{margin-top:0}",
+    ".layout-cover_asymmetric .page-body{height:auto;margin:0 0 42px}",
+    ".cover-grid{height:100%;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) 112px;gap:16px}",
+    ".cover-main{grid-column:1;position:relative;overflow:visible;padding:20px 0;justify-content:center;border:0;border-radius:0;background:transparent;box-shadow:none}",
+    ".cover-main::after{display:none}",
+    ".cover-main-head{position:static;margin-bottom:20px}",
+    ".cover-main-head .eyebrow{display:flex;align-items:center;gap:8px;color:" + t.primary + ';font:600 13px/1 "Work Sans",Arial,sans-serif;letter-spacing:.14em}',
+    ".cover-main-head .eyebrow::before{content:'';width:6px;height:6px;border-radius:50%;background:" + t.primary + "}",
+    ".cover-sequence{display:none}",
+    '.cover-promise{max-width:760px;margin:0;color:' + t.muted + ';font:400 17px/1.65 "Work Sans",Arial,sans-serif;letter-spacing:0;text-wrap:pretty}',
+    ".cover-main-copy{display:none}",
+    ".cover-side{display:none}",
+    ".cover-meta,.cover-meta.has-budget{grid-column:1;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}",
+    ".cover-meta .metric{min-height:112px;display:flex;flex-direction:column;justify-content:center;padding:18px 22px;border:1px solid " + t.rule + ";border-radius:14px;background:" + t.surface + ";box-shadow:0 12px 28px -20px " + alphaHex(t.primary, .34) + "}",
+    ".cover-meta .metric::before{display:none}",
+    ".cover-meta .metric strong,.cover-meta.has-budget .metric strong{order:-1;max-width:100%;margin:0;color:" + t.primary + ';font:800 25px/1.1 "Sora",Arial,sans-serif}',
+    ".cover-meta .metric span{margin-top:8px;color:" + t.muted + ';font:400 12.5px/1.2 "Work Sans",Arial,sans-serif;letter-spacing:0;text-transform:none}',
+    ".cover-meta .inline-sources{margin-top:6px}",
+
+    ".viz-canvas{background:" + alphaHex(t.surface, .96) + "}",
+    ".viz-mindmap,.viz-bpmn{background:" + alphaHex(t.surface, .96) + "!important}",
+    ".viz-node,.viz-mindmap-node,.viz-bpmn-node{background:" + t.surface + ";border-radius:10px;box-shadow:0 6px 16px -13px " + alphaHex(t.primary, .4) + "}",
+    ".viz-mindmap .viz-node-core{color:" + t.textOnAccent + ";background:" + t.primary + ";border-color:" + t.primary + ";box-shadow:none}",
+    ".viz-mindmap .viz-node-domain{border:1px solid " + t.rule + ";border-left:4px solid " + t.primary + ";background:" + t.surface + "}",
+    ".viz-mindmap .viz-node-capability,.viz-mindmap .viz-node-subfunction{border-color:" + t.rule + ";background:" + t.surface + "}",
+    ".viz-bpmn-lane:nth-child(odd){background:" + alphaHex(t.surface2, .64) + "}",
+    ".viz-bpmn-lane:nth-child(even){background:" + alphaHex(t.primary, .07) + "}",
+    ".viz-bpmn-lane-label{background:transparent}",
+    ".viz-bpmn-node-risk{background:" + t.surface + "}",
+
+    ".org-chart{background:" + alphaHex(t.surface, .9) + "}",
+    ".org-node{border-color:" + t.rule + ";border-radius:10px;background:" + t.surface + ";box-shadow:0 8px 20px -16px " + alphaHex(t.primary, .32) + "}",
+    ".org-root,.org-manager-node{color:" + t.textOnAccent + ";border-color:" + t.primary + ";background:" + t.primary + "}",
+    ".org-root small,.org-root strong,.org-root p,.org-manager-node small,.org-manager-node strong,.org-manager-node p{color:" + t.textOnAccent + "}",
+    ".org-branch-node{border-top-color:" + t.primary + "}",
+
+    ".client-dependencies-summary{grid-template-columns:116px 146px 146px minmax(0,1fr)}",
+    ".client-dependency-metric{border:1px solid " + t.rule + ";border-radius:10px;background:" + t.surface + "}",
+    ".client-dependency-metric:nth-child(2){color:" + t.textOnAccent + ";border-color:" + t.primary + ";background:" + t.primary + "}",
+    ".client-dependency-metric:nth-child(2) span,.client-dependency-metric:nth-child(2) strong{color:" + t.textOnAccent + "}",
+    ".client-dependencies-principle{border-left:0;background:transparent}",
+    ".client-dependencies-table{border:0;background:transparent;box-shadow:none}",
+    ".client-dependencies-head{border:0;background:transparent}",
+    ".client-dependency-group{border:0;background:transparent}",
+    ".client-dependency-row{margin:2px 0;padding:7px 16px;border:1px solid " + t.rule + ";border-radius:10px;background:" + t.surface + "}",
+    ".client-dependency-checkbox{width:auto;height:auto;padding:6px 12px;border:0;border-radius:999px;color:" + t.primary + ";background:" + alphaHex(t.primary, .16) + ';font:500 11px/1 "Work Sans",Arial,sans-serif;white-space:nowrap}',
+    ".client-dependency-checkbox.is-checked{color:" + t.textOnAccent + ";background:" + t.primary + "}",
+    ".client-dependency-checkbox.is-checked::after{display:none}",
+
+    ".function-price-table{border:0;background:transparent;box-shadow:none}",
+    ".function-price-head{border-bottom:1px solid " + t.rule + ";background:transparent}",
+    ".function-price-row{border-bottom:1px solid " + t.rule + "}",
+    ".function-price-scope{min-height:0;padding:0;border:0;border-radius:0;color:" + t.primary + ";background:transparent}",
+    ".function-price-scope-requested,.function-price-scope-in_scope,.function-price-scope-recommended,.function-price-scope-deferred,.function-price-scope-out_of_scope{color:" + t.primary + ";border:0;background:transparent}",
+    ".function-price-total{color:" + t.textOnAccent + ";border:0;border-radius:12px;background:" + t.primary + "}",
+    ".function-price-total>div span,.function-price-total>div small,.function-price-total>strong,.function-price-total-status,.function-price-total-status.is-confirmed,.function-price-total-status.is-planning{color:" + t.textOnAccent + ";border-color:transparent;background:transparent}",
+
+    ".team-capacity-metric{border:1px solid " + t.rule + ";border-radius:10px;background:" + t.surface + "}",
+    ".team-capacity-metric::after{display:none}",
+    ".team-capacity-metric.is-peak{color:" + t.textOnAccent + ";border-color:" + t.primary + ";background:" + t.primary + "}",
+    ".team-capacity-metric.is-peak span,.team-capacity-metric.is-peak strong,.team-capacity-metric.is-peak small{color:" + t.textOnAccent + "}",
+    ".team-capacity-table{border:0;background:transparent;box-shadow:none}",
+    ".team-capacity-disclosure{display:none}",
+    ".team-capacity-row{margin:2px 0;border:0;border-radius:10px;background:" + t.surface + "}",
+    ".team-month-cell{border:0;background:transparent!important}",
+    ".team-month-cell.is-peak-month strong{color:" + t.primary + "}",
+    ".team-capacity-total{color:" + t.textOnAccent + ";border-radius:10px;background:" + t.primary + "}",
+    ".team-capacity-total *,.team-capacity-total-label small,.team-month-total,.team-month-total.is-peak{color:" + t.textOnAccent + ";border-color:transparent;background:transparent}",
+
+    ".roadmap-stage-thesis,.roadmap-stage-disclosure{border-left-color:" + t.primary + "}",
+    ".roadmap-stage-chart{border-color:" + t.rule + ";background:" + t.surface + "}",
+    ".roadmap-label-column,.roadmap-label-heading,.roadmap-label-gates,.roadmap-phase-track,.roadmap-gate-outcomes{background:" + alphaHex(t.surface2, .68) + "}",
+    ".roadmap-workstream-row,.roadmap-workstream-row:nth-child(even){background:" + alphaHex(t.surface, .78) + "}",
+
+    ".payment-layout>.panel{border:0;background:transparent;box-shadow:none}",
+    ".payment-head{padding:10px 16px 8px;text-transform:uppercase}",
+    ".payment-row{min-height:64px;margin:10px 0 0;padding:12px 16px;border:1px solid " + t.rule + ";border-radius:12px;background:" + alphaHex(t.surface2, .72) + "}",
+    ".payment-row:last-child{color:" + t.textOnAccent + ";border-color:" + t.primary + ";background:" + t.primary + "}",
+    ".payment-row:last-child p,.payment-row:last-child>span{color:" + t.textOnAccent + "}",
+    ".payment-progress{display:none}",
+    ".payment-total{padding:20px 0 0;border:0;border-top:1px solid " + t.rule + ";border-radius:0;background:transparent}",
+    ".payment-total strong{color:" + t.primary + ';font:800 31px/1.15 "Sora",Arial,sans-serif}',
+
+    /* Reference-detail pass: source copy hierarchy, flatter backgrounds,
+       and page-specific table/architecture treatments. */
+    ".page-badge{visibility:hidden}",
+    '.page-summary{max-width:920px;margin:8px 0 0;color:' + t.muted + ';font:400 14.5px/1.45 "Work Sans",Arial,sans-serif;text-wrap:pretty}',
+
+    ".layout-cover_asymmetric .page-title-row{flex-basis:360px;min-height:360px;padding-top:112px}",
+    ".layout-cover_asymmetric .page-title{color:" + t.text + "}",
+    ".cover-title-prefix{color:" + t.text + "}",
+    ".cover-title-project{color:" + t.primary + "}",
+    '.cover-title-kicker{display:flex;align-items:center;gap:8px;margin-bottom:20px;color:' + t.primary + ';font:600 13px/1 "Work Sans",Arial,sans-serif;letter-spacing:.14em;text-transform:uppercase}',
+    ".cover-title-kicker::before{content:'';width:6px;height:6px;border-radius:50%;background:" + t.primary + "}",
+    ".cover-main{justify-content:flex-start;padding:72px 0 20px}",
+    ".cover-main-head{display:none}",
+    '.cover-promise{max-width:880px;font-size:17px;line-height:1.62}',
+
+    ".viz-bpmn .viz-node-gateway{overflow:visible!important}",
+    ".viz-bpmn .viz-node-gateway::before{width:32px;height:32px}",
+
+    '.page[data-page-kind="architecture"] .semantic-layout{justify-content:center;gap:0}',
+    '.page[data-page-kind="architecture"] .semantic-note{display:none}',
+    ".viz-architecture{overflow:visible;border:0!important;border-radius:0;background:transparent!important;box-shadow:none!important}",
+    ".viz-architecture-legend{display:none}",
+    ".viz-architecture-layer,.viz-architecture-layer:nth-child(even){display:block;border:0;background:transparent}",
+    ".viz-architecture-layer-label{position:absolute;left:0;right:0;top:0;height:24px;display:flex;flex-direction:row;align-items:center;justify-content:center;gap:4px;padding:0;border:0}",
+    '.viz-architecture-layer-label small,.viz-architecture-layer-label strong{margin:0;color:' + t.primary + ';font:600 10.5px/1 "Work Sans",Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase}',
+    ".viz-architecture-layer-label small::after{content:' ·'}",
+    ".viz-architecture .viz-node{padding:8px 16px!important;border:1px solid #E4E4E0!important;border-style:solid!important;border-radius:10px;background:" + t.surface2 + "!important;color:" + t.text + ';font:400 12.5px/1.25 "Work Sans",Arial,sans-serif;box-shadow:0 6px 16px -13px ' + alphaHex(t.primary, .25) + "!important}",
+    '.viz-architecture .viz-node[data-node-type="application"]{border-color:' + t.primary + "!important;background:" + t.primary + "!important;color:" + t.textOnAccent + "!important;font-weight:700}",
+    ".viz-architecture .viz-node .viz-badge{display:none}",
+    ".viz-architecture .viz-edges{display:none}",
+    ".viz-architecture-layer:not(:last-child)::after{content:'';position:absolute;left:50%;bottom:-1px;width:1px;height:12px;background:#C7C7C3;transform:translateX(-.5px)}",
+    ".viz-architecture-layer:not(:last-child)::before{content:'';position:absolute;left:50%;bottom:-5px;border-left:6px solid transparent;border-right:6px solid transparent;border-top:9px solid #C7C7C3;transform:translateX(-6px)}",
+
+    '.page[data-page-kind="client_dependencies"] .client-dependencies-layout{grid-template-rows:54px minmax(0,1fr);gap:14px}',
+    '.page[data-page-kind="client_dependencies"] .client-dependencies-summary{display:flex;align-items:stretch;gap:14px}',
+    '.page[data-page-kind="client_dependencies"] .client-dependencies-principle{display:none}',
+    '.page[data-page-kind="client_dependencies"] .client-dependency-metric{min-width:154px;height:54px;flex-direction:row;align-items:center;justify-content:flex-start;gap:6px;padding:10px 18px;border:1px solid ' + t.rule + ';border-radius:10px;box-shadow:0 6px 16px -13px ' + alphaHex(t.primary, .25) + "}",
+    '.page[data-page-kind="client_dependencies"] .client-dependency-metric strong{order:-1;font:800 20px/1 "Sora",Arial,sans-serif}',
+    '.page[data-page-kind="client_dependencies"] .client-dependency-metric span{font:400 12.5px/1.2 "Work Sans",Arial,sans-serif;letter-spacing:0}',
+    '.page[data-page-kind="client_dependencies"] .client-dependencies-head,.page[data-page-kind="client_dependencies"] .client-dependency-row{grid-template-columns:2.2fr 1.6fr .9fr}',
+    '.page[data-page-kind="client_dependencies"] .client-dependencies-head{min-height:34px;padding:7px 4px;border-bottom:0;font-size:11px}',
+    '.page[data-page-kind="client_dependencies"] .client-dependency-group{display:flex;min-height:24px;align-items:flex-end;justify-content:space-between;padding:7px 4px 2px}',
+    '.page[data-page-kind="client_dependencies"] .client-dependency-group strong{font-size:11.5px}',
+    '.page[data-page-kind="client_dependencies"] .client-dependency-row{min-height:48px;margin:4px 0 0;padding:9px 14px;border:0;border-radius:10px;box-shadow:0 6px 16px -13px ' + alphaHex(t.primary, .2) + "}",
+    '.page[data-page-kind="client_dependencies"] .client-dependency-name>strong{font-size:13.5px}',
+    '.page[data-page-kind="client_dependencies"] .client-dependency-owner strong{color:' + t.muted + ';font-size:12.5px;font-weight:400}',
+    '.page[data-page-kind="client_dependencies"] .client-dependency-checkbox{padding:4px 10px;color:' + t.brandDeep + ';background:' + alphaHex(t.primary, .16) + ';font-size:11.5px}',
+
+    '.page[data-page-kind="team"] .team-capacity-layout{height:auto;grid-template-rows:76px auto;align-content:start;gap:14px}',
+    '.page[data-page-kind="team"] .team-capacity-note{display:none}',
+    '.page[data-page-kind="team"] .team-capacity-metrics{gap:14px}',
+    '.page[data-page-kind="team"] .team-capacity-metric{padding:12px 18px;border:0;border-radius:10px;box-shadow:0 6px 16px -13px ' + alphaHex(t.primary, .25) + "}",
+    '.page[data-page-kind="team"] .team-capacity-metric span{font:400 12px/1.15 "Work Sans",Arial,sans-serif;letter-spacing:0;text-transform:none}',
+    '.page[data-page-kind="team"] .team-capacity-metric strong{margin-top:6px;font:800 20px/1 "Sora",Arial,sans-serif}',
+    '.page[data-page-kind="team"] .team-capacity-metric small{display:none}',
+    '.page[data-page-kind="team"] .team-capacity-table{height:auto;overflow:visible;border:0;background:transparent;box-shadow:none}',
+    '.page[data-page-kind="team"] .team-capacity-head,.page[data-page-kind="team"] .team-capacity-row,.page[data-page-kind="team"] .team-capacity-total{grid-template-columns:1.6fr 2.2fr repeat(var(--team-month-count),.6fr);column-gap:0;padding:0 12px}',
+    '.page[data-page-kind="team"] .team-capacity-head{flex-basis:34px;border-bottom:1px solid #E4E4E0;font-size:11px}',
+    '.page[data-page-kind="team"] .team-capacity-row{flex:0 0 48px;min-height:48px;margin-top:6px;border:0;border-radius:10px;background:' + t.surface + ';box-shadow:0 6px 16px -13px ' + alphaHex(t.primary, .2) + "}",
+    '.page[data-page-kind="team"] .team-capacity-role strong{font:700 13.5px/1.15 "Sora",Arial,sans-serif}',
+    '.page[data-page-kind="team"] .team-capacity-role small{display:none}',
+    '.page[data-page-kind="team"] .team-capacity-focus{color:' + t.muted + ';font-size:12.5px}',
+    '.page[data-page-kind="team"] .team-month-cell strong{font-size:13px}',
+    '.page[data-page-kind="team"] .team-capacity-total{flex-basis:48px;margin-top:8px;border-radius:10px}',
     ...dynamicRules,
   ];
   return css.join("\n");
@@ -1705,7 +1921,7 @@ function renderContentPage(pagePlan, content, tokens, dynamicRules) {
 }
 
 function renderCover(content, _tokens, _dynamicRules, pagePlan = {}) {
-  const promise = l(content, "A focused plan for the product launch, core functions, delivery schedule, and commercial decision.");
+  const promise = coverReferenceDescription(content.locale);
   const duration = content.durationMonths ? formatRendererUnit(content.durationMonths, "month", content.locale) : content.durationWeeks ? formatRendererUnit(content.durationWeeks, "week", content.locale) : l(content, "Schedule to confirm");
   const scope = content.scope.length ? String(content.scope.length) : l(content, "To confirm");
   const clientSiteReference = !content.hasNamedAnalog && content.brandReferenceHost;
@@ -1741,6 +1957,17 @@ function renderCover(content, _tokens, _dynamicRules, pagePlan = {}) {
     "</div>",
     "</div>",
   ].join("");
+}
+
+function coverReferenceDescription(locale) {
+  const normalized = normalizeRendererLocale(locale);
+  if (normalized === "ru-RU") {
+    return "Сфокусированный план запуска продукта, ключевых функций, реализации и коммерческого решения для Udevs. Предложение объединяет подтверждённые данные, рекомендации, партнёрские зависимости и решения, необходимые до старта.";
+  }
+  if (normalized === "uz-Latn") {
+    return "Udevs uchun mahsulotni ishga tushirish, asosiy funksiyalar, amalga oshirish va tijorat qaroriga yo‘naltirilgan reja. Taklif tasdiqlangan ma’lumotlar, tavsiyalar, hamkor bog‘liqliklari va ish boshlanishidan oldingi qarorlarni birlashtiradi.";
+  }
+  return "A focused plan for the product launch, core functions, delivery, and commercial decision for Udevs. The proposal brings together confirmed inputs, recommendations, partner dependencies, and the decisions required before kickoff.";
 }
 
 function renderOpeningDecisionThesis(content) {
@@ -2057,15 +2284,17 @@ function renderClientDependencies(content) {
         const sourceIds = row.sourceIds?.length ? ' data-source-ids="' + escapeHtmlAttribute(row.sourceIds.join(",")) + '"' : "";
         const readinessBucket = clientDependencyReadinessBucket(row.status);
         const owner = row.owner || l(content, "Client owner to appoint");
-        // Every row is by definition a client-side input, so the status
-        // column carries a single checklist box (checked once the input is
-        // provided) instead of a textual status.
         const checked = readinessBucket === "ready";
+        const readinessLabel = readinessBucket === "ready"
+          ? l(content, "Ready")
+          : readinessBucket === "blocked"
+            ? l(content, "Blocked")
+            : l(content, "Waiting / not provided").split("/")[0].trim();
         return [
           '<div class="client-dependency-row" data-geometry-role="dependency_row" data-node-id="' + escapeHtmlAttribute(row.id) + '" data-node-type="dependency" data-semantic-role="' + escapeHtmlAttribute(row.status) + '" data-readiness-bucket="' + readinessBucket + '" data-truth-status="' + escapeHtmlAttribute(row.truthStatus || "unknown") + '"' + sourceIds + ">",
           '<div class="client-dependency-name"><strong>' + e(row.label) + "</strong>" + detail + sources + "</div>",
           '<div class="client-dependency-owner"><strong>' + e(owner) + "</strong></div>",
-          '<div class="client-dependency-state"><span class="client-dependency-checkbox' + (checked ? " is-checked" : "") + '" data-checked="' + (checked ? "true" : "false") + '"></span></div>',
+          '<div class="client-dependency-state"><span class="client-dependency-checkbox' + (checked ? " is-checked" : "") + '" data-checked="' + (checked ? "true" : "false") + '">' + e(readinessLabel) + "</span></div>",
           "</div>",
         ].join("");
       }).join(""),
@@ -3231,6 +3460,9 @@ function semanticSummary(spec, pageNumber, content) {
 
 function resolvePageTitle(pagePlan, content, spec) {
   if (pagePlan.kind === "project_price") return projectPriceCopy(content.locale).title;
+  if (pagePlan.kind === "architecture") return referenceSectionTitle("architecture", content.locale);
+  if (pagePlan.kind === "client_dependencies") return referenceSectionTitle("client_dependencies", content.locale);
+  if (pagePlan.kind === "team") return referenceSectionTitle("team", content.locale);
   if (pagePlan.title) return clientText(localizeKnown(pagePlan.title, content.locale), 120);
   if (pagePlan.kind === "cover") return content.projectTitle;
   if (pagePlan.kind === "market_sizing" && spec?.kind === "nested_market") {
@@ -3248,11 +3480,36 @@ function resolvePageTitle(pagePlan, content, spec) {
         : formatRendererUnit(Number(spec.timeScale.end) - Number(spec.timeScale.start) + 1, spec.timeScale.unit || "period", content.locale);
     return developmentStagesTitle(content.locale, duration);
   }
-  if (pagePlan.kind === "team") {
-    const title = teamCapacityTitle(content, teamCapacityPlan(content));
-    if (title) return title;
-  }
   return rendererPageTitles(content.locale)[pageKindIndex(pagePlan.kind)];
+}
+
+function referenceSectionTitle(kind, locale) {
+  const normalized = normalizeRendererLocale(locale);
+  const copy = normalized === "ru-RU"
+    ? { architecture: "Архитектура", client_dependencies: "Зависимости от клиента", team: "Ресурсы команды" }
+    : normalized === "uz-Latn"
+      ? { architecture: "Arxitektura", client_dependencies: "Mijozga bog‘liq talablar", team: "Jamoa resurslari" }
+      : { architecture: "Architecture", client_dependencies: "Client dependencies", team: "Team resources" };
+  return copy[kind] || kind;
+}
+
+function referencePageSummary(pagePlan, content) {
+  const locale = normalizeRendererLocale(content.locale);
+  if (pagePlan.kind === "architecture") {
+    if (locale === "ru-RU") return "Надёжное ядро с явными границами партнёрских сервисов. Каналы обращаются к доверенному ядру; данные остаются внутри, партнёрские сервисы — снаружи.";
+    if (locale === "uz-Latn") return "Hamkor servislar chegaralari aniq ko‘rsatilgan ishonchli yadro. Kanallar ishonchli yadroga murojaat qiladi; ma’lumotlar ichkarida, hamkor servislar tashqarida qoladi.";
+    return "A trusted core with visible partner boundaries. Channels reach the trusted core; data remains inside and partner services remain outside.";
+  }
+  if (pagePlan.kind === "client_dependencies") {
+    if (locale === "ru-RU") return "Что необходимо от Udevs для реализации. Здесь перечислены только непубличные доступы, учётные данные, согласования и материалы в зоне клиента.";
+    if (locale === "uz-Latn") return "Amalga oshirish uchun Udevsdan nimalar kerak. Bu yerda faqat ommaviy bo‘lmagan kirishlar, hisob ma’lumotlari, kelishuvlar va mijoz zonasidagi materiallar keltirilgan.";
+    return "What Udevs needs for delivery. Only non-public access, credentials, approvals, and client-owned inputs are listed here.";
+  }
+  if (pagePlan.kind === "team") {
+    const peak = teamCapacityTitle(content, teamCapacityPlan(content));
+    return [peak, l(content, "Planning scenario · confirmation required")].filter(Boolean).join(" ");
+  }
+  return "";
 }
 
 function resolvePageBadge(pagePlan, content, spec) {

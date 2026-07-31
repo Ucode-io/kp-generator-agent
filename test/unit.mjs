@@ -380,7 +380,7 @@ assert.equal(fallbackProfile.accents.decorativePrimary, fallback.decorativePrima
 assert.equal(fallbackProfile.accents.decorativeSecondary, fallback.decorativeSecondary);
 assert.equal(fallbackProfile.accents.decorativeTertiary, fallback.decorativeTertiary);
 assert.equal(fallbackProfile.canvas.background, "#FFFFFF");
-assert.equal(fallbackProfile.canvas.textPrimary, "#07080D");
+assert.equal(fallbackProfile.canvas.textPrimary, "#0A0A0F");
 assert.equal(fallbackProfile.canvas.mode, "light");
 assert.equal(fallbackProfile.layout.backgroundStyle, "udevs_screenshot");
 
@@ -395,14 +395,14 @@ const screenshotProfile = applyUdevsScreenshotVisualSystem({
 });
 assert.equal(screenshotProfile.profileId, "VSP-EXPLICIT");
 assert.equal(screenshotProfile.typography.displayStack, "Arial, sans-serif");
-assert.equal(screenshotProfile.accents.decorativePrimary, "#0052FF");
-assert.equal(screenshotProfile.accents.decorativeSecondary, "#07080D");
+assert.equal(screenshotProfile.accents.decorativePrimary, "#1A54FE");
+assert.equal(screenshotProfile.accents.decorativeSecondary, "#0A0A0F");
 assert.equal(screenshotProfile.canvas.background, "#FFFFFF");
 assert.equal(screenshotProfile.layout.backgroundStyle, "udevs_screenshot");
 const screenshotTokens = resolveStyleTokens(screenshotProfile);
 assert.equal(screenshotTokens.backgroundStyle, "udevs_screenshot");
-assert.equal(screenshotTokens.compositions.light.text, "#07080D");
-assert.equal(screenshotTokens.compositions.light.primary, "#0052FF");
+assert.equal(screenshotTokens.compositions.light.text, "#0A0A0F");
+assert.equal(screenshotTokens.compositions.light.primary, "#1A54FE");
 const screenshotCss = referenceDrivenStyles(screenshotProfile);
 assert.ok(screenshotCss.includes(".page.background-udevs-screenshot"));
 assert.ok(screenshotCss.includes("data:image/png;base64,"));
