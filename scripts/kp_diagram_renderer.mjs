@@ -37,6 +37,14 @@ export function renderVisualization(spec, layout, styleProfile = {}, { locale = 
     .map((edge) => spec.nodes.find((node) => node.id === edge.to))
     .filter((node) => node && node.type !== "end_event")
     .map((node) => node.id));
+  const bpmnEndMarkerOwner = new Map();
+  if (spec.kind === "bpmn") {
+    for (const node of spec.nodes || []) {
+      if (node.type !== "end_event") continue;
+      const incoming = (spec.edges || []).filter((edge) => edge.to === node.id);
+      if (incoming.length > 1) bpmnEndMarkerOwner.set(node.id, incoming[incoming.length - 1].id);
+    }
+  }
   const mindMap = spec.kind === "hub_spoke" ? hubSpokeBranchModel(spec, s) : null;
   const nodeHtml = (spec.nodes || []).map((node) => {
     const rect = layout.nodes[node.id] || { x: 0, y: 0, w: 160, h: 60 };
@@ -69,7 +77,10 @@ export function renderVisualization(spec, layout, styleProfile = {}, { locale = 
       : points.map((point, index) => `${index ? "L" : "M"}${finite(point.x)},${finite(point.y)}`).join(" ");
     const role = spec.kind === "bpmn" ? bpmnEdgeRole(edge, spec, bpmnRiskEdges) : architectureEdgeRole(edge);
     const edgeMarkerId = ["architecture", "bpmn"].includes(spec.kind) ? `${markerId}-${role}` : markerId;
-    const marker = edge.direction === "none" || spec.kind === "hub_spoke" ? "" : ` marker-end="url(#${edgeMarkerId})"`;
+    const suppressMergedEndMarker = spec.kind === "bpmn"
+      && bpmnEndMarkerOwner.has(edge.to)
+      && bpmnEndMarkerOwner.get(edge.to) !== edge.id;
+    const marker = edge.direction === "none" || spec.kind === "hub_spoke" || suppressMergedEndMarker ? "" : ` marker-end="url(#${edgeMarkerId})"`;
     const stroke = spec.kind === "bpmn"
       ? semanticRoleColor(role, s)
       : spec.kind === "architecture"
@@ -88,7 +99,7 @@ export function renderVisualization(spec, layout, styleProfile = {}, { locale = 
   const architectureScaffold = spec.kind === "architecture" ? renderArchitectureScaffold(layout, normalizedLocale, s) : "";
   const bpmnScaffold = spec.kind === "bpmn" ? renderBpmnScaffold(layout, s) : "";
   const bpmnEdgeLabels = spec.kind === "bpmn" ? renderBpmnEdgeLabels(layout, s) : "";
-  // A full 12-function decomposition stays on one page: past 8 terminal rows
+  // A full 16-function decomposition stays on one page: past 8 terminal rows
   // the mind map switches to a compact (zoomed-out) type scale.
   const mindMapTerminalRows = spec.kind === "hub_spoke"
     ? spec.nodes.filter((node) => node.type === "subfunction").length

@@ -8,9 +8,9 @@ const PENDING_VARIANTS = new Set(["pending", "questions"]);
 const LIMITS = Object.freeze({
   nested_market: { nodes: 6, edges: 8 },
   ownership_boundary: { nodes: 19, edges: 24 },
-  // A single-page mind map carries the full 12-function decomposition
-  // (1 root + 6 domains + 12 functions + 12 details = 31 nodes / 30 edges).
-  hub_spoke: { nodes: 36, edges: 40 },
+  // The expanded product-map canvas carries up to 16 function/detail rows
+  // plus their root and domain nodes without dropping below 11 px type.
+  hub_spoke: { nodes: 44, edges: 44 },
   bpmn: { nodes: 14, edges: 20 },
   architecture: { nodes: 20, edges: 28 },
   gantt: { nodes: 10, edges: 16 },

@@ -3668,7 +3668,7 @@ function functionBudgetWeight(feature = "", detail = "") {
 }
 
 function functionPriceRows(project = {}) {
-  const tasks = taskListRows(project).slice(0, 12);
+  const tasks = taskListRows(project);
   const budget = roundMoney(project.budget_usd);
   const currencyStatus = String(project.grounded_brief?.budget?.currency?.status || project.currency_status || "unknown").toLowerCase();
   // An explicitly stated budget with an explicit currency yields a weighted
@@ -5559,8 +5559,13 @@ function expandedTaskRows(project = {}) {
     rows.push(row);
   };
   fallback.forEach(addRow);
-  templates.forEach(addRow);
-  [
+  // Preserve every real scope item. Generic templates only fill a sparse
+  // brief; they must not inflate an already complete client inventory.
+  for (const row of templates) {
+    if (rows.length >= 12) break;
+    addRow(row);
+  }
+  const baselineRows = [
     ["Discovery", "Product architecture", "System structure, entities and delivery backlog"],
     ["Design", "UX/UI flows", "Core screens, states and approval-ready layouts"],
     ["Core product", "Authentication", "Login, roles, profile and access control"],
@@ -5573,19 +5578,74 @@ function expandedTaskRows(project = {}) {
     ["Quality", "QA regression", "Critical flow testing and bug fixing"],
     ["Delivery", "Release preparation", "Production checklist, monitoring and handover"],
     ["Operations", "Client training", "Admin/user handover and basic documentation"],
-  ].forEach(addRow);
-  return rows.slice(0, 12);
+  ];
+  for (const row of baselineRows) {
+    if (rows.length >= 12) break;
+    addRow(row);
+  }
+  return rows;
 }
 
-function taskDeadlineLabel(index, totalRows, durationMonths, locale = "en") {
-  const duration = Math.max(1, Math.ceil(Number(durationMonths) || 3));
-  const safeTotal = Math.max(1, totalRows);
-  if (duration <= 1) {
-    const week = Math.min(4, Math.floor((index * 4) / safeTotal) + 1);
-    return locale === "uz-Latn" ? `${week}-hafta` : locale === "ru" ? `${week}-я неделя` : `Week ${week}`;
+function traditionalTaskEffortWeeks(row = []) {
+  const text = row.join(" ").toLowerCase();
+  if (/product selection|product card|variant|выбор товара|карточк|вариант|mahsulotni tanlash/iu.test(text)) return 3;
+  if (/auth|login|profile|registration|kyc|otp|авторизац|аутентиф|регистрац|профил|kirish|ro['’]?yxat/iu.test(text)) return 3;
+  if (/seller.*onboarding|onboarding.*seller|подключени[ея] продав|проверка продав|sotuvchini ulash/iu.test(text)) return 4;
+  if (/catalog|search|filter|каталог|поиск|фильтр|katalog|qidiruv/iu.test(text)) return 4;
+  if (/cart|checkout|order confirmation|order tracking|корзин|оформлен|подтверждени[ея] заказ|отслеживан|savat|buyurtmani tasdiqlash/iu.test(text)) return 4;
+  if (/commission|settlement|campaign|promotion|комисси|расч[её]т|кампан|промо|aksiya/iu.test(text)) return 4;
+  if (/discovery|architect|requirements?|backlog|analysis|исследован|архитект|требован|анализ|tahlil|arxitektur|talab/iu.test(text)) return 4;
+  if (/\b(?:ux|ui)\b|design|prototype|wireframe|дизайн|интерфейс|прототип|dizayn/iu.test(text)) return 4;
+  if (/\bqa\b|test|acceptance|release|deploy|training|monitoring|handover|регресс|тест|при[её]м|релиз|запуск|обуч|монитор|sinov|ishga tush|topshirish/iu.test(text)) return 4;
+  if (/report|analytics|reconciliation|risk|support|dispute|return|отч[её]т|аналит|сверк|риск|поддерж|спор|возврат|hisobot|analitik|xavf|yordam/iu.test(text)) return 5;
+  if (/seller|merchant|vendor|inventory|marketplace|продав|мерчант|остатк|маркетплейс|sotuvch|zaxira|marketpleys/iu.test(text)) return 6;
+  if (/admin|backend|api service|rule engine|management workspace|админ|бэкенд|серверн|правил|boshqaruv/iu.test(text)) return 6;
+  if (/payment|integration|callback|webhook|bank|оплат|плат[её]ж|интеграц|банк|to['’]?lov|integrats/iu.test(text)) return 7;
+  if (/fraud|antifraud|anti-fraud|фрод|антифрод/iu.test(text)) return 7;
+  if (/mobile|frontend|public web|core product|main user flow|мобильн|фронтенд|основн(?:ой|ые) продукт|mobil|asosiy mahsulot/iu.test(text)) return 7;
+  if (/notification|уведом|bildirish/iu.test(text)) return 3;
+  return 4;
+}
+
+function formatTaskEffort(weeks, locale = "en") {
+  const value = Math.max(1, Math.round(Number(weeks) || 1));
+  if (locale === "uz-Latn") return `${value} hafta`;
+  if (locale === "ru" || locale === "ru-RU") return `${value} нед.`;
+  return `${value} wk`;
+}
+
+function matchingScopeEffortWeeks(project = {}, row = []) {
+  const task = String(row[1] || "").toLowerCase().trim();
+  const detail = String(row[2] || "").toLowerCase().trim();
+  const candidates = (project.scope || []).filter((item) => {
+    const itemTask = String(item.task || "").toLowerCase().trim();
+    const itemDetail = String(item.subtask || item.detail || "").toLowerCase().trim();
+    return (detail && itemDetail === detail) || (task && itemTask === task);
+  });
+  const source = candidates[0];
+  if (!source) return null;
+  const suppliedWeeks = Number(source.durationWeeks || source.estimatedWeeks || source.effortWeeks || source.weeks);
+  if (Number.isFinite(suppliedWeeks) && suppliedWeeks > 0) return Math.max(1, Math.round(suppliedWeeks));
+  if (Number(source.startWeek) > 0 || Number(source.endWeek) > 0) {
+    const start = Math.max(1, Math.round(Number(source.startWeek) || Number(source.endWeek)));
+    const end = Math.max(start, Math.round(Number(source.endWeek) || start));
+    return end - start + 1;
   }
-  const month = Math.min(duration, Math.floor((index * duration) / safeTotal) + 1);
-  return locale === "uz-Latn" ? `${month}-oy` : locale === "ru" ? `${month}-й месяц` : `Month ${month}`;
+  const durationText = String(source.duration || source.effortDuration || source.deadline || source.period || "");
+  const durationMatch = durationText.match(/(\d+(?:[.,]\d+)?)\s*(?:weeks?|wks?|недел\p{L}*|нед\.?|hafta)/iu);
+  if (durationMatch) return Math.max(1, Math.round(Number(durationMatch[1].replace(",", "."))));
+  return null;
+}
+
+export function taskDeadlineLabel(row, _index, _totalRows, project = {}, locale = "en") {
+  const suppliedWeeks = matchingScopeEffortWeeks(project, row);
+  if (suppliedWeeks !== null) return formatTaskEffort(suppliedWeeks, locale);
+  // AI-assisted implementation is the default for generated proposals. The
+  // 0.65 factor models coding, test generation, refactoring, and documentation
+  // acceleration while keeping architecture and acceptance work explicit.
+  const aiFactor = project.ai_assisted_delivery === false ? 1 : 0.65;
+  const estimatedWeeks = Math.max(1, Math.ceil(traditionalTaskEffortWeeks(row) * aiFactor));
+  return formatTaskEffort(estimatedWeeks, locale);
 }
 
 function localizeMarketplaceScope(value = "", locale = "en") {
@@ -5603,12 +5663,10 @@ function localizeMarketplaceScope(value = "", locale = "en") {
   return (locale === "uz-Latn" ? uz : ru)[value] || value;
 }
 
-function taskListRows(project = {}) {
-  // Client-facing scope is a decision surface: it must show the full
-  // recommended product decomposition (domain packs give 11+ functions for a
-  // marketplace), capped by the function-price table contract of 12 rows.
-  const visibleLimit = 12;
-  const rows = expandedTaskRows(project).slice(0, visibleLimit);
+export function taskListRows(project = {}) {
+  // Client-facing scope is a decision surface: preserve the complete input
+  // inventory instead of silently truncating it at an arbitrary row count.
+  const rows = expandedTaskRows(project);
   const locale = project.grounded_brief?.sourceLanguage || "en";
   const requested = (project.requested_scope || [])
     .map((item) => String(item || "").toLowerCase().trim())
@@ -5630,7 +5688,7 @@ function taskListRows(project = {}) {
           : "In scope";
     return [
       ...row.slice(0, 3).map((value) => localizeMarketplaceScope(value, locale)),
-      taskDeadlineLabel(index, rows.length, project.duration_months, locale),
+      taskDeadlineLabel(row, index, rows.length, project, locale),
       status,
     ];
   });
@@ -5931,7 +5989,7 @@ function swotPage(model = {}) {
 }
 
 function functionPricePage(model = {}) {
-  const rows = (model.functionPrice || []).slice(0, 10).map((row) => [
+  const rows = (model.functionPrice || []).map((row) => [
     row.priority,
     row.feature,
     row.phase,
@@ -9479,23 +9537,81 @@ async function buildKpiPdfReportV5(question = "KP PDF generation", progress = as
     qaReport = await recordDomGeometryGateG4(qaReport, domQa, qualityPolicy);
     await fs.writeFile(path.join(workspace, "qa", "qa-report.dom.json"), `${JSON.stringify(qaReport, null, 2)}\n`, "utf8");
     assertQualityGate(qaReport, qualityPolicy);
-    // HTML-only mode: PDF render intentionally skipped (KP is served as HTML).
+    await page.pdf({
+      path: candidatePdfPath,
+      width: "1440px",
+      height: "960px",
+      scale: 1,
+      printBackground: true,
+      preferCSSPageSize: true,
+      displayHeaderFooter: false,
+      margin: { top: "0", right: "0", bottom: "0", left: "0" },
+    });
   } finally {
     await browser.close();
   }
 
-  // HTML-only mode: post-render PDF QA (G5/G6) and PDF promotion (G7) are skipped.
-  // The proposal HTML is already built and validated by the DOM geometry gate (G4).
-  // The request state machine (kp_request_status.mjs) is linear and only allows
-  // rendering -> qa -> promoting -> ready, so we still walk those states. There is
-  // no PDF artifact to re-QA or promote, so these are status-only transitions.
   status = await setStatus(workspace, status, "qa", { progress: 80 });
+  await progress("KP v5: PDF sahifalari va bosma geometriyasi tekshirilyapti.");
+  const qaReportPath = path.join(workspace, "qa", "qa-report.json");
+  qaReport = await runPostRenderQualityGate({
+    report: qaReport,
+    candidatePdf: candidatePdfPath,
+    outputDir: path.join(workspace, "qa", "pdf-render"),
+    presentationPlan,
+    proposalModel,
+    commercialLock,
+    domReport: domQa,
+    manifest: options.manifest || null,
+    captures: options.captures || [],
+    analyses: options.analyses || [],
+    styleProfile,
+    defaultPresentationPlan,
+    fidelityTargets,
+    baseDir: options.referenceBaseDir || process.cwd(),
+    policy: qualityPolicy,
+  }, { policy: qualityPolicy });
+  await fs.writeFile(qaReportPath, `${JSON.stringify(qaReport, null, 2)}\n`, "utf8");
+  assertReadyForPromotion(qaReport, qualityPolicy);
+
   status = await setStatus(workspace, status, "promoting", { progress: 95 });
+  await progress("KP v5: tekshirilgan PDF yuklab olish uchun tayyorlanyapti.");
+  const finalRelativePath = "final/proposal.pdf";
+  const promotionResult = await runPromotionGateG7({
+    report: qaReport,
+    workspace,
+    candidateRelativePath: path.relative(workspace, candidatePdfPath),
+    finalRelativePath,
+    qaReportPath,
+  }, { policy: qualityPolicy });
+  qaReport = promotionResult.report;
+  const finalPdfPath = path.join(workspace, finalRelativePath);
+  await writeContractJson(path.join(workspace, "model", "proposal-record.json"), {
+    schemaVersion: "1.0",
+    requestId: requestContext.requestId,
+    state: "ready",
+    rendererVersion: "v5",
+    packageRelativePath: "model/proposal-package.json",
+    qaReportRelativePath: path.relative(workspace, qaReportPath),
+    artifact: {
+      relativePath: finalRelativePath,
+      sha256: promotionResult.promotion.finalSha256,
+      sizeBytes: promotionResult.promotion.sizeBytes,
+      pageCount: presentationPlan.pageCount,
+    },
+    failure: null,
+    updatedAt: new Date().toISOString(),
+  }, "proposalRecord");
+  await createRetentionRecord({
+    workspace,
+    requestId: requestContext.requestId,
+    artifactRelativePaths: [finalRelativePath, path.relative(workspace, htmlPath)],
+  });
   status = await setStatus(workspace, status, "ready", { progress: 100 });
 
   return {
     text: "",
-    documentPath: htmlPath,
+    documentPath: finalPdfPath,
     html,
     caption: "",
     meta: {
@@ -9506,14 +9622,15 @@ async function buildKpiPdfReportV5(question = "KP PDF generation", progress = as
       rendererVersion: KP_PDF_V5_RENDERER_VERSION,
       workspace,
       proposalPackagePath: path.join(workspace, "model", "proposal-package.json"),
-      qaReportPath: path.join(workspace, "qa", "qa-report.dom.json"),
-      qaStatus: "PASS_DOM_ONLY",
-      visualQa: "SKIPPED_HTML_ONLY",
+      qaReportPath,
+      qaStatus: qaReport.status,
+      visualQa: qaReport.gates.find((gate) => gate.id === "G5")?.status || "NOT_RUN",
       pageCount: presentationPlan.pageCount,
       policyGeneration: config.policyGeneration,
       rolloutEpoch: config.rolloutEpoch,
       htmlPath,
-      outputMode: "html",
+      pdfPath: finalPdfPath,
+      outputMode: "pdf",
       themeSource: analogTheme?.themeSource || { kind: "udevs_fallback", reference: "https://udevs.io/" },
       referenceUrl: analogTheme?.referenceUrl || "",
       themeWarnings: analogTheme?.themeWarnings || styleProfile.warnings || [],

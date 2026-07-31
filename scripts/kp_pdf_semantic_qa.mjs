@@ -43,7 +43,7 @@ export async function inspectRenderedProposalDomV5(page, presentationPlan) {
           if (rect.width <= 0 || rect.height <= 0) findings.push({ code: "VIZ_NODE_EMPTY_RECT", severity: "ERROR", page: planned.pageNumber, elementIds: [node.dataset.nodeId] });
           if (Number(getComputedStyle(node).fontSize.replace("px", "")) < 10) findings.push({ code: "DOM_TEXT_TOO_SMALL", severity: "ERROR", page: planned.pageNumber, elementIds: [node.dataset.nodeId] });
           if (isMindMap || isBpmn) {
-            // A dense (single-page, 12-function) mind map deliberately zooms
+            // A dense (single-page, up-to-16-function) mind map deliberately zooms
             // out to an 11px node scale; regular maps keep the 14px minimum.
             const minimumFontSize = isMindMap ? (viz.dataset.vizDensity === "dense" ? 11 : 14) : 12;
             if (Number(getComputedStyle(node).fontSize.replace("px", "")) < minimumFontSize) findings.push({ code: "DOM_TEXT_TOO_SMALL", severity: "ERROR", page: planned.pageNumber, elementIds: [node.dataset.nodeId] });
@@ -155,59 +155,59 @@ export async function inspectRenderedProposalDomV5(page, presentationPlan) {
       if (!teamRoot) return [];
       const output = [];
       const epsilon = 0.0005;
-      const monthCount = Number(teamRoot.dataset.teamMonthCount);
+      const nullableInteger = (value) => /^\d+$/.test(String(value || "")) ? Number(value) : null;
       const rows = [...teamRoot.querySelectorAll(".team-capacity-row")].map((element) => {
-        const months = [...element.querySelectorAll(".team-month-cell")]
-          .map((cell) => ({ month: Number(cell.dataset.month), fte: Number(cell.dataset.fte) }))
-          .sort((left, right) => left.month - right.month);
+        const quantityElement = element.querySelector(".team-quantity");
+        const durationElement = element.querySelector(".team-duration");
+        const rateElement = element.querySelector(".team-rate");
         return {
           element,
           roleIndex: Number(element.dataset.roleIndex),
           peakFte: Number(element.dataset.rolePeakFte),
           fteMonths: Number(element.dataset.roleFteMonths),
-          months,
+          quantity: Number(quantityElement?.dataset.fte),
+          activeMonths: Number(durationElement?.dataset.activeMonths),
+          rateMinor: nullableInteger(rateElement?.dataset.teamRateMinor),
+          amountMinor: nullableInteger(element.dataset.teamAmountMinor),
         };
       });
       for (const row of rows) {
-        const computedPeak = row.months.length ? Math.max(...row.months.map((item) => item.fte)) : 0;
-        const computedFteMonths = row.months.reduce((sum, item) => sum + item.fte, 0);
-        if (row.months.length !== monthCount || row.months.some((item) => !Number.isFinite(item.fte) || item.fte < 0)
-          || Math.abs(computedPeak - row.peakFte) > epsilon || Math.abs(computedFteMonths - row.fteMonths) > epsilon) {
+        const computedFteMonths = row.quantity * row.activeMonths;
+        const priced = row.rateMinor !== null || row.amountMinor !== null;
+        const pricingMismatch = priced && (row.rateMinor === null || row.amountMinor === null
+          || Math.abs((row.rateMinor * row.fteMonths) - row.amountMinor) > 2);
+        if (![row.peakFte, row.fteMonths, row.quantity, row.activeMonths].every(Number.isFinite)
+          || row.quantity < 0 || row.activeMonths < 0 || Math.abs(row.quantity - row.peakFte) > epsilon
+          || Math.abs(computedFteMonths - row.fteMonths) > epsilon || pricingMismatch) {
           output.push({
-            code: "DOM_TEAM_ROLE_CAPACITY_MISMATCH",
+            code: pricingMismatch ? "DOM_TEAM_ROLE_COST_MISMATCH" : "DOM_TEAM_ROLE_CAPACITY_MISMATCH",
             severity: "BLOCKER",
             page: Number(teamPage.dataset.pageNumber),
-            evidence: { roleIndex: row.roleIndex, monthCount: row.months.length, expectedMonthCount: monthCount, peakFte: row.peakFte, computedPeak, fteMonths: row.fteMonths, computedFteMonths },
+            evidence: { roleIndex: row.roleIndex, peakFte: row.peakFte, quantity: row.quantity, activeMonths: row.activeMonths, fteMonths: row.fteMonths, computedFteMonths, rateMinor: row.rateMinor, amountMinor: row.amountMinor },
           });
         }
       }
-      const renderedTotals = [...teamRoot.querySelectorAll(".team-month-total")]
-        .map((element) => ({ month: Number(element.dataset.month), fte: Number(element.dataset.fte) }))
-        .sort((left, right) => left.month - right.month);
-      const computedTotals = Array.from({ length: monthCount }, (_, monthIndex) => rows.reduce(
-        (sum, row) => sum + Number(row.months.find((item) => item.month === monthIndex + 1)?.fte || 0),
-        0,
-      ));
-      if (renderedTotals.length !== monthCount || renderedTotals.some((item, index) => item.month !== index + 1 || Math.abs(item.fte - computedTotals[index]) > epsilon)) {
+      const expectedTotalMinor = nullableInteger(teamRoot.dataset.teamTotalMinor);
+      const renderedTotalMinor = nullableInteger(teamRoot.querySelector(".team-capacity-total")?.dataset.teamTotalMinor);
+      const allocatedTotalMinor = rows.reduce((sum, row) => sum + Number(row.amountMinor || 0), 0);
+      if (expectedTotalMinor !== renderedTotalMinor || (expectedTotalMinor !== null && allocatedTotalMinor !== expectedTotalMinor)
+        || (expectedTotalMinor === null && rows.some((row) => row.rateMinor !== null || row.amountMinor !== null))) {
         output.push({
-          code: "DOM_TEAM_MONTH_TOTAL_MISMATCH",
+          code: "DOM_TEAM_COST_TOTAL_MISMATCH",
           severity: "BLOCKER",
           page: Number(teamPage.dataset.pageNumber),
-          evidence: { renderedTotals, computedTotals },
+          evidence: { expectedTotalMinor, renderedTotalMinor, allocatedTotalMinor },
         });
       }
-      const computedAggregatePeak = computedTotals.length ? Math.max(...computedTotals) : 0;
-      // The peak card is client-facing ("peak_month"); it still carries the
-      // reconciled aggregate peak FTE in data-fte for this integrity check.
-      const renderedAggregatePeak = Number(teamRoot.querySelector('[data-team-metric="peak_month"],[data-team-metric="peak_fte"]')?.dataset.fte);
+      const renderedAggregatePeak = Number(teamRoot.dataset.teamPeakFte);
       const capacityEnvelope = Number(teamRoot.querySelector(".team-capacity-note")?.dataset.teamCapacityEnvelope);
-      if (!Number.isFinite(renderedAggregatePeak) || Math.abs(renderedAggregatePeak - computedAggregatePeak) > epsilon
-        || !Number.isFinite(capacityEnvelope) || Math.abs(capacityEnvelope - computedAggregatePeak) > epsilon) {
+      if (!Number.isFinite(renderedAggregatePeak) || !Number.isFinite(capacityEnvelope)
+        || Math.abs(capacityEnvelope - renderedAggregatePeak) > epsilon) {
         output.push({
           code: "DOM_TEAM_AGGREGATE_PEAK_MISMATCH",
           severity: "BLOCKER",
           page: Number(teamPage.dataset.pageNumber),
-          evidence: { renderedAggregatePeak, capacityEnvelope, computedAggregatePeak },
+          evidence: { renderedAggregatePeak, capacityEnvelope },
         });
       }
       const projectPricePage = pageElements.find((item) => item.dataset.pageKind === "project_price");
@@ -615,7 +615,7 @@ export async function inspectRenderedProposalDomV5(page, presentationPlan) {
         ] },
         launch_boundary: semanticRequirements("ownership_boundary", { minimumNodes: 2, minimumEdges: 1 }),
         chapter_product: { requirements: chapterRequirements("09") },
-        product_map: semanticRequirements("hub_spoke", { minimumNodes: 2, minimumEdges: 1, extra: [
+        product_map: semanticRequirements("hub_spoke", { minimumNodes: 2, maximumNodes: 42, minimumEdges: 1, maximumEdges: 41, extra: [
           required("mind map root", ".viz-node-core", 1, 1),
           required("mind map branches", ".viz-node-domain", 1, 8),
         ] }),
@@ -729,20 +729,18 @@ export async function inspectRenderedProposalDomV5(page, presentationPlan) {
         },
         chapter_delivery: { requirements: chapterRequirements("15") },
         function_price: {
-          requirements: [required("root", ":scope > .page-body > .function-price-layout"), required("function total", ".function-price-total"), required("function total status", ".function-price-total-status")],
+          requirements: [required("root", ":scope > .page-body > .function-price-layout")],
           oneOf: [".function-price-table", ".function-price-layout > .missing-state"],
           stateRequirements: [
             { when: ".function-price-table", requirements: [
               required("function table head", ".function-price-head"),
-              required("function table head cells", ".function-price-head > span", 7, 7),
-              required("function rows", ".function-price-row", 1, 12),
-              required("function row indexes", ".function-price-index", 1, 12),
-              required("function epics", ".function-price-epic", 1, 12),
-              required("function tasks", ".function-price-task", 1, 12),
-              required("function subtasks", ".function-price-subtask", 1, 12),
-              required("function deadlines", ".function-price-deadline", 1, 12),
-              required("function scope states", ".function-price-scope", 1, 12),
-              required("function costs", ".function-price-cost", 1, 12),
+              required("function table head cells", ".function-price-head > span", 5, 5),
+              required("function rows", ".function-price-row", 1, Number.MAX_SAFE_INTEGER),
+              required("function row indexes", ".function-price-index", 1, Number.MAX_SAFE_INTEGER),
+              required("function epics", ".function-price-epic", 1, Number.MAX_SAFE_INTEGER),
+              required("function tasks", ".function-price-task", 1, Number.MAX_SAFE_INTEGER),
+              required("function subtasks", ".function-price-subtask", 1, Number.MAX_SAFE_INTEGER),
+              required("function deadlines", ".function-price-deadline", 1, Number.MAX_SAFE_INTEGER),
             ] },
             { when: ".function-price-layout > .missing-state", requirements: missingStateRequirements(3, 3) },
           ],
@@ -757,13 +755,15 @@ export async function inspectRenderedProposalDomV5(page, presentationPlan) {
               required("team capacity table", ".team-capacity-table"),
               required("team scenario disclosure", ".team-capacity-disclosure"),
               required("team table head", ".team-capacity-head"),
-              required("team month heads", ".team-month-head", 2, 6),
+              required("team table head cells", ".team-capacity-head > span", 5, 5),
               required("team role rows", ".team-capacity-row", 1, 9),
               required("team role labels", ".team-capacity-role", 1, 9),
-              required("team role focus", ".team-capacity-focus", 1, 9),
-              required("team month cells", ".team-month-cell", 2, 54),
+              required("team quantities", ".team-quantity", 1, 9),
+              required("team durations", ".team-duration", 1, 9),
+              required("team monthly rates", ".team-rate", 1, 9),
+              required("team amounts", ".team-amount", 1, 9),
               required("team total", ".team-capacity-total"),
-              required("team month totals", ".team-month-total", 2, 6),
+              required("team cost total", ".team-cost-total"),
               required("team capacity note", ".team-capacity-note"),
             ] },
             { when: ":scope > .page-body > .missing-state", requirements: missingStateRequirements(2, 3) },
@@ -823,10 +823,10 @@ export async function inspectRenderedProposalDomV5(page, presentationPlan) {
             { when: ".payment-layout[data-payment-schedule='true']", requirements: [
               required("payment table", ".payment-layout > .panel"),
               required("payment head", ".payment-head"),
-              required("payment head cells", ".payment-head > span", 4, 4),
+              required("payment head cells", ".payment-head > span", 3, 3),
               required("payment rows", ".payment-row", 1, 12),
               required("payment row descriptions", ".payment-row > div", 1, 12),
-              required("payment row values", ".payment-row > span", 3, 36),
+              required("payment row values", ".payment-row > span", 2, 24),
             ] },
             { when: ".payment-layout > .missing-state", requirements: missingStateRequirements(3, 3) },
           ],
@@ -887,6 +887,8 @@ export async function inspectRenderedProposalDomV5(page, presentationPlan) {
     function semanticRequirements(vizKind, options = {}) {
       const minimumNodes = Number(options.minimumNodes || 1);
       const minimumEdges = Number(options.minimumEdges || 0);
+      const maximumNodes = Number(options.maximumNodes || 30);
+      const maximumEdges = Number(options.maximumEdges || 40);
       const canvas = ".viz-canvas[data-viz-kind='" + vizKind + "']";
       const activeCanvas = canvas + ":not([data-data-state='pending']):not([data-viz-variant='questions']):not([data-viz-variant='pending'])";
       const pendingCanvas = canvas + "[data-data-state='pending']," + canvas + "[data-viz-variant='questions']," + canvas + "[data-viz-variant='pending']";
@@ -901,8 +903,8 @@ export async function inspectRenderedProposalDomV5(page, presentationPlan) {
         oneOf: [activeCanvas, pendingCanvas],
         stateRequirements: [
           { when: activeCanvas, requirements: [
-            required("semantic nodes", "[data-node-id]", minimumNodes, 30),
-            ...(minimumEdges ? [required("semantic edges", "[data-geometry-role='edge'][data-edge-id]", minimumEdges, 40)] : []),
+            required("semantic nodes", "[data-node-id]", minimumNodes, maximumNodes),
+            ...(minimumEdges ? [required("semantic edges", "[data-geometry-role='edge'][data-edge-id]", minimumEdges, maximumEdges)] : []),
             ...(options.extra || []),
           ] },
           { when: pendingCanvas, requirements: [required("semantic decision questions", "[data-node-id]", 1, 12)] },
@@ -1554,9 +1556,9 @@ export async function inspectRenderedProposalDomV5(page, presentationPlan) {
     function inspectWarningStatusDensity(pageElements) {
       const text = pageElements.map((element) => {
         const clone = element.cloneNode(true);
-        // Row-level states and the single Hero currency fact are structured data,
-        // not repeated narrative warnings.
-        clone.querySelectorAll(".function-price-scope,.function-price-cost small,.cover-budget-currency").forEach((node) => node.remove());
+        // The single Hero currency fact is structured data, not a repeated
+        // narrative warning.
+        clone.querySelectorAll(".cover-budget-currency").forEach((node) => node.remove());
         return clone.innerText || clone.textContent || "";
       }).join("\n");
       const families = {
@@ -1671,8 +1673,8 @@ export async function inspectRenderedProposalDomV5(page, presentationPlan) {
     }
     function inspectUnsafeMarkup() {
       const unsafe = [];
-      const allowedTags = new Set(["HTML", "HEAD", "BODY", "TITLE", "META", "STYLE", "SCRIPT", "MAIN", "SECTION", "HEADER", "SPAN", "STRONG", "DIV", "H1", "P", "A", "IMG", "SVG", "DEFS", "MARKER", "PATH", "SMALL"]);
-      const allowedAttrs = new Set(["class", "lang", "name", "data-renderer-version", "data-page-number", "data-page-kind", "data-page-composition", "data-layout-family", "data-viz-id", "data-viz-kind", "data-viz-variant", "data-viz-density", "data-data-state", "data-geometry-role", "data-node-id", "data-node-type", "data-semantic-role", "data-group-id", "data-lane", "data-lane-id", "data-truth-status", "data-inclusion", "data-edge-id", "data-edge-from", "data-edge-to", "data-kp-image-error", "data-source-id", "data-source-ids", "data-claim-id", "data-factual-claim", "data-claim-container", "data-citation", "data-citation-for", "data-citation-ids", "data-content-role", "data-content-origin", "data-brand", "data-allow-foreign-term", "data-decorative", "data-warning-status", "data-payment-schedule", "data-payment-truth-status", "data-payment-scenario-disclosure", "data-explicitly-requested", "data-team-month-count", "data-team-matrix-truth-status", "data-team-metric", "data-team-capacity-envelope", "data-role-index", "data-role-peak-fte", "data-role-fte-months", "data-month", "data-fte", "data-fte-level", "data-peak", "data-branch-index", "data-market-state", "data-market-level", "data-market-value", "data-market-methodology", "data-market-missing-inputs", "data-market-scenario-disclosure", "data-scenario-id", "data-project-price-table", "data-project-price-total", "data-project-price-total-minor", "data-client-budget-minor", "data-project-amount-kind", "data-amount-kind", "data-price-row", "data-price-field", "data-value-status", "data-currency-status", "data-price-scenario-disclosure", "data-dependency-row-count", "data-ready-count", "data-waiting-count", "data-blocked-count", "data-readiness-counter", "data-readiness-bucket", "data-checked", "data-close-ready", "data-close-blocker-count", "data-close-blocker", "data-blocker-kind", "data-swot-quadrant", "style", "viewBox", "width", "height", "id", "markerWidth", "markerHeight", "refX", "refY", "orient", "d", "fill", "stroke", "stroke-width", "marker-end", "src", "href", "alt", "role", "aria-hidden", "charset", "http-equiv", "content", "nonce"]);
+      const allowedTags = new Set(["HTML", "HEAD", "BODY", "TITLE", "META", "STYLE", "SCRIPT", "MAIN", "SECTION", "HEADER", "SPAN", "STRONG", "DIV", "H1", "P", "A", "IMG", "TABLE", "CAPTION", "THEAD", "TBODY", "TFOOT", "TR", "TH", "TD", "SVG", "DEFS", "MARKER", "PATH", "SMALL"]);
+      const allowedAttrs = new Set(["class", "lang", "name", "scope", "colspan", "data-renderer-version", "data-page-number", "data-page-kind", "data-page-composition", "data-layout-family", "data-viz-id", "data-viz-kind", "data-viz-variant", "data-viz-density", "data-data-state", "data-geometry-role", "data-node-id", "data-node-type", "data-semantic-role", "data-group-id", "data-lane", "data-lane-id", "data-truth-status", "data-inclusion", "data-edge-id", "data-edge-from", "data-edge-to", "data-kp-image-error", "data-source-id", "data-source-ids", "data-claim-id", "data-factual-claim", "data-claim-container", "data-citation", "data-citation-for", "data-citation-ids", "data-content-role", "data-content-origin", "data-brand", "data-allow-foreign-term", "data-decorative", "data-warning-status", "data-payment-schedule", "data-payment-truth-status", "data-payment-scenario-disclosure", "data-explicitly-requested", "data-team-month-count", "data-team-matrix-truth-status", "data-team-metric", "data-team-capacity-envelope", "data-team-total-minor", "data-team-peak-fte", "data-team-rate-minor", "data-team-amount-minor", "data-active-months", "data-role-index", "data-role-peak-fte", "data-role-fte-months", "data-month", "data-fte", "data-fte-level", "data-peak", "data-branch-index", "data-market-state", "data-market-level", "data-market-value", "data-market-methodology", "data-market-missing-inputs", "data-market-scenario-disclosure", "data-scenario-id", "data-project-price-table", "data-project-price-total", "data-project-price-total-minor", "data-client-budget-minor", "data-project-amount-kind", "data-amount-kind", "data-price-row", "data-price-field", "data-value-status", "data-currency-status", "data-price-scenario-disclosure", "data-dependency-row-count", "data-ready-count", "data-waiting-count", "data-blocked-count", "data-readiness-counter", "data-readiness-bucket", "data-checked", "data-close-ready", "data-close-blocker-count", "data-close-blocker", "data-blocker-kind", "data-swot-quadrant", "style", "viewBox", "width", "height", "id", "markerWidth", "markerHeight", "refX", "refY", "orient", "d", "fill", "stroke", "stroke-width", "marker-end", "src", "href", "alt", "role", "aria-hidden", "charset", "http-equiv", "content", "nonce"]);
       for (const element of document.querySelectorAll("*")) {
         const tagName = element.tagName.toUpperCase();
         if (!allowedTags.has(tagName)) unsafe.push({ code: "DOM_UNSAFE_MARKUP", severity: "BLOCKER", elementIds: [tagName] });

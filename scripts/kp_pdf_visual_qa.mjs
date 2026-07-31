@@ -110,10 +110,22 @@ export function buildPdfContentExpectations({
     proposalModel?.pricing?.budgetAmount ?? proposalModel?.groundedBrief?.budget?.amount?.value,
     exponent,
   );
+  const proposalFunctionRows = Array.isArray(proposalModel?.functionPrice) ? proposalModel.functionPrice : [];
+  const proposalFunctionById = new Map(proposalFunctionRows.map((row) => [String(row?.id || ""), row]));
   const functionRows = lock
-    ? (lock.functionPrice || []).map((row) => ({ label: localizedExpectationText(row.name, 200), amountMinor: Number(row.amountMinor) }))
+    ? (lock.functionPrice || []).map((row) => {
+        const proposalRow = proposalFunctionById.get(String(row.id || "")) || {};
+        return {
+          label: localizedExpectationText(row.name, 200),
+          detail: localizedExpectationText(proposalRow.detail || "", 240),
+          deadline: localizedExpectationText(proposalRow.phase || proposalRow.deadline || "", 80),
+          amountMinor: Number(row.amountMinor),
+        };
+      })
     : (proposalModel?.functionPrice || []).map((row) => ({
         label: localizedExpectationText(row.name || row.title || row.feature || "", 200),
+        detail: localizedExpectationText(row.detail || row.subtask || "", 240),
+        deadline: localizedExpectationText(row.phase || row.deadline || "", 80),
         amountMinor: majorToMinorForExpectation(row.total ?? row.amount, exponent),
       }));
   const payments = lock
@@ -167,7 +179,6 @@ export function buildPdfContentExpectations({
       people: ["explicit", "verified"].includes(String(lock?.teamPlan?.truthStatus || proposalModel?.teamPlan?.truthStatus || "").toLowerCase())
         ? safeNonNegativeInteger(Number(lock?.teamPlan?.people ?? proposalModel?.teamPlan?.people ?? 0))
         : null,
-      peakFte: safeNonNegativeNumber(lock?.teamPlan?.peakFte ?? proposalModel?.teamPlan?.peakFte),
       fteMonths: safeNonNegativeNumber(lock?.teamPlan?.fteMonths ?? proposalModel?.teamPlan?.fteMonths),
       roles: (lock?.teamPlan?.roles || proposalModel?.teamPlan?.roles || [])
         .map((value) => localizedExpectationText(value?.role || value, 160))
@@ -682,10 +693,10 @@ def inspect_v5_story_content(page_texts, hard_defects, expectations):
             ["required", "to confirm", "provided", "in progress", "status", "требуется", "подтверд", "предоставл", "в работе", "статус", "kerak", "tasdiqlash", "taqdim etilgan", "jarayonda", "holat"],
         ],
         "function_price": [
-            ["functional block", "function allocation", "function price", "функциональ", "стоимост", "funksional blok", "funksiya narx"],
-            ["deadline", "month", "срок", "месяц", "muddat", "oy"],
-            ["status", "in scope", "recommended", "planning allocation", "статус", "рекоменд", "планов", "holat", "doirada", "tavsiya", "rejalashtirish"],
-            ["cost", "subtotal", "стоимост", "итого", "narx", "jami"],
+            ["functional block", "функциональ", "funksional blok"],
+            ["main task", "основная задача", "asosiy vazifa"],
+            ["subtask", "подзадача", "quyi vazifa"],
+            ["deadline", "week", "срок", "недел", "muddat", "hafta"],
         ],
         "swot": [
             ["strength", "сильн", "kuchli"],
@@ -832,22 +843,21 @@ def inspect_dynamic_expectations(page_texts, hard_defects, expectations):
         if not commercial_amount_is_visible(page_text("project_price"), currency, currency_status, project_price_minor, exponent):
             add_required_text_defect(hard_defects, project_price_page, "project_price_total", f"Page {project_price_page} does not contain the locked project total with the required currency truth marker")
     function_price_page = page_number("function_price")
-    if function_price_page and isinstance(function_subtotal_minor, int) and function_subtotal_minor > 0:
-        if not commercial_amount_is_visible(page_text("function_price"), currency, currency_status, function_subtotal_minor, exponent):
-            add_required_text_defect(hard_defects, function_price_page, "function_price_subtotal", f"Page {function_price_page} does not contain the locked function-allocation subtotal with the required currency truth marker")
     if function_price_page:
         for index, row in enumerate(commercial.get("functionRows") or []):
             label = row.get("label") or ""
-            amount_minor = row.get("amountMinor")
             label_ok = contains_phrase(page_text("function_price"), label)
-            amount_ok = (isinstance(amount_minor, int) and amount_minor == 0) or commercial_amount_is_visible(page_text("function_price"), currency, currency_status, amount_minor, exponent)
-            if not label_ok or not amount_ok:
+            detail = row.get("detail") or ""
+            deadline = row.get("deadline") or ""
+            detail_ok = not detail or contains_phrase(page_text("function_price"), detail)
+            deadline_ok = not deadline or contains_phrase(page_text("function_price"), deadline)
+            if not label_ok or not detail_ok or not deadline_ok:
                 add_required_text_defect(
                     hard_defects,
                     function_price_page,
                     f"function_price_row_{index + 1}",
-                    f"Page {function_price_page} is missing a locked function-allocation row or amount",
-                    {"rowIndex": index + 1, "labelPresent": label_ok, "amountPresent": amount_ok},
+                    f"Page {function_price_page} is missing a locked function schedule row, subtask, or deadline",
+                    {"rowIndex": index + 1, "labelPresent": label_ok, "detailPresent": detail_ok, "deadlinePresent": deadline_ok},
                 )
     payments_page = page_number("payments")
     if payments_page:
@@ -878,9 +888,6 @@ def inspect_dynamic_expectations(page_texts, hard_defects, expectations):
         people = team.get("people")
         if isinstance(people, int) and people > 0 and not re.search(rf"(?<!\d){people}(?!\d)", page_text("team")):
             add_required_text_defect(hard_defects, team_page, "team_people", f"Page {team_page} is missing the locked team-size value")
-        peak_fte = team.get("peakFte")
-        if isinstance(peak_fte, (int, float)) and peak_fte > 0 and not contains_number_value(page_text("team"), peak_fte):
-            add_required_text_defect(hard_defects, team_page, "team_peak_fte", f"Page {team_page} is missing the locked peak-FTE value")
         fte_months = team.get("fteMonths")
         if isinstance(fte_months, (int, float)) and fte_months > 0 and not contains_number_value(page_text("team"), fte_months):
             add_required_text_defect(hard_defects, team_page, "team_fte_months", f"Page {team_page} is missing the locked FTE-month value")

@@ -1,7 +1,8 @@
-// Keep each product-map page inside both the renderer's readable-density
-// budget and the DOM QA contract. Larger maps continue on another page.
-const DEFAULT_MAX_VISIBLE_NODES = 30;
-const DEFAULT_MAX_TERMINAL_ROWS = 13;
+// The expanded 1296 x 646 product-map canvas can carry up to 16 terminal
+// rows at the renderer's 11 px dense type scale. Larger maps still continue
+// on another page instead of shrinking below the readability floor.
+const DEFAULT_MAX_VISIBLE_NODES = 42;
+const DEFAULT_MAX_TERMINAL_ROWS = 16;
 
 export function buildProductMapModel(semanticModel = {}) {
   const scope = rows(semanticModel?.scopeItems?.length ? semanticModel.scopeItems : semanticModel?.scope?.scopeItems);

@@ -10,12 +10,15 @@ import {
   deriveReferenceThemeFromSnapshot,
   dynamicColorPalettesEnabled,
   normalizeV5StyleProfile,
+  taskListRows,
   udevsFallbackTheme,
 } from "../scripts/kpi_pdf_client.mjs";
 import {
   referenceDrivenStyles,
   resolveStyleTokens,
+  teamCostPlan,
 } from "../scripts/kp_pdf_reference_renderer.mjs";
+import { buildProductMapSegments } from "../scripts/kp_product_map_model.mjs";
 import {
   checkBearerAuthorization,
   normalizeConfiguredApiKey,
@@ -322,8 +325,8 @@ for (const [name, primary, secondary, accent, background] of paletteCases) {
   assert.ok(css.includes('.page[data-page-composition="split"],.kp-page[data-page-composition="split"]{'), `${name} split composition CSS`);
   assert.ok(!css.includes(".page:nth-child(even),.kp-page:nth-child(even)"), `${name} page colors are not selected by parity`);
   assert.ok(css.includes("background:var(--kp-page-background);color:var(--kp-page-text);break-after:page"), `${name} page resolves its own text color`);
-  assert.ok(css.includes(".team-month-cell.team-fte-level-4") && css.includes("color:var(--kp-page-text)"), `${name} heat-map text uses the page contrast token`);
-  assert.ok(css.includes(".team-month-total.is-peak") && css.includes("color:var(--kp-page-text)"), `${name} peak total uses the page contrast token`);
+  assert.ok(css.includes(".team-amount{font-weight:700}"), `${name} role amounts retain numeric emphasis`);
+  assert.ok(css.includes(".team-cost-total{grid-column:5;text-align:right}"), `${name} team total aligns with the amount column`);
   assert.ok(css.includes(".viz-mindmap .viz-node-domain") && css.includes("background:var(--kp-page-surface)"), `${name} diagram labels use an opaque contrast-tested surface`);
 }
 
@@ -407,6 +410,85 @@ const screenshotCss = referenceDrivenStyles(screenshotProfile);
 assert.ok(screenshotCss.includes(".page.background-udevs-screenshot"));
 assert.ok(screenshotCss.includes("data:image/png;base64,"));
 assert.ok(screenshotCss.includes('[data-page-kind="cover"]'));
+assert.ok(screenshotCss.includes("@page{size:15in 10in;margin:0}"));
+assert.ok(screenshotCss.includes("-webkit-print-color-adjust:exact;print-color-adjust:exact"));
+assert.ok(screenshotCss.includes("@media print{html,body{width:15in!important;min-width:15in!important"));
+assert.ok(screenshotCss.includes("height:10in!important;min-height:10in!important;max-height:10in!important"));
+assert.ok(screenshotCss.includes(".payment-head,.payment-row{display:grid;grid-template-columns:minmax(0,2.2fr) minmax(150px,.7fr) minmax(170px,.8fr)"));
+assert.ok(screenshotCss.includes(".payment-head>span:not(:first-child){text-align:right}"));
+
+const teamCostAllocation = teamCostPlan({
+  hasProjectPrice: false,
+  hasClientBudget: true,
+  clientBudgetMinor: 10_000_001,
+}, {
+  rows: [
+    { role: "PM", peakFte: 1, fteMonths: 1 },
+    { role: "Engineering", peakFte: 1, fteMonths: 2 },
+    { role: "QA", peakFte: 2, fteMonths: 4 },
+  ],
+});
+assert.equal(teamCostAllocation.totalMinor, 10_000_001);
+assert.equal(teamCostAllocation.rows.reduce((sum, row) => sum + row.amountMinor, 0), 10_000_001);
+assert.deepEqual(teamCostAllocation.rows.map((row) => row.activeMonths), [1, 2, 2]);
+assert.ok(teamCostAllocation.rows.every((row) => Number.isSafeInteger(row.rateMinor) && row.rateMinor > 0));
+
+const fullFunctionInventory = Array.from({ length: 15 }, (_, index) => ({
+  epic: index < 5 ? "Core product" : index < 10 ? "Operations" : "Delivery",
+  task: `Function ${index + 1}`,
+  subtask: index === 0
+    ? "Product architecture and backlog"
+    : index === 1
+      ? "Catalog, categories and search"
+      : index === 14
+        ? "QA, release and handover"
+        : `Implementation scope ${index + 1}`,
+}));
+const unlimitedFunctionRows = taskListRows({
+  duration_months: 3,
+  grounded_brief: { sourceLanguage: "ru" },
+  scope: fullFunctionInventory,
+});
+assert.equal(unlimitedFunctionRows.length, 15);
+assert.equal(unlimitedFunctionRows[0][3], "3 нед.");
+assert.equal(unlimitedFunctionRows[1][3], "3 нед.");
+assert.equal(unlimitedFunctionRows[14][3], "3 нед.");
+const explicitScheduleRows = taskListRows({
+  duration_months: 4,
+  grounded_brief: { sourceLanguage: "ru" },
+  scope: [{ epic: "Core", task: "Catalog", subtask: "Catalog delivery", durationWeeks: 8 }],
+});
+assert.equal(explicitScheduleRows[0][3], "8 нед.");
+const aiAssistedIntegrationRows = taskListRows({
+  duration_months: 3,
+  grounded_brief: { sourceLanguage: "ru" },
+  scope: [{ epic: "Integrations", task: "Bank integration", subtask: "API callbacks and webhooks" }],
+});
+const traditionalIntegrationRows = taskListRows({
+  duration_months: 3,
+  ai_assisted_delivery: false,
+  grounded_brief: { sourceLanguage: "ru" },
+  scope: [{ epic: "Integrations", task: "Bank integration", subtask: "API callbacks and webhooks" }],
+});
+assert.equal(aiAssistedIntegrationRows[0][3], "5 нед.");
+assert.equal(traditionalIntegrationRows[0][3], "7 нед.");
+
+const productMapScope = Array.from({ length: 14 }, (_, index) => ({
+  id: `SCOPE-${index + 1}`,
+  epic: `Domain ${Math.floor(index / 2) + 1}`,
+  feature: `Function ${index + 1}`,
+  detail: `Function ${index + 1} detail`,
+  truthStatus: "recommended",
+}));
+assert.equal(buildProductMapSegments({ project: { name: "Product" }, scopeItems: productMapScope }).length, 1);
+const oversizedProductMapScope = Array.from({ length: 17 }, (_, index) => ({
+  id: `SCOPE-LARGE-${index + 1}`,
+  epic: `Domain ${Math.floor(index / 3) + 1}`,
+  feature: `Large function ${index + 1}`,
+  detail: `Large function ${index + 1} detail`,
+  truthStatus: "recommended",
+}));
+assert.ok(buildProductMapSegments({ project: { name: "Large product" }, scopeItems: oversizedProductMapScope }).length > 1);
 
 const aiDomainProfile = normalizeV5StyleProfile(null, {
   referenceMode: "none",

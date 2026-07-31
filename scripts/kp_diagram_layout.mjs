@@ -126,15 +126,16 @@ function layoutLeftToRightProductTree(spec, nodes, canvas) {
   const top = 20;
   const usableHeight = Math.max(1, canvas.height - top * 2);
   const slotHeight = usableHeight / rowCount;
-  const nodeHeight = Math.min(50, Math.max(38, slotHeight - 12));
+  const minimumNodeHeight = rowCount > 13 ? 34 : 38;
+  const nodeHeight = Math.min(50, Math.max(minimumNodeHeight, slotHeight - 6));
   const hasDetails = rows.some((row) => row.detail);
-  const rootRect = { x: 28, y: canvas.height / 2 - 36, w: 178, h: 72 };
-  const domainX = 246;
-  const domainWidth = 190;
-  const functionX = hasDetails ? 500 : 664;
-  const functionWidth = hasDetails ? 230 : 320;
-  const detailX = 790;
-  const detailWidth = Math.max(220, canvas.width - detailX - 30);
+  const rootRect = { x: 26, y: canvas.height / 2 - 36, w: 180, h: 72 };
+  const domainX = 250;
+  const domainWidth = 210;
+  const functionX = hasDetails ? 530 : 720;
+  const functionWidth = hasDetails ? 260 : 350;
+  const detailX = 850;
+  const detailWidth = Math.max(260, canvas.width - detailX - 26);
   nodes[root.id] = rootRect;
 
   const centersByDomain = new Map(domains.map((domain) => [domain.id, []]));

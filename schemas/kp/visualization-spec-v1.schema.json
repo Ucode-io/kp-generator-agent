@@ -32,12 +32,12 @@
     "timeScale": { "oneOf": [{ "$ref": "#/$defs/timeSpan" }, { "type": "null" }] },
     "nodes": {
       "type": "array",
-      "maxItems": 36,
+      "maxItems": 44,
       "items": { "$ref": "#/$defs/node" }
     },
     "edges": {
       "type": "array",
-      "maxItems": 32,
+      "maxItems": 44,
       "items": { "$ref": "#/$defs/edge" }
     },
     "groups": {

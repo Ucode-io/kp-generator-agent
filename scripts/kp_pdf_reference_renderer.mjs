@@ -624,47 +624,25 @@ export function assertRenderedPageContent(pagePlan, pageHtml, { content = {}, vi
   if (pageKind === "function_price") {
     const rows = array(content.functionPrice);
     const renderedRowCount = (pageHtml.match(/class="function-price-row"/g) || []).length;
-    const renderedCostCount = (pageHtml.match(/class="function-price-cost function-price-cost-/g) || []).length;
     const renderedHeaderCount = (pageHtml.match(/class="function-price-head"/g) || []).length;
     const uniqueIds = new Set(rows.map((row) => row.id));
     if (!rows.length) {
       if (!/class="missing-state panel-soft"/.test(pageHtml)
-        || !/class="function-price-total"/.test(pageHtml)
         || /class="function-price-table|class="function-price-head|class="function-price-row/.test(pageHtml)
-        || !visible.includes(l(content, "Allocated subtotal"))
-        || !visible.includes(l(content, "Not supplied"))) {
-        throw rendererError("CONTENT_FUNCTION_PRICE_STRUCTURE_INVALID", "An unavailable Function Price requires one honest missing state and an undisclosed subtotal");
+        || /class="function-price-total|class="scenario-banner/.test(pageHtml)) {
+        throw rendererError("CONTENT_FUNCTION_PRICE_STRUCTURE_INVALID", "An unavailable function schedule requires one honest missing state without pricing UI");
       }
     } else {
-    if (rows.length > 12 || renderedRowCount !== rows.length || renderedCostCount !== rows.length || renderedHeaderCount !== 1 || uniqueIds.size !== rows.length || /class="allocation-bar/.test(pageHtml)) {
-      throw rendererError("CONTENT_FUNCTION_PRICE_STRUCTURE_INVALID", "The Function Price page requires one bounded seven-column table row per locked function");
+    if (renderedRowCount !== rows.length || renderedHeaderCount !== 1 || uniqueIds.size !== rows.length || /class="allocation-bar|class="function-price-total|class="scenario-banner/.test(pageHtml)) {
+      throw rendererError("CONTENT_FUNCTION_PRICE_STRUCTURE_INVALID", "The function schedule requires one five-column table row per locked function and no pricing summary");
     }
-    const knownCostRows = rows.filter((row) => row.amountMinor > 0 && functionPriceCostState(row, content) !== "to_confirm");
-    const unknownCostRows = rows.filter((row) => row.amountMinor <= 0 || functionPriceCostState(row, content) === "to_confirm");
-    if (rows.length && (!rows.every((row) => visible.includes(normalizeVisible(row.name)))
-      || !knownCostRows.every((row) => visible.includes(normalizeVisible(formatMinor(row.amountMinor, content.currency, content.currencyExponent, content))))
-      || (pageHtml.match(/class="function-price-cost function-price-cost-to_confirm"[^>]*data-value-status="unknown"/g) || []).length !== unknownCostRows.length)) {
-      throw rendererError("CONTENT_FUNCTION_PRICE_MISSING", "The Function Price page omitted a function label, known amount, or explicit unknown-cost state");
+    if (!rows.every((row) => visible.includes(normalizeVisible(row.name)) && visible.includes(normalizeVisible(row.deadline)))) {
+      throw rendererError("CONTENT_FUNCTION_PRICE_MISSING", "The function schedule omitted a locked function label or delivery window");
     }
-    const structuralCellCounts = ["function-price-index", "function-price-epic", "function-price-task", "function-price-subtask", "function-price-deadline", "function-price-scope"]
+    const structuralCellCounts = ["function-price-index", "function-price-epic", "function-price-task", "function-price-subtask", "function-price-deadline"]
       .map((className) => (pageHtml.match(new RegExp('class="' + className + '(?:\\s|\")', "g")) || []).length);
     if (structuralCellCounts.some((count) => count !== rows.length)) {
-      throw rendererError("CONTENT_FUNCTION_PRICE_STRUCTURE_INVALID", "Every Function Price row requires index, epic, task, subtask, deadline, scope status, and cost");
-    }
-    const subtotal = rows.reduce((sum, row) => sum + row.amountMinor, 0);
-    const expected = Number.isSafeInteger(content.functionPriceSubtotalMinor) ? content.functionPriceSubtotalMinor : content.projectPriceMinor;
-    if (!visible.includes(l(content, "Allocated subtotal"))
-      || (knownCostRows.length
-        ? (!visible.includes(normalizeVisible(formatMinor(subtotal, content.currency, content.currencyExponent, content))) || (Number.isSafeInteger(expected) && subtotal !== expected))
-        : !visible.includes(l(content, "Not supplied")))) {
-      throw rendererError("CONTENT_FUNCTION_PRICE_RECONCILIATION_INVALID", "Known Function Price amounts must reconcile; otherwise the subtotal must remain undisclosed");
-    }
-    const expectedConfirmed = rows.filter((row) => functionPriceCostState(row, content) === "confirmed").length;
-    const expectedPlanning = rows.filter((row) => functionPriceCostState(row, content) === "planning").length;
-    const renderedConfirmed = (pageHtml.match(/class="function-price-cost function-price-cost-confirmed"/g) || []).length;
-    const renderedPlanning = (pageHtml.match(/class="function-price-cost function-price-cost-planning"/g) || []).length;
-    if (renderedConfirmed !== expectedConfirmed || renderedPlanning !== expectedPlanning || (expectedConfirmed < rows.length && !/data-warning-status="scenario"/.test(pageHtml))) {
-      throw rendererError("CONTENT_FUNCTION_PRICE_TRUTH_STATUS_INVALID", "Function costs must visibly distinguish confirmed values from planning allocations");
+      throw rendererError("CONTENT_FUNCTION_PRICE_STRUCTURE_INVALID", "Every function schedule row requires index, epic, task, subtask, and delivery window");
     }
     }
   }
@@ -679,15 +657,19 @@ export function assertRenderedPageContent(pagePlan, pageHtml, { content = {}, vi
       throw rendererError("CONTENT_TEAM_CAPACITY_MISMATCH", "The Team Size page requires a complete time-phased capacity plan");
     }
     if (capacityPlan) {
-      const renderedMetrics = (pageHtml.match(/data-team-metric="(?:people|roles|duration|peak_month)"/g) || []).length;
+      const costPlan = teamCostPlan(content, capacityPlan);
+      const renderedMetrics = (pageHtml.match(/data-team-metric="(?:people|roles|duration|budget_total)"/g) || []).length;
       const renderedRows = (pageHtml.match(/data-geometry-role="team_role_row"/g) || []).length;
-      const renderedFocusCells = (pageHtml.match(/data-geometry-role="team_role_focus"/g) || []).length;
-      const renderedMonthCells = (pageHtml.match(/data-geometry-role="team_month_cell"/g) || []).length;
-      const renderedMonthTotals = (pageHtml.match(/data-geometry-role="team_month_total"/g) || []).length;
-      const renderedPeakTotals = (pageHtml.match(/data-geometry-role="team_month_total"[^>]*data-peak="true"/g) || []).length;
+      const renderedQuantityCells = (pageHtml.match(/data-geometry-role="team_quantity"/g) || []).length;
+      const renderedDurationCells = (pageHtml.match(/data-geometry-role="team_duration"/g) || []).length;
+      const renderedRateCells = (pageHtml.match(/data-geometry-role="team_rate"/g) || []).length;
+      const renderedAmountCells = (pageHtml.match(/data-geometry-role="team_amount"/g) || []).length;
       const renderedScenarioWarnings = (pageHtml.match(/data-warning-status="scenario"/g) || []).length;
-      if (renderedMetrics !== 4 || renderedRows !== capacityPlan.rows.length || renderedFocusCells !== capacityPlan.rows.length || renderedMonthCells !== capacityPlan.rows.length * capacityPlan.monthCount || renderedMonthTotals !== capacityPlan.monthCount || renderedPeakTotals !== 1 || renderedScenarioWarnings !== 1) {
-        throw rendererError("CONTENT_TEAM_CAPACITY_STRUCTURE_INVALID", "The Team Size page requires four summary metrics, one role/focus row per locked role, a complete month matrix, one monthly-total row, one peak, and one scenario disclosure");
+      const headerCells = (pageHtml.match(/class="team-capacity-head"[^>]*>(?:<span>[^<]*<\/span>){5}<\/div>/g) || []).length;
+      if (renderedMetrics !== 4 || renderedRows !== capacityPlan.rows.length || renderedQuantityCells !== capacityPlan.rows.length
+        || renderedDurationCells !== capacityPlan.rows.length || renderedRateCells !== capacityPlan.rows.length
+        || renderedAmountCells !== capacityPlan.rows.length || renderedScenarioWarnings !== 1 || headerCells !== 1) {
+        throw rendererError("CONTENT_TEAM_CAPACITY_STRUCTURE_INVALID", "The Team Size page requires four summary metrics and one employee, quantity, months, monthly-rate, and amount cell per role");
       }
       const rowMonths = capacityPlan.rows.flatMap((row) => row.months);
       const rowCapacityValid = capacityPlan.rows.every((row) => nearlyEqual(row.months.reduce((sum, value) => sum + value, 0), row.fteMonths)
@@ -697,7 +679,11 @@ export function assertRenderedPageContent(pagePlan, pageHtml, { content = {}, vi
       const expectedTotal = nullableNumber(content.team.fteMonths) ?? capacityPlan.rows.reduce((sum, row) => sum + row.fteMonths, 0);
       if (!rowCapacityValid || !nearlyEqual(rowMonths.reduce((sum, value) => sum + value, 0), monthlyTotal) || !nearlyEqual(monthlyTotal, expectedTotal)
         || !nearlyEqual(Math.max(...capacityPlan.monthlyTotals), content.team.peakFte)) {
-        throw rendererError("CONTENT_TEAM_CAPACITY_RECONCILIATION_INVALID", "The Team Size monthly matrix must reconcile role peaks, FTE-months, monthly totals and the aggregate peak");
+        throw rendererError("CONTENT_TEAM_CAPACITY_RECONCILIATION_INVALID", "The Team Size rows must reconcile role quantities, active months, FTE-months, and aggregate capacity");
+      }
+      const allocatedMinor = costPlan.rows.reduce((sum, row) => sum + Number(row.amountMinor || 0), 0);
+      if (costPlan.totalMinor !== null && allocatedMinor !== costPlan.totalMinor) {
+        throw rendererError("CONTENT_TEAM_COST_RECONCILIATION_INVALID", "Team role amounts must reconcile exactly to the displayed project or budget total");
       }
     }
   }
@@ -914,11 +900,12 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     '.page[data-page-composition="light"],.kp-page[data-page-composition="light"]{' + pagePaletteDeclarations(lightPalette) + "}",
     '.page[data-page-composition="dark"],.kp-page[data-page-composition="dark"]{' + pagePaletteDeclarations(darkPalette) + "}",
     '.page[data-page-composition="split"],.kp-page[data-page-composition="split"]{' + pagePaletteDeclarations(splitPalette) + "}",
-    "*{box-sizing:border-box}",
+    "*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}",
     "html,body{margin:0;padding:0;width:1440px;background:" + t.background + ";color:" + t.text + ";font-family:" + t.bodyStack + "}",
     ".proposal{width:1440px}",
     ".page,.kp-page{box-sizing:border-box;position:relative;overflow:hidden;width:1440px;height:960px;padding:" + t.pagePaddingTop + "px " + t.pagePaddingX + "px " + t.pagePaddingBottom + "px;background:" + t.background + ";color:" + t.text + ";break-after:page;page-break-after:always}",
     ".page:last-child,.kp-page:last-child{break-after:auto;page-break-after:auto}",
+    "@media print{html,body{width:15in!important;min-width:15in!important;margin:0!important;padding:0!important}.proposal{display:block!important;width:15in!important;margin:0!important;padding:0!important}.page,.kp-page{width:15in!important;min-width:15in!important;max-width:15in!important;height:10in!important;min-height:10in!important;max-height:10in!important;margin:0!important;break-inside:avoid!important;page-break-inside:avoid!important;break-after:page!important;page-break-after:always!important}.page:last-child,.kp-page:last-child{break-after:auto!important;page-break-after:auto!important}}",
     ".page::before{content:'';position:absolute;right:-160px;top:-220px;width:580px;height:580px;border-radius:50%;background:radial-gradient(circle," + alphaHex(t.decorativeTertiary, 0.18) + " 0%,transparent 68%);pointer-events:none}",
     ".page::after{content:'';position:absolute;left:-210px;bottom:-290px;width:520px;height:520px;border-radius:44% 56% 63% 37%;background:radial-gradient(circle," + alphaHex(t.decorativeTertiary, 0.10) + " 0%,transparent 70%);transform:rotate(-14deg);pointer-events:none}",
     ...udevsScreenshotRules,
@@ -1064,6 +1051,8 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".semantic-note{width:1120px;display:grid;grid-template-columns:180px 1fr auto;gap:16px;align-items:center;padding:10px 14px;border-left:3px solid " + t.secondary + ";background:" + alphaHex(t.surface2, .72) + "}",
     ".semantic-note span{color:" + t.secondary + ";font:700 9px/1 " + t.metadataStack + ";letter-spacing:.08em}",
     ".semantic-note p{margin:0;color:" + t.muted + ";font-size:11px;line-height:1.35}",
+    ".semantic-layout-product-map{justify-content:flex-start;gap:8px}",
+    ".semantic-layout-product-map .semantic-note{width:100%}",
     ".market-sizing-layout{height:100%;display:grid;grid-template-columns:minmax(0,.76fr) minmax(0,1.24fr);gap:42px;align-items:stretch}",
     ".market-story{min-width:0;display:flex;flex-direction:column;justify-content:space-between;padding:18px 0 14px}",
     ".market-thesis{max-width:390px;padding-left:18px;border-left:3px solid " + t.primary + "}",
@@ -1170,6 +1159,7 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".org-evidence>p{margin:0;color:" + t.muted + ";font-size:10.5px;line-height:1.3}",
     ".org-evidence .inline-sources{margin:0;justify-content:flex-end}",
     ".viz-canvas{position:relative;border:1px solid " + t.rule + ";border-radius:" + t.radiusMd + "px;overflow:hidden}",
+    ".semantic-layout-product-map .viz-canvas{border:0;box-shadow:inset 0 0 0 1px " + t.rule + "}",
     ".viz-groups{position:absolute;inset:0;z-index:1}",
     ".viz-edges{position:absolute;left:0;top:0;z-index:2}",
     ".viz-edge-labels{position:absolute;left:0;top:0;z-index:3}",
@@ -1329,41 +1319,28 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".client-dependencies-empty{display:flex;height:100%;flex-direction:column;align-items:center;justify-content:center;padding:40px;text-align:center}",
     ".client-dependencies-empty strong{font:700 25px/1.15 " + t.displayStack + "}",
     ".client-dependencies-empty p{max-width:620px;margin:14px 0 0;color:" + t.muted + ";font-size:12px;line-height:1.45}",
-    ".function-price-layout{height:100%;display:grid;grid-template-rows:minmax(0,1fr) 66px;gap:12px}",
-    ".function-price-table{min-height:0;overflow:hidden;display:grid;align-content:start;background:" + alphaHex(t.surface, .9) + "}",
+    ".function-price-layout{height:100%;display:block}",
+    ".function-price-table{height:100%;min-height:0;overflow:hidden;display:grid;align-content:start;background:" + alphaHex(t.surface, .9) + "}",
     ".scenario-banner{padding:9px 12px;border-bottom:1px solid " + t.rule + ";color:" + t.warning + ";font:700 9px/1.2 " + t.metadataStack + ";letter-spacing:.02em}",
     ".currency-note{padding:9px 12px;border-bottom:1px solid " + t.rule + ";color:" + t.muted + ";font:700 9px/1.2 " + t.metadataStack + "}",
-    ".function-price-head,.function-price-row{display:grid;grid-template-columns:40px 150px 215px minmax(240px,1fr) 94px 118px 146px;gap:10px;align-items:center;padding:0 16px}",
+    ".function-price-head,.function-price-row{display:grid;grid-template-columns:44px 180px 250px minmax(0,1fr) 110px;gap:14px;align-items:center;padding:0 16px}",
     ".function-price-head{min-height:38px;border-bottom:1px solid " + t.rule + ";background:" + alphaHex(t.surface2, .72) + ";color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.08em;text-transform:uppercase}",
-    ".function-price-head span:last-child{text-align:right}",
+    ".function-price-head span:last-child{justify-self:stretch;text-align:center}",
     ".function-price-row{min-height:58px;border-bottom:1px solid " + t.rule + "}",
     ".function-price-row:last-child{border-bottom:0}",
     ".function-price-index{color:" + t.secondary + ";font:700 9px/1 " + t.metadataStack + ";letter-spacing:.04em}",
     ".function-price-epic{min-width:0;color:" + t.muted + ";font:700 8.5px/1.24 " + t.metadataStack + ";overflow-wrap:anywhere}",
     ".function-price-task{min-width:0;font-size:10.5px;line-height:1.22;overflow-wrap:anywhere}",
     ".function-price-subtask{min-width:0;color:" + t.muted + ";font-size:8.75px;line-height:1.25;overflow-wrap:anywhere}",
-    ".function-price-deadline{color:" + t.secondary + ";font:700 8.5px/1.2 " + t.metadataStack + ";letter-spacing:.02em}",
-    ".function-price-scope{display:inline-flex;justify-self:start;align-items:center;min-height:23px;padding:5px 8px;border:1px solid " + t.rule + ";border-radius:999px;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";white-space:nowrap}",
-    ".function-price-scope-requested,.function-price-scope-in_scope{color:" + t.positive + ";border-color:" + alphaHex(t.positive, .48) + ";background:" + alphaHex(t.positive, .07) + "}",
-    ".function-price-scope-recommended{color:" + t.secondary + ";border-color:" + alphaHex(t.primary, .48) + ";background:" + alphaHex(t.primary, .07) + "}",
-    ".function-price-scope-deferred,.function-price-scope-out_of_scope{color:" + t.critical + ";border-color:" + alphaHex(t.critical, .45) + ";background:" + alphaHex(t.critical, .07) + "}",
-    ".function-price-cost{display:flex;min-width:0;flex-direction:column;align-items:flex-end;gap:4px;text-align:right}",
-    ".function-price-cost strong{font:700 11px/1 " + t.metadataStack + ";white-space:nowrap}",
-    ".function-price-cost small{color:" + t.muted + ";font:700 8px/1.1 " + t.metadataStack + ";letter-spacing:.03em;text-transform:uppercase}",
-    ".function-price-cost-confirmed strong{color:" + t.positive + "}",
-    ".function-price-cost-planning strong{color:" + t.warning + "}",
+    ".function-price-deadline{display:block;justify-self:stretch;color:" + t.secondary + ";font:700 8.5px/1.2 " + t.metadataStack + ";letter-spacing:.02em;text-align:center}",
     ".function-price-table-compact .function-price-head{min-height:32px}",
     ".function-price-table-compact .function-price-row{min-height:42px}",
     ".function-price-table-compact .function-price-task{font-size:9.5px}",
     ".function-price-table-compact .function-price-subtask{font-size:8px;line-height:1.15}",
-    ".function-price-total{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(292px,auto);gap:20px;align-items:center;padding:12px 16px;border:1px solid " + t.rule + ";border-top:3px solid " + t.primary + ";border-radius:" + t.radiusSm + "px;background:" + alphaHex(t.surface, .9) + "}",
-    ".function-price-total>div{min-width:0}",
-    ".function-price-total>div span{display:block;color:" + t.text + ";font:700 9.5px/1.15 " + t.metadataStack + "}",
-    ".function-price-total>div small{display:block;margin-top:5px;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + "}",
-    ".function-price-total>strong{font:700 19px/1 " + t.displayStack + ";white-space:nowrap}",
-    ".function-price-total-status{justify-self:end;padding:7px 10px;border:1px solid " + t.rule + ";border-radius:999px;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";white-space:nowrap}",
-    ".function-price-total-status.is-confirmed{color:" + t.positive + ";border-color:" + alphaHex(t.positive, .48) + ";background:" + alphaHex(t.positive, .07) + "}",
-    ".function-price-total-status.is-planning{color:" + t.warning + ";border-color:" + alphaHex(t.warning, .48) + ";background:" + alphaHex(t.warning, .07) + "}",
+    ".function-price-table-dense{grid-template-rows:30px;grid-auto-rows:minmax(0,1fr);align-content:stretch}",
+    ".function-price-table-dense .function-price-head{min-height:0;height:auto;padding-top:2px;padding-bottom:2px}",
+    ".function-price-table-dense .function-price-row{min-height:0;height:auto;padding-top:2px;padding-bottom:2px}",
+    ".function-price-table-dense .function-price-epic,.function-price-table-dense .function-price-task,.function-price-table-dense .function-price-subtask,.function-price-table-dense .function-price-deadline{font-size:8px;line-height:1.12}",
     ".team-capacity-layout{height:100%;display:grid;grid-template-rows:88px minmax(0,1fr) 58px;gap:12px}",
     ".team-capacity-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}",
     ".team-capacity-metric{position:relative;overflow:hidden;padding:13px 16px 11px;border:1px solid " + t.rule + ";border-top:3px solid " + t.primary + ";border-radius:" + t.radiusSm + "px;background:" + alphaHex(t.surface, .88) + "}",
@@ -1374,38 +1351,21 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".team-capacity-metric.is-peak{border-top-color:" + t.primary + ";background:" + alphaHex(t.primary, .08) + "}",
     ".team-capacity-metric.is-peak strong{color:" + t.secondary + "}",
     ".team-capacity-table{min-height:0;overflow:hidden;display:flex;flex-direction:column}",
-    ".team-month-count-2{--team-month-count:2}",
-    ".team-month-count-3{--team-month-count:3}",
-    ".team-month-count-4{--team-month-count:4}",
-    ".team-month-count-5{--team-month-count:5}",
-    ".team-month-count-6{--team-month-count:6}",
     ".team-capacity-disclosure{flex:0 0 29px;display:flex;align-items:center;padding:0 14px;border-bottom:1px solid " + t.rule + ";color:" + t.secondary + ";background:" + alphaHex(t.primary, .055) + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.075em;text-transform:uppercase}",
-    ".team-capacity-head,.team-capacity-row,.team-capacity-total{display:grid;grid-template-columns:190px minmax(300px,1fr) repeat(var(--team-month-count),minmax(66px,86px));column-gap:10px;align-items:center;padding:0 14px}",
+    ".team-capacity-head,.team-capacity-row,.team-capacity-total{display:grid;grid-template-columns:2.1fr .65fr .65fr 1fr 1.05fr;column-gap:0;align-items:center;padding:0 14px}",
     ".team-capacity-head{flex:0 0 35px;border-bottom:1px solid " + t.rule + ";color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.08em;text-transform:uppercase}",
-    ".team-month-head{height:100%;display:flex;align-items:center;justify-content:center;gap:4px;border-left:1px solid " + alphaHex(t.rule, .7) + "}",
-    ".team-month-head small{color:" + t.secondary + ";font-size:8px;letter-spacing:.04em}",
-    ".team-month-head.is-peak{color:" + t.secondary + ";background:" + alphaHex(t.primary, .07) + "}",
     ".team-capacity-row{flex:1 1 0;min-height:49px;border-bottom:1px solid " + t.rule + "}",
     ".team-capacity-role{min-width:0}",
     ".team-capacity-role strong{display:block;font-size:10.5px;line-height:1.16;overflow-wrap:anywhere}",
     ".team-capacity-role small{display:block;margin-top:4px;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.03em}",
-    ".team-capacity-focus{min-width:0;color:" + t.muted + ";font-size:8.75px;line-height:1.22;overflow-wrap:anywhere}",
-    ".team-month-cell{height:28px;display:flex;align-items:center;justify-content:center;border:1px solid " + alphaHex(t.rule, .95) + ";border-radius:" + Math.max(4, t.radiusSm - 2) + "px;background:" + alphaHex(t.surface2, .42) + "}",
-    ".team-month-cell strong{font:700 8.5px/1 " + t.metadataStack + "}",
-    ".team-month-cell.is-zero strong{color:" + t.muted + "}",
-    // FTE heat map: emphasis follows the cell value, not just the peak month.
-    // Chromium's PDF export rasterizes box-shadow blur into opaque rectangles,
-    // so intensity is carried by background/border alpha only.
-    ".team-month-cell.team-fte-level-1{border-color:" + alphaHex(t.primary, .16) + ";background:" + alphaHex(t.primary, .06) + "}",
-    ".team-month-cell.team-fte-level-2{border-color:" + alphaHex(t.primary, .3) + ";background:" + alphaHex(t.primary, .14) + "}",
-    ".team-month-cell.team-fte-level-3{border-color:" + alphaHex(t.primary, .5) + ";background:" + alphaHex(t.primary, .26) + "}",
-    ".team-month-cell.team-fte-level-4{border-color:" + alphaHex(t.primary, .8) + ";background:" + alphaHex(t.primary, .4) + ";color:" + t.text + "}",
-    ".team-month-cell.is-peak-month{border-color:" + alphaHex(t.primary, .5) + "}",
+    ".team-quantity,.team-duration,.team-rate,.team-amount{text-align:right}",
+    ".team-rate{color:" + t.muted + "}",
+    ".team-amount{font-weight:700}",
     ".team-capacity-total{flex:0 0 48px;background:" + alphaHex(t.surface2, .7) + "}",
+    ".team-capacity-total-label{grid-column:1/5}",
     ".team-capacity-total-label strong{display:block;font:700 8.5px/1 " + t.metadataStack + ";letter-spacing:.045em;text-transform:uppercase}",
     ".team-capacity-total-label small{display:block;margin-top:4px;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + "}",
-    ".team-month-total{height:30px;display:flex;align-items:center;justify-content:center;border:1px solid " + t.rule + ";border-radius:" + Math.max(4, t.radiusSm - 2) + "px;font:700 9px/1 " + t.metadataStack + "}",
-    ".team-month-total.is-peak{border-color:" + t.primary + ";color:" + t.text + ";background:" + alphaHex(t.primary, .13) + "}",
+    ".team-cost-total{grid-column:5;text-align:right}",
     ".team-capacity-note{display:grid;grid-template-columns:180px 1fr auto;gap:16px;align-items:center;padding:10px 14px;border-left:3px solid " + t.primary + ";background:" + alphaHex(t.surface2, .76) + "}",
     ".team-capacity-note>span{color:" + t.secondary + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.09em}",
     ".team-capacity-note>strong{font-size:9px;line-height:1.25}",
@@ -1446,8 +1406,9 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".project-price-term strong{margin-top:7px;font-size:8.5px;line-height:1.2;overflow-wrap:anywhere}",
     ".project-price-term.is-warning strong{color:" + t.warning + "}",
     ".payment-layout{height:100%;display:grid;grid-template-rows:1fr auto;gap:14px}",
-    ".payment-head,.payment-row{display:grid;grid-template-columns:.9fr 1fr .55fr .7fr;gap:18px;align-items:center}",
+    ".payment-head,.payment-row{display:grid;grid-template-columns:minmax(0,2.2fr) minmax(150px,.7fr) minmax(170px,.8fr);gap:18px;align-items:center}",
     ".payment-head{padding:10px 16px;color:" + t.muted + ";font:700 9px/1 " + t.metadataStack + "}",
+    ".payment-head>span:not(:first-child){text-align:right}",
     ".payment-row{min-height:85px;padding:13px 16px;border-top:1px solid " + t.rule + "}",
     ".payment-row strong{font-size:13px}",
     ".payment-row p{margin:5px 0 0;color:" + t.muted + ";font-size:10px;line-height:1.32}",
@@ -1570,10 +1531,6 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".function-price-table{border:0;background:transparent;box-shadow:none}",
     ".function-price-head{border-bottom:1px solid " + t.rule + ";background:transparent}",
     ".function-price-row{border-bottom:1px solid " + t.rule + "}",
-    ".function-price-scope{min-height:0;padding:0;border:0;border-radius:0;color:" + t.primary + ";background:transparent}",
-    ".function-price-scope-requested,.function-price-scope-in_scope,.function-price-scope-recommended,.function-price-scope-deferred,.function-price-scope-out_of_scope{color:" + t.primary + ";border:0;background:transparent}",
-    ".function-price-total{color:" + t.textOnAccent + ";border:0;border-radius:12px;background:" + t.primary + "}",
-    ".function-price-total>div span,.function-price-total>div small,.function-price-total>strong,.function-price-total-status,.function-price-total-status.is-confirmed,.function-price-total-status.is-planning{color:" + t.textOnAccent + ";border-color:transparent;background:transparent}",
 
     ".team-capacity-metric{border:1px solid " + t.rule + ";border-radius:10px;background:" + t.surface + "}",
     ".team-capacity-metric::after{display:none}",
@@ -1582,10 +1539,8 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".team-capacity-table{border:0;background:transparent;box-shadow:none}",
     ".team-capacity-disclosure{display:none}",
     ".team-capacity-row{margin:2px 0;border:0;border-radius:10px;background:" + t.surface + "}",
-    ".team-month-cell{border:0;background:transparent!important}",
-    ".team-month-cell.is-peak-month strong{color:" + t.primary + "}",
     ".team-capacity-total{color:" + t.textOnAccent + ";border-radius:10px;background:" + t.primary + "}",
-    ".team-capacity-total *,.team-capacity-total-label small,.team-month-total,.team-month-total.is-peak{color:" + t.textOnAccent + ";border-color:transparent;background:transparent}",
+    ".team-capacity-total *,.team-capacity-total-label small{color:" + t.textOnAccent + ";border-color:transparent;background:transparent}",
 
     ".roadmap-stage-thesis,.roadmap-stage-disclosure{border-left-color:" + t.primary + "}",
     ".roadmap-stage-chart{border-color:" + t.rule + ";background:" + t.surface + "}",
@@ -1593,7 +1548,7 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".roadmap-workstream-row,.roadmap-workstream-row:nth-child(even){background:" + alphaHex(t.surface, .78) + "}",
 
     ".payment-layout>.panel{border:0;background:transparent;box-shadow:none}",
-    ".payment-head{padding:10px 16px 8px;text-transform:uppercase}",
+    ".payment-head{padding:10px 17px 8px;text-transform:uppercase}",
     ".payment-row{min-height:64px;margin:10px 0 0;padding:12px 16px;border:1px solid " + t.rule + ";border-radius:12px;background:" + alphaHex(t.surface2, .72) + "}",
     ".payment-row:last-child{color:" + t.textOnAccent + ";border-color:" + t.primary + ";background:" + t.primary + "}",
     ".payment-row:last-child p,.payment-row:last-child>span{color:" + t.textOnAccent + "}",
@@ -1618,6 +1573,19 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
 
     ".viz-bpmn .viz-node-gateway{overflow:visible!important}",
     ".viz-bpmn .viz-node-gateway::before{width:32px;height:32px}",
+    ".viz-bpmn .viz-node-start_event,.viz-bpmn .viz-node-end_event{overflow:visible!important}",
+    '.viz-bpmn [data-semantic-role="partner"]{--viz-node-color:#6D82AE!important;border-color:#6D82AE!important;background:#F8FAFF!important;color:' + t.text + "!important}",
+    '.viz-bpmn-lane[data-semantic-role="partner"]{--viz-lane-color:#8EA0C5!important}',
+    ".viz-bpmn .viz-edge-partner{stroke:#6D82AE!important}",
+    ".viz-bpmn .viz-edge-risk,.viz-bpmn .viz-edge-positive{stroke:#526B9D!important}",
+    '.viz-bpmn .viz-bpmn-node-risk{--viz-node-color:#526B9D!important;border-color:#526B9D!important;background:#F7F9FF!important;color:' + t.text + "!important}",
+    '.viz-bpmn marker[id$="-partner"] path{fill:#6D82AE!important}',
+    '.viz-bpmn marker[id$="-risk"] path,.viz-bpmn marker[id$="-positive"] path{fill:#526B9D!important}',
+    '.viz-bpmn .viz-node-end_event{--viz-node-color:#526B9D!important;color:' + t.brandDeep + "!important}",
+    ".viz-bpmn .viz-node-end_event::before{width:32px;height:32px;border:2px solid #526B9D;box-shadow:0 0 0 3px #FFFFFF,0 0 0 5px #9DB2DD;background:#EEF3FF}",
+    '.viz-bpmn .viz-node-end_event span{color:' + t.brandDeep + ';font-weight:600}',
+    '.viz-bpmn .viz-node-gateway span{position:absolute;left:50%;top:45px;grid-row:auto!important;z-index:2;width:auto;max-width:80px;padding:3px 6px;border:1px solid #D7E1F4;border-radius:999px;background:#FFFFFF;color:#526B9D;font:600 10.5px/1 "Work Sans",Arial,sans-serif;box-shadow:0 5px 14px -10px #526B9D;transform:translateX(-50%)}',
+    '.viz-bpmn .viz-bpmn-edge-label{border-color:#AFC0E2!important;background:#F7F9FF!important;color:#425B8E!important;font-weight:600}',
 
     '.page[data-page-kind="architecture"] .semantic-layout{justify-content:center;gap:0}',
     '.page[data-page-kind="architecture"] .semantic-note{display:none}',
@@ -1649,22 +1617,28 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     '.page[data-page-kind="client_dependencies"] .client-dependency-owner strong{color:' + t.muted + ';font-size:12.5px;font-weight:400}',
     '.page[data-page-kind="client_dependencies"] .client-dependency-checkbox{padding:4px 10px;color:' + t.brandDeep + ';background:' + alphaHex(t.primary, .16) + ';font-size:11.5px}',
 
-    '.page[data-page-kind="team"] .team-capacity-layout{height:auto;grid-template-rows:76px auto;align-content:start;gap:14px}',
-    '.page[data-page-kind="team"] .team-capacity-note{display:none}',
-    '.page[data-page-kind="team"] .team-capacity-metrics{gap:14px}',
+    '.page[data-page-kind="team"] .team-capacity-layout{height:auto;display:grid;grid-template-rows:76px auto;align-content:start;gap:14px}',
+    '.page[data-page-kind="team"] .team-capacity-note,.page[data-page-kind="team"] .team-capacity-disclosure{display:none}',
+    '.page[data-page-kind="team"] .team-capacity-metrics{display:grid;gap:14px}',
     '.page[data-page-kind="team"] .team-capacity-metric{padding:12px 18px;border:0;border-radius:10px;box-shadow:0 6px 16px -13px ' + alphaHex(t.primary, .25) + "}",
     '.page[data-page-kind="team"] .team-capacity-metric span{font:400 12px/1.15 "Work Sans",Arial,sans-serif;letter-spacing:0;text-transform:none}',
     '.page[data-page-kind="team"] .team-capacity-metric strong{margin-top:6px;font:800 20px/1 "Sora",Arial,sans-serif}',
     '.page[data-page-kind="team"] .team-capacity-metric small{display:none}',
-    '.page[data-page-kind="team"] .team-capacity-table{height:auto;overflow:visible;border:0;background:transparent;box-shadow:none}',
-    '.page[data-page-kind="team"] .team-capacity-head,.page[data-page-kind="team"] .team-capacity-row,.page[data-page-kind="team"] .team-capacity-total{grid-template-columns:1.6fr 2.2fr repeat(var(--team-month-count),.6fr);column-gap:0;padding:0 12px}',
-    '.page[data-page-kind="team"] .team-capacity-head{flex-basis:34px;border-bottom:1px solid #E4E4E0;font-size:11px}',
+    '.page[data-page-kind="team"] .team-capacity-table{width:100%;height:auto;display:flex;overflow:visible;border:0;background:transparent;box-shadow:none}',
+    '.page[data-page-kind="team"] .team-capacity-head,.page[data-page-kind="team"] .team-capacity-row,.page[data-page-kind="team"] .team-capacity-total{display:grid;grid-template-columns:2.1fr .65fr .65fr 1fr 1.05fr;column-gap:0;align-items:center;padding:0 14px}',
+    '.page[data-page-kind="team"] .team-capacity-head{flex:0 0 34px;border-bottom:1px solid ' + t.rule + ';color:' + t.muted + ';font:700 10.5px/1 "Work Sans",Arial,sans-serif;letter-spacing:.06em;text-transform:uppercase}',
+    '.page[data-page-kind="team"] .team-capacity-head span:not(:first-child){text-align:right}',
     '.page[data-page-kind="team"] .team-capacity-row{flex:0 0 48px;min-height:48px;margin-top:6px;border:0;border-radius:10px;background:' + t.surface + ';box-shadow:0 6px 16px -13px ' + alphaHex(t.primary, .2) + "}",
     '.page[data-page-kind="team"] .team-capacity-role strong{font:700 13.5px/1.15 "Sora",Arial,sans-serif}',
     '.page[data-page-kind="team"] .team-capacity-role small{display:none}',
-    '.page[data-page-kind="team"] .team-capacity-focus{color:' + t.muted + ';font-size:12.5px}',
-    '.page[data-page-kind="team"] .team-month-cell strong{font-size:13px}',
-    '.page[data-page-kind="team"] .team-capacity-total{flex-basis:48px;margin-top:8px;border-radius:10px}',
+    '.page[data-page-kind="team"] .team-quantity,.page[data-page-kind="team"] .team-duration,.page[data-page-kind="team"] .team-rate,.page[data-page-kind="team"] .team-amount{font:600 12.5px/1 "Work Sans",Arial,sans-serif;text-align:right}',
+    '.page[data-page-kind="team"] .team-rate{color:' + t.muted + '}',
+    '.page[data-page-kind="team"] .team-amount{color:' + t.secondary + ';font-weight:700}',
+    '.page[data-page-kind="team"] .team-capacity-total{flex:0 0 48px;margin-top:8px;border-radius:10px;color:' + t.textOnAccent + ';background:' + t.primary + '}',
+    '.page[data-page-kind="team"] .team-capacity-total-label{grid-column:1/5}',
+    '.page[data-page-kind="team"] .team-capacity-total-label strong{display:block;font:700 10px/1 "Work Sans",Arial,sans-serif;letter-spacing:.04em;text-transform:uppercase}',
+    '.page[data-page-kind="team"] .team-capacity-total-label small{display:block;margin-top:4px;color:' + alphaHex(t.textOnAccent, .82) + ';font:600 8.5px/1 "Work Sans",Arial,sans-serif}',
+    '.page[data-page-kind="team"] .team-cost-total{grid-column:5;color:' + t.textOnAccent + ';font:800 14px/1 "Sora",Arial,sans-serif;text-align:right}',
     ...dynamicRules,
   ];
   return css.join("\n");
@@ -2347,20 +2321,11 @@ function renderFunctionPrice(content) {
   if (!content.functionPrice.length) {
     return [
       '<div class="function-price-layout">',
-      missingState(content, l(content, "Function allocation is not supplied."), l(content, "The project amount cannot be presented as an accountable allocation until functional groups are approved."), [l(content, "Approve functional groups."), l(content, "Attach an amount to every group."), l(content, "Reconcile the allocated subtotal to the development subtotal.")]),
-      '<div class="function-price-total"><div><span>' + e(l(content, "Allocated subtotal")) + '</span><small>' + e(l(content, "Commercial input required")) + '</small></div><strong>' + e(l(content, "Not supplied")) + '</strong><span class="function-price-total-status">' + e(l(content, "Cost to confirm")) + "</span></div>",
+      missingState(content, l(content, "Function schedule is not supplied."), l(content, "A complete list of functional blocks and delivery windows is required before the schedule can be presented."), [l(content, "Confirm the functional inventory."), l(content, "Confirm dependencies between blocks."), l(content, "Confirm the delivery window for each block.")]),
       "</div>",
     ].join("");
   }
-  const subtotal = content.functionPrice.reduce((sum, row) => sum + row.amountMinor, 0);
-  const costStates = content.functionPrice.map((row) => functionPriceCostState(row, content));
-  const knownCostCount = content.functionPrice.filter((row, index) => row.amountMinor > 0 && costStates[index] !== "to_confirm").length;
-  const hasKnownCosts = knownCostCount > 0;
   const rows = content.functionPrice.map((row, index) => {
-    const costState = costStates[index];
-    const costValue = row.amountMinor > 0 && costState !== "to_confirm"
-      ? formatMinor(row.amountMinor, content.currency, content.currencyExponent, content)
-      : "—";
     const sourceIds = row.sourceIds?.length ? ' data-source-ids="' + escapeHtmlAttribute(row.sourceIds.join(",")) + '"' : "";
     return [
       '<div class="function-price-row" data-geometry-role="function_price_row" data-node-id="' + escapeHtmlAttribute(row.id) + '" data-node-type="function_price" data-truth-status="' + escapeHtmlAttribute(row.truthStatus || "unknown") + '" data-inclusion="' + escapeHtmlAttribute(row.scopeStatus || "to_confirm") + '"' + sourceIds + '>',
@@ -2369,55 +2334,22 @@ function renderFunctionPrice(content) {
       '<strong class="function-price-task">' + e(row.name) + "</strong>",
       '<span class="function-price-subtask">' + e(row.detail) + "</span>",
       '<span class="function-price-deadline">' + e(row.deadline) + "</span>",
-      '<span class="function-price-scope function-price-scope-' + escapeHtmlAttribute(row.scopeStatus || "to_confirm") + '">' + e(functionPriceScopeStatusLabel(row.scopeStatus, content)) + "</span>",
-      '<span class="function-price-cost function-price-cost-' + costState + '" data-value-status="' + (costValue === "—" ? "unknown" : "known") + '"><strong>' + e(costValue) + '</strong><small>' + e(functionPriceCostStatusLabel(costState, content)) + "</small></span>",
       "</div>",
     ].join("");
   }).join("");
-  const expected = Number.isSafeInteger(content.functionPriceSubtotalMinor) ? content.functionPriceSubtotalMinor : content.projectPriceMinor;
-  const matches = hasKnownCosts && Number.isSafeInteger(expected) && expected > 0 && subtotal === expected;
-  const allCostsConfirmed = hasKnownCosts && knownCostCount === content.functionPrice.length && costStates.every((state) => state === "confirmed");
-  const projectAmountConfirmed = isConfirmedProjectAmount(content);
-  const densityClass = content.functionPrice.length > 8 ? " function-price-table-compact" : "";
+  const densityClass = content.functionPrice.length > 16
+    ? " function-price-table-dense"
+    : content.functionPrice.length > 8
+      ? " function-price-table-compact"
+      : "";
   return [
     '<div class="function-price-layout">',
     '<div class="function-price-table panel' + densityClass + '">',
-    commercialCurrencyNote(content),
-    scenarioBanner(content, content.functionPrice, allCostsConfirmed ? "confirmed" : "unknown"),
-    '<div class="function-price-head"><span>#</span><span>' + e(l(content, "Epic")) + '</span><span>' + e(l(content, "Main task")) + '</span><span>' + e(l(content, "Subtask")) + '</span><span>' + e(l(content, "Deadline")) + '</span><span>' + e(l(content, "Status")) + '</span><span>' + e(l(content, "Cost")) + "</span></div>",
+    '<div class="function-price-head"><span>#</span><span>' + e(l(content, "Epic")) + '</span><span>' + e(l(content, "Main task")) + '</span><span>' + e(l(content, "Subtask")) + '</span><span>' + e(l(content, "Deadline")) + "</span></div>",
     rows,
     "</div>",
-    '<div class="function-price-total"><div><span>' + e(l(content, "Allocated subtotal")) + (hasKnownCosts ? " · " + e(matches ? l(content, "reconciled") : l(content, "requires reconciliation")) : "") + '</span><small>' + e(projectAmountConfirmed ? l(content, "Confirmed project amount") : l(content, "Commercial input required")) + '</small></div><strong>' + e(hasKnownCosts ? formatMinor(subtotal, content.currency, content.currencyExponent, content) : l(content, "Not supplied")) + '</strong><span class="function-price-total-status ' + (allCostsConfirmed ? "is-confirmed" : "is-planning") + '">' + e(allCostsConfirmed ? l(content, "Confirmed cost") : l(content, "Cost to confirm")) + "</span></div>",
     "</div>",
   ].join("");
-}
-
-function functionPriceScopeStatusLabel(status, content) {
-  const labels = {
-    requested: "Requested",
-    in_scope: "In scope",
-    recommended: "Recommended",
-    deferred: "Deferred",
-    out_of_scope: "Out of scope",
-    to_confirm: "To confirm",
-  };
-  return l(content, labels[status] || "To confirm");
-}
-
-function functionPriceCostState(row, content) {
-  const truthStatus = normalizeTruthStatus(row.truthStatus);
-  const hasGroundedProvenance = array(row.sourceIds).length > 0;
-  if (CONFIRMED_TRUTH_STATUSES.has(truthStatus) && hasGroundedProvenance && content.currencyStatus === "explicit" && content.currency !== "XXX") return "confirmed";
-  if (["assumed", "modeled", "inferred", "recommended"].includes(truthStatus) || row.derivationRuleId) return "planning";
-  return "to_confirm";
-}
-
-function functionPriceCostStatusLabel(state, content) {
-  if (state === "confirmed") return l(content, "Confirmed cost");
-  if (state === "planning") return l(content, "Planning allocation");
-  // Unknown rows already use an em dash; repeat the explanation once in the
-  // subtotal block instead of adding the same warning to every function.
-  return "";
 }
 
 function renderTeam(content) {
@@ -2438,59 +2370,101 @@ function renderTeam(content) {
       [l(content, "Confirm peak FTE and FTE-months by role."), l(content, "Confirm the active period for each role.")],
     );
   }
-  const monthHeaders = plan.monthlyTotals.map((_, monthIndex) => {
-    const peak = monthIndex === plan.peakMonthIndex;
-    return '<span class="team-month-head' + (peak ? " is-peak" : "") + '" data-month="' + (monthIndex + 1) + '"' + (peak ? ' data-peak="true"' : "") + '>M' + (monthIndex + 1) + (peak ? '<small>' + e(teamUiText(content, "peak")) + "</small>" : "") + "</span>";
-  }).join("");
-  const maxCellFte = Math.max(...plan.rows.flatMap((row) => row.months), 0);
-  const roleRows = plan.rows.map((row, roleIndex) => {
-    const monthCells = row.months.map((value, monthIndex) => {
-      const peakMonth = monthIndex === plan.peakMonthIndex;
-      const active = value > 0;
-      // Cell emphasis scales with the FTE value itself (1 > 0.5 > 0.125), so
-      // the matrix reads as a heat map instead of highlighting only the peak
-      // month column.
-      const fteLevel = !active || maxCellFte <= 0 ? 0 : Math.max(1, Math.min(4, Math.ceil((value / maxCellFte) * 4)));
-      return '<span class="team-month-cell team-fte-level-' + fteLevel + " " + (active ? "is-active" : "is-zero") + (peakMonth ? " is-peak-month" : "") + '" data-geometry-role="team_month_cell" data-month="' + (monthIndex + 1) + '" data-fte="' + escapeHtmlAttribute(formatTeamDataValue(value)) + '" data-fte-level="' + fteLevel + '" data-truth-status="' + escapeHtmlAttribute(plan.truthStatus) + '"><strong>' + e(active ? formatTeamFte(value, content) : "0") + "</strong></span>";
-    }).join("");
-    return '<div class="team-capacity-row" data-geometry-role="team_role_row" data-role-index="' + (roleIndex + 1) + '" data-role-peak-fte="' + escapeHtmlAttribute(formatTeamDataValue(row.peakFte)) + '" data-role-fte-months="' + escapeHtmlAttribute(formatTeamDataValue(row.fteMonths)) + '"><div class="team-capacity-role"><strong>' + e(row.role) + '</strong><small>' + e(formatTeamFte(row.fteMonths, content) + " " + l(content, "FTE-months")) + '</small></div><span class="team-capacity-focus" data-geometry-role="team_role_focus">' + e(row.focus) + "</span>" + monthCells + "</div>";
-  }).join("");
-  const totalCells = plan.monthlyTotals.map((value, monthIndex) => {
-    const peak = monthIndex === plan.peakMonthIndex;
-    return '<strong class="team-month-total' + (peak ? " is-peak" : "") + '" data-geometry-role="team_month_total" data-month="' + (monthIndex + 1) + '" data-fte="' + escapeHtmlAttribute(formatTeamDataValue(value)) + '"' + (peak ? ' data-peak="true"' : "") + ">" + e(formatTeamFte(value, content)) + "</strong>";
-  }).join("");
+  const costPlan = teamCostPlan(content, plan);
+  const roleRows = costPlan.rows.map((row, roleIndex) => [
+    '<div class="team-capacity-row" data-geometry-role="team_role_row" data-role-index="' + (roleIndex + 1) + '" data-role-peak-fte="' + escapeHtmlAttribute(formatTeamDataValue(row.quantity)) + '" data-role-fte-months="' + escapeHtmlAttribute(formatTeamDataValue(row.fteMonths)) + '" data-team-amount-minor="' + (row.amountMinor === null ? "" : row.amountMinor) + '">',
+    '<div class="team-capacity-role"><strong>' + e(row.role) + '</strong><small>' + e(formatTeamFte(row.fteMonths, content) + " " + l(content, "FTE-months")) + "</small></div>",
+    '<span class="team-quantity" data-geometry-role="team_quantity" data-fte="' + escapeHtmlAttribute(formatTeamDataValue(row.quantity)) + '">' + e(formatTeamFte(row.quantity, content)) + "</span>",
+    '<span class="team-duration" data-geometry-role="team_duration" data-active-months="' + escapeHtmlAttribute(formatTeamDataValue(row.activeMonths)) + '">' + e(formatTeamFte(row.activeMonths, content)) + "</span>",
+    '<span class="team-rate" data-geometry-role="team_rate" data-team-rate-minor="' + (row.rateMinor === null ? "" : row.rateMinor) + '">' + e(row.rateMinor === null ? teamUiText(content, "toConfirm") : formatMinor(row.rateMinor, content.currency, content.currencyExponent, content)) + "</span>",
+    '<strong class="team-amount" data-geometry-role="team_amount" data-team-amount-minor="' + (row.amountMinor === null ? "" : row.amountMinor) + '">' + e(row.amountMinor === null ? teamUiText(content, "toConfirm") : formatMinor(row.amountMinor, content.currency, content.currencyExponent, content)) + "</strong>",
+    "</div>",
+  ].join("")).join("");
   const capacityEnvelope = plan.peakFte;
   const peopleValue = content.team.people === null ? teamUiText(content, "toConfirm") : formatTeamFte(content.team.people, content);
   const peopleTruth = normalizeTruthStatus(content.team.peopleTruthStatus, content.team.truthStatus);
   const peopleLabel = CONFIRMED_TRUTH_STATUSES.has(peopleTruth) ? teamUiText(content, "confirmedPeople") : teamUiText(content, "plannedPeople");
-  // The metric cards speak the client's language: team size, role count,
-  // project duration, and the busiest month. FTE arithmetic stays in the
-  // matrix below where the per-month numbers explain it.
   const durationValue = content.durationMonths
     ? formatRendererUnit(content.durationMonths, "month", content.locale)
     : l(content, "Schedule to confirm");
+  const totalValue = costPlan.totalMinor === null
+    ? teamUiText(content, "toConfirm")
+    : formatMinor(costPlan.totalMinor, content.currency, content.currencyExponent, content);
   const metricMarkup = [
     teamCapacityMetric("people", peopleLabel, peopleValue, teamUiText(content, "staffingScenario")),
     teamCapacityMetric("roles", teamUiText(content, "roles"), formatTeamFte(plan.rows.length, content), teamUiText(content, "deliveryTeam")),
     teamCapacityMetric("duration", l(content, "Delivery window"), durationValue, l(content, "Client brief")),
-    teamCapacityMetric("peak_month", l(content, "Peak workload"), "M" + (plan.peakMonthIndex + 1), l(content, "busiest project month"), true, plan.peakFte),
+    teamCapacityMetric("budget_total", teamUiText(content, "teamBudget"), totalValue, teamUiText(content, "distributedByCapacity"), true, plan.peakFte),
   ].join("");
-  const note = teamUiText(content, "capacityNote", {
-    total: formatTeamFte(plan.fteMonths, content),
-    envelope: formatTeamFte(capacityEnvelope, content),
-  });
+  const note = costPlan.rateMinor === null
+    ? teamUiText(content, "costPending")
+    : teamUiText(content, "costFormula", {
+      total: totalValue,
+      fteMonths: formatTeamFte(plan.fteMonths, content),
+      rate: formatMinor(costPlan.rateMinor, content.currency, content.currencyExponent, content),
+    });
   return [
-    '<div class="team-capacity-layout" data-team-month-count="' + plan.monthCount + '" data-team-matrix-truth-status="' + escapeHtmlAttribute(plan.truthStatus) + '">',
+    '<div class="team-capacity-layout" data-team-month-count="' + plan.monthCount + '" data-team-matrix-truth-status="' + escapeHtmlAttribute(plan.truthStatus) + '" data-team-total-minor="' + (costPlan.totalMinor === null ? "" : costPlan.totalMinor) + '" data-team-peak-fte="' + escapeHtmlAttribute(formatTeamDataValue(plan.peakFte)) + '">',
     '<div class="team-capacity-metrics">' + metricMarkup + "</div>",
-    '<div class="team-capacity-table panel team-month-count-' + plan.monthCount + '">',
     '<div class="team-capacity-disclosure" data-warning-status="scenario">' + e(l(content, "Planning scenario · confirmation required")) + "</div>",
-    '<div class="team-capacity-head"><span>' + e(teamUiText(content, "role")) + "</span><span>" + e(teamUiText(content, "deliveryFocus")) + "</span>" + monthHeaders + "</div>",
+    '<div class="team-capacity-table panel">',
+    '<div class="team-capacity-head"><span>' + e(teamUiText(content, "employee")) + "</span><span>" + e(teamUiText(content, "quantity")) + "</span><span>" + e(teamUiText(content, "months")) + "</span><span>" + e(teamUiText(content, "monthlyRate")) + "</span><span>" + e(teamUiText(content, "amount")) + "</span></div>",
     roleRows,
-    '<div class="team-capacity-total"><div class="team-capacity-total-label"><strong>' + e(teamUiText(content, "monthlyTotal")) + '</strong><small>' + e(formatTeamFte(plan.fteMonths, content) + " " + l(content, "FTE-months")) + "</small></div><span></span>" + totalCells + "</div>",
+    '<div class="team-capacity-total" data-team-total-minor="' + (costPlan.totalMinor === null ? "" : costPlan.totalMinor) + '"><div class="team-capacity-total-label"><strong>' + e(teamUiText(content, "teamTotal")) + '</strong><small>' + e(formatTeamFte(plan.fteMonths, content) + " " + l(content, "FTE-months")) + '</small></div><strong class="team-cost-total">' + e(totalValue) + "</strong></div>",
     "</div>",
     '<div class="team-capacity-note" data-team-capacity-envelope="' + escapeHtmlAttribute(formatTeamDataValue(capacityEnvelope)) + '"><span>' + e(teamUiText(content, "capacityLogic")) + "</span><strong>" + e(note) + "</strong><small>" + e(teamUiText(content, "monthlyModel")) + "</small></div>",
     "</div>",
   ].join("");
+}
+
+export function teamCostPlan(content = {}, capacityPlan = null) {
+  const plan = capacityPlan || teamCapacityPlan(content);
+  if (!plan?.rows?.length) return { rows: [], totalMinor: null, rateMinor: null };
+  const candidateTotal = content.hasProjectPrice
+    ? content.projectPriceMinor
+    : content.hasClientBudget
+      ? content.clientBudgetMinor
+      : null;
+  const totalMinor = Number.isSafeInteger(candidateTotal) && candidateTotal > 0 ? candidateTotal : null;
+  const totalFteMonths = plan.rows.reduce((sum, row) => sum + Number(row.fteMonths || 0), 0);
+  const weights = plan.rows.map((row) => Math.max(0, Number(row.fteMonths || 0)));
+  const amounts = totalMinor === null || totalFteMonths <= 0
+    ? weights.map(() => null)
+    : allocateTeamCostMinor(totalMinor, weights);
+  const blendedRateMinor = totalMinor === null || totalFteMonths <= 0
+    ? null
+    : Math.round(totalMinor / totalFteMonths);
+  return {
+    totalMinor,
+    rateMinor: blendedRateMinor,
+    rows: plan.rows.map((row, index) => {
+      const quantity = Number(row.peakFte || 0);
+      const fteMonths = Number(row.fteMonths || 0);
+      const amountMinor = amounts[index];
+      return {
+        role: row.role,
+        quantity: roundTeamFte(quantity),
+        activeMonths: roundTeamFte(quantity > 0 ? fteMonths / quantity : 0),
+        fteMonths: roundTeamFte(fteMonths),
+        rateMinor: amountMinor === null || fteMonths <= 0 ? null : Math.round(amountMinor / fteMonths),
+        amountMinor,
+      };
+    }),
+  };
+}
+
+function allocateTeamCostMinor(totalMinor, weights) {
+  const totalWeight = weights.reduce((sum, value) => sum + value, 0);
+  if (!Number.isSafeInteger(totalMinor) || totalMinor < 0 || totalWeight <= 0) return weights.map(() => null);
+  const rows = weights.map((weight, index) => {
+    const exact = (totalMinor * weight) / totalWeight;
+    const amount = Math.floor(exact);
+    return { index, amount, remainder: exact - amount };
+  });
+  let remaining = totalMinor - rows.reduce((sum, row) => sum + row.amount, 0);
+  const order = [...rows].sort((left, right) => right.remainder - left.remainder || left.index - right.index);
+  for (let index = 0; index < remaining; index += 1) order[index % order.length].amount += 1;
+  return rows.sort((left, right) => left.index - right.index).map((row) => row.amount);
 }
 
 function teamCapacityMetric(id, label, value, detail, peak = false, numericValue = null) {
@@ -2555,6 +2529,16 @@ function teamDeliveryFocus(role, content) {
 
 const TEAM_UI_COPY = Object.freeze({
   en: Object.freeze({
+    employee: "Employee",
+    quantity: "Quantity",
+    months: "Months",
+    monthlyRate: "Monthly rate",
+    amount: "Amount",
+    teamTotal: "Team total",
+    teamBudget: "Team budget",
+    distributedByCapacity: "distributed by FTE-months",
+    costPending: "Monthly rates and role amounts require a project total.",
+    costFormula: "{total} is allocated across {fteMonths} FTE-months; blended monthly rate: {rate}.",
     role: "Role",
     deliveryFocus: "Delivery focus",
     peak: "PEAK",
@@ -2581,6 +2565,16 @@ const TEAM_UI_COPY = Object.freeze({
     focusDelivery: "Delivery ownership and execution",
   }),
   "ru-RU": Object.freeze({
+    employee: "Сотрудник",
+    quantity: "Количество",
+    months: "Месяцы",
+    monthlyRate: "Ставка в месяц",
+    amount: "Сумма",
+    teamTotal: "Итого по команде",
+    teamBudget: "Бюджет команды",
+    distributedByCapacity: "распределён по FTE-месяцам",
+    costPending: "Для расчёта ставок и сумм по ролям требуется сумма проекта.",
+    costFormula: "{total} распределено на {fteMonths} FTE-месяца; расчётная месячная ставка — {rate}.",
     role: "Роль",
     deliveryFocus: "Фокус работы",
     peak: "ПИК",
@@ -2607,6 +2601,16 @@ const TEAM_UI_COPY = Object.freeze({
     focusDelivery: "Ответственность и реализация",
   }),
   "uz-Latn": Object.freeze({
+    employee: "Xodim",
+    quantity: "Miqdor",
+    months: "Oylar",
+    monthlyRate: "Oylik stavka",
+    amount: "Summa",
+    teamTotal: "Jamoa bo‘yicha jami",
+    teamBudget: "Jamoa budjeti",
+    distributedByCapacity: "FTE-oy bo‘yicha taqsimlangan",
+    costPending: "Rollar stavkasi va summasini hisoblash uchun loyiha summasi kerak.",
+    costFormula: "{total} {fteMonths} FTE-oyga taqsimlandi; hisobiy oylik stavka — {rate}.",
     role: "Rol",
     deliveryFocus: "Ish yo'nalishi",
     peak: "PIK",
@@ -2646,6 +2650,13 @@ function teamUiText(content, key, replacements = {}) {
 
 function teamCapacityTitle(content, plan) {
   if (!plan) return null;
+  const costPlan = teamCostPlan(content, plan);
+  if (costPlan.totalMinor !== null) {
+    const total = formatMinor(costPlan.totalMinor, content.currency, content.currencyExponent, content);
+    if (localeId(content) === "ru-RU") return "Расчётное распределение бюджета по составу и загрузке команды: " + total + ".";
+    if (localeId(content) === "uz-Latn") return "Budjet jamoa tarkibi va yuklamasi bo‘yicha hisobiy taqsimlandi: " + total + ".";
+    return "Planning budget allocation by team composition and workload: " + total + ".";
+  }
   const month = plan.peakMonthIndex + 1;
   const peak = formatTeamFte(plan.peakFte, content);
   if (localeId(content) === "ru-RU") return "Пиковая загрузка команды — месяц " + month + ": " + peak + " FTE.";
@@ -2898,22 +2909,20 @@ function renderPayments(content, _tokens, dynamicRules = []) {
       "</div>",
     ].join("");
   }
-  let cumulative = 0;
   let cumulativeBasisPoints = 0;
   const rows = content.payments.map((row, index) => {
-    cumulative += row.amountMinor;
     cumulativeBasisPoints += row.percentBasisPoints;
     // The cumulative indicator fills a little further after every stage and
     // reaches 100% on the final payment.
     const progressPercent = (Math.min(10000, cumulativeBasisPoints) / 100).toFixed(2);
-    return '<div class="payment-row" data-payment-truth-status="' + escapeHtmlAttribute(row.truthStatus || "unknown") + '"><div><strong>' + e(padPage(index + 1) + " · " + row.name) + '</strong><p>' + e(row.acceptance || l(content, "Acceptance trigger to confirm")) + '</p></div><span>' + e(formatBasisPoints(row.percentBasisPoints, content)) + '</span><span>' + e(formatMinor(row.amountMinor, content.currency, content.currencyExponent, content)) + '</span><span>' + e(formatMinor(cumulative, content.currency, content.currencyExponent, content)) + '</span><div class="payment-progress" aria-hidden="true"><span style="width:' + progressPercent + '%"></span></div></div>';
+    return '<div class="payment-row" data-payment-truth-status="' + escapeHtmlAttribute(row.truthStatus || "unknown") + '"><div><strong>' + e(padPage(index + 1) + " · " + row.name) + '</strong><p>' + e(row.acceptance || l(content, "Acceptance trigger to confirm")) + '</p></div><span>' + e(formatBasisPoints(row.percentBasisPoints, content)) + '</span><span>' + e(formatMinor(row.amountMinor, content.currency, content.currencyExponent, content)) + '</span><div class="payment-progress" aria-hidden="true"><span style="width:' + progressPercent + '%"></span></div></div>';
   }).join("");
   const total = content.payments.reduce((sum, row) => sum + row.amountMinor, 0);
   const percentTotal = content.payments.reduce((sum, row) => sum + row.percentBasisPoints, 0);
   const reconciled = content.paymentBasisMinor > 0 && total === content.paymentBasisMinor && percentTotal === 10000;
   const markup = [
     '<div class="payment-layout" data-payment-schedule="true">',
-    '<div class="panel">' + commercialCurrencyNote(content) + scenarioBanner(content, content.payments, "", { payment: true }) + '<div class="payment-head"><span>' + e(l(content, "Payment / acceptance")) + '</span><span>' + e(l(content, "Share (rounded to 0.01%)")) + '</span><span>' + e(l(content, "Amount")) + '</span><span>' + e(l(content, "Cumulative")) + "</span></div>" + rows + "</div>",
+    '<div class="panel">' + commercialCurrencyNote(content) + scenarioBanner(content, content.payments, "", { payment: true }) + '<div class="payment-head"><span>' + e(l(content, "Payment / acceptance")) + '</span><span>' + e(l(content, "Share (rounded to 0.01%)")) + '</span><span>' + e(l(content, "Amount")) + "</span></div>" + rows + "</div>",
     '<div class="payment-total"><span>' + e(l(content, "Scheduled total")) + " · " + e(reconciled ? l(content, "100.00% after rounding") : l(content, "requires reconciliation")) + '</span><strong>' + e(formatMinor(total, content.currency, content.currencyExponent, content)) + '</strong><span>· ' + e(formatBasisPoints(percentTotal, content)) + "</span></div>",
     "</div>",
   ].join("");
@@ -2998,12 +3007,13 @@ function renderSemanticPage(spec, pagePlan, styleProfile, dynamicRules, content)
   if (spec.kind === "nested_market") {
     return renderMarketSizingPage(displaySpec, pagePlan, content);
   }
-  const canvasHeight = 540;
-  const layout = layoutVisualization(displaySpec, { width: 1120, height: canvasHeight });
+  const isProductMap = displaySpec.kind === "hub_spoke" && displaySpec.variant === "left_to_right_tree";
+  const canvas = isProductMap ? { width: 1296, height: 646 } : { width: 1120, height: 540 };
+  const layout = layoutVisualization(displaySpec, canvas);
   const rendered = renderVisualization(displaySpec, layout, styleProfile, { locale: content.locale });
   const safeMarkup = hoistTrustedInlineStyles(rendered, "viz-" + pagePlan.pageNumber, dynamicRules);
   const summary = semanticSummary(spec, pagePlan.pageNumber, content);
-  return '<div class="semantic-layout">' + safeMarkup + '<div class="semantic-note"><span>' + e(summary.label) + '</span><p>' + e(summary.detail) + '</p>' + inlineSources(pagePlan.sourceIds, content, { compact: true }) + "</div></div>";
+  return '<div class="semantic-layout' + (isProductMap ? " semantic-layout-product-map" : "") + '">' + safeMarkup + '<div class="semantic-note"><span>' + e(summary.label) + '</span><p>' + e(summary.detail) + '</p>' + inlineSources(pagePlan.sourceIds, content, { compact: true }) + "</div></div>";
 }
 
 function renderMarketSizingPage(spec, pagePlan, content) {
@@ -3463,6 +3473,7 @@ function resolvePageTitle(pagePlan, content, spec) {
   if (pagePlan.kind === "architecture") return referenceSectionTitle("architecture", content.locale);
   if (pagePlan.kind === "client_dependencies") return referenceSectionTitle("client_dependencies", content.locale);
   if (pagePlan.kind === "team") return referenceSectionTitle("team", content.locale);
+  if (pagePlan.kind === "function_price") return referenceSectionTitle("function_price", content.locale);
   if (pagePlan.title) return clientText(localizeKnown(pagePlan.title, content.locale), 120);
   if (pagePlan.kind === "cover") return content.projectTitle;
   if (pagePlan.kind === "market_sizing" && spec?.kind === "nested_market") {
@@ -3486,10 +3497,10 @@ function resolvePageTitle(pagePlan, content, spec) {
 function referenceSectionTitle(kind, locale) {
   const normalized = normalizeRendererLocale(locale);
   const copy = normalized === "ru-RU"
-    ? { architecture: "Архитектура", client_dependencies: "Зависимости от клиента", team: "Ресурсы команды" }
+    ? { architecture: "Архитектура", client_dependencies: "Зависимости от клиента", team: "Ресурсы команды", function_price: "Функциональные блоки и сроки" }
     : normalized === "uz-Latn"
-      ? { architecture: "Arxitektura", client_dependencies: "Mijozga bog‘liq talablar", team: "Jamoa resurslari" }
-      : { architecture: "Architecture", client_dependencies: "Client dependencies", team: "Team resources" };
+      ? { architecture: "Arxitektura", client_dependencies: "Mijozga bog‘liq talablar", team: "Jamoa resurslari", function_price: "Funksional bloklar va muddatlar" }
+      : { architecture: "Architecture", client_dependencies: "Client dependencies", team: "Team resources", function_price: "Functional blocks and timelines" };
   return copy[kind] || kind;
 }
 
@@ -3506,8 +3517,7 @@ function referencePageSummary(pagePlan, content) {
     return "What Udevs needs for delivery. Only non-public access, credentials, approvals, and client-owned inputs are listed here.";
   }
   if (pagePlan.kind === "team") {
-    const peak = teamCapacityTitle(content, teamCapacityPlan(content));
-    return [peak, l(content, "Planning scenario · confirmation required")].filter(Boolean).join(" ");
+    return teamCapacityTitle(content, teamCapacityPlan(content)) || "";
   }
   return "";
 }
