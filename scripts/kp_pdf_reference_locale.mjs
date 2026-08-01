@@ -281,6 +281,17 @@ const KNOWN_RU = Object.freeze({
   "Categories, listings and product cards": "Категории, объявления и карточки товаров",
   "Browse, select and request/order flow": "Поиск, выбор и оформление заказа",
   "Seller workspace and item publishing": "Рабочее место продавца и публикация товаров",
+  "Main user flow": "Основной пользовательский сценарий",
+  "Primary client-facing scenario and validation": "Основной клиентский сценарий и проверка",
+  "Admin workspace": "Рабочее место управления",
+  "Management pages, permissions and controls": "Страницы управления, права доступа и элементы контроля",
+  "API services": "API-сервисы",
+  "Business logic, database and service endpoints": "Бизнес-логика, база данных и сервисные точки",
+  "External integrations": "Внешние интеграции",
+  "Credentials, callbacks and sandbox checks": "Учётные данные, обратные вызовы и проверки в тестовой среде",
+  "Operational reporting": "Операционная отчётность",
+  "Dashboard metrics, filters and export basics": "Метрики панели управления, фильтры и базовый экспорт",
+  "Reports": "Отчёты",
   "Recommendation": "Рекомендация",
   "Recommendations": "Рекомендации",
   "Validate relevance before adding it to the product scope.": "Проверить применимость до включения в состав продукта.",
@@ -597,6 +608,17 @@ const KNOWN_UZ = Object.freeze({
   "Categories, listings and product cards": "Toifalar, e’lonlar va mahsulot kartalari",
   "Browse, select and request/order flow": "Qidirish, tanlash va buyurtma berish jarayoni",
   "Seller workspace and item publishing": "Sotuvchi ish maydoni va mahsulotlarni joylash",
+  "Main user flow": "Asosiy foydalanuvchi jarayoni",
+  "Primary client-facing scenario and validation": "Mijoz uchun asosiy jarayon va tekshirish",
+  "Admin workspace": "Boshqaruv ish maydoni",
+  "Management pages, permissions and controls": "Boshqaruv sahifalari, ruxsatlar va nazorat vositalari",
+  "API services": "API xizmatlari",
+  "Business logic, database and service endpoints": "Biznes mantiqi, ma’lumotlar bazasi va servis nuqtalari",
+  "External integrations": "Tashqi integratsiyalar",
+  "Credentials, callbacks and sandbox checks": "Kirish ma’lumotlari, qayta chaqiruvlar va sinov muhiti tekshiruvlari",
+  "Operational reporting": "Operatsion hisobotlar",
+  "Dashboard metrics, filters and export basics": "Boshqaruv paneli ko‘rsatkichlari, filtrlar va asosiy eksport",
+  "Reports": "Hisobotlar",
   "Recommendation": "Tavsiya",
   "Recommendations": "Tavsiyalar",
   "Validate relevance before adding it to the product scope.": "Mahsulot tarkibiga qo‘shishdan oldin mosligini tekshirish.",
@@ -1590,6 +1612,8 @@ export function localizeRendererText(value, locale) {
   const clientDictionary = normalized === "ru-RU" ? CLIENT_RU : normalized === "uz-Latn" ? CLIENT_UZ : null;
   if (!dictionary) return text;
   if (dictionary[text] || clientDictionary?.[text]) return dictionary[text] || clientDictionary[text];
+  const localizedFragment = localizedListFragment(text, normalized, dictionary, clientDictionary);
+  if (localizedFragment) return localizedFragment;
   if (text.endsWith(" application core")) {
     const projectName = text.slice(0, -" application core".length).trim();
     return normalized === "ru-RU" ? projectName + " — ядро приложения" : projectName + " ilovasi yadrosi";
@@ -1613,6 +1637,39 @@ export function localizeRendererText(value, locale) {
   const month = text.match(/^Month\s+(\d+)$/i);
   if (month) return normalized === "ru-RU" ? month[1] + "-й месяц" : month[1] + "-oy";
   return text;
+}
+
+const LOCALIZED_LIST_FRAGMENT_CACHE = new Map();
+
+function localizedListFragment(text, locale, dictionary, clientDictionary) {
+  if (!LOCALIZED_LIST_FRAGMENT_CACHE.has(locale)) {
+    const exact = new Map();
+    const normalized = new Map();
+    for (const [source, localized] of Object.entries({ ...dictionary, ...(clientDictionary || {}) })) {
+      const sourceParts = rendererListParts(source);
+      const localizedParts = rendererListParts(localized);
+      if (sourceParts.length < 2 || sourceParts.length !== localizedParts.length) continue;
+      for (const [index, sourcePart] of sourceParts.entries()) {
+        if (!exact.has(sourcePart)) exact.set(sourcePart, localizedParts[index]);
+        const key = sourcePart.toLocaleLowerCase("en-US");
+        if (!normalized.has(key)) normalized.set(key, localizedParts[index]);
+      }
+    }
+    LOCALIZED_LIST_FRAGMENT_CACHE.set(locale, { exact, normalized });
+  }
+  const cache = LOCALIZED_LIST_FRAGMENT_CACHE.get(locale);
+  return cache.exact.get(text) || cache.normalized.get(text.toLocaleLowerCase("en-US")) || "";
+}
+
+function rendererListParts(value) {
+  const text = String(value ?? "").normalize("NFC").replace(/\s+/g, " ").trim();
+  if (!text) return [];
+  return text
+    .replace(/(?:\r?\n|[;•▪◦])+/gu, ",")
+    .split(/\s*,\s*/u)
+    .flatMap((part) => part.split(/\s+(?:and|и|va|hamda|ҳамда|ва)\s+/giu))
+    .map((part) => part.trim())
+    .filter(Boolean);
 }
 
 export function formatRendererUnit(value, unit, locale) {

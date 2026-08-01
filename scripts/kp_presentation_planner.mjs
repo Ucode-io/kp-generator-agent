@@ -1,7 +1,8 @@
 import path from "node:path";
 import { atomicWriteJson, canonicalJson, sha256Digest, validateKpContract } from "./kp_reference_contracts.mjs";
-import { productMapSegmentCount } from "./kp_product_map_model.mjs";
+import { buildProductDeliveryInventory, productMapSegmentCount } from "./kp_product_map_model.mjs";
 import { validateProposalSemanticModel } from "./kp_semantic_model.mjs";
+import { primaryFlowSegmentCount, roadmapWorkstreamSegmentCount } from "./kp_visualization_planner.mjs";
 
 const DEFAULT_PROFILE_ID = "KP-LAYOUT-DEFAULTS";
 const DEFAULT_PROFILE_VERSION = "1.0";
@@ -117,6 +118,8 @@ const SILHOUETTES = Object.freeze({
 });
 
 const VISUALIZATION_KINDS = new Set(["market_sizing", "launch_boundary", "product_map", "primary_flow", "architecture", "roadmap"]);
+const SEGMENTABLE_PAGE_KINDS = new Set(["product_map", "primary_flow", "function_price", "roadmap"]);
+const FUNCTION_SCHEDULE_ROWS_PER_PAGE = 14;
 
 export function buildPresentationPlan({ requestId, proposalModel = {}, visualStyleProfile, styleProfile, semanticModel = {} } = {}) {
   const profile = visualStyleProfile || styleProfile || {};
@@ -260,20 +263,21 @@ export function validatePresentationPlanSemantics(plan = {}) {
       findings.push(error(`/pages/${index}/layoutFamily`, "chapter pages must use chapter_opener"));
     }
   }
-  const productMapPages = pages.filter((page) => page.kind === "product_map");
-  const segmentedProductMaps = productMapPages.filter((page) => page.segmentIndex || page.segmentCount);
-  if (segmentedProductMaps.length) {
-    const expectedCount = productMapPages.length;
-    const indices = segmentedProductMaps.map((page) => Number(page.segmentIndex));
-    if (segmentedProductMaps.length !== productMapPages.length
-      || segmentedProductMaps.some((page) => Number(page.segmentCount) !== expectedCount)
+  for (const kind of SEGMENTABLE_PAGE_KINDS) {
+    const kindPages = pages.filter((page) => page.kind === kind);
+    const segmentedPages = kindPages.filter((page) => page.segmentIndex || page.segmentCount);
+    if (!segmentedPages.length) continue;
+    const expectedCount = kindPages.length;
+    const indices = segmentedPages.map((page) => Number(page.segmentIndex));
+    if (segmentedPages.length !== kindPages.length
+      || segmentedPages.some((page) => Number(page.segmentCount) !== expectedCount)
       || indices.some((value, index) => value !== index + 1)) {
-      findings.push(error("/pages", "segmented product-map pages must declare sequential segmentIndex values and a shared segmentCount"));
+      findings.push(error("/pages", `segmented ${kind} pages must declare sequential segmentIndex values and a shared segmentCount`));
     }
   }
   for (const [index, page] of pages.entries()) {
-    if (page.kind !== "product_map" && (page.segmentIndex || page.segmentCount)) {
-      findings.push(error(`/pages/${index}`, "segment metadata is only valid for product-map continuation pages"));
+    if (!SEGMENTABLE_PAGE_KINDS.has(page.kind) && (page.segmentIndex || page.segmentCount)) {
+      findings.push(error(`/pages/${index}`, "segment metadata is only valid for product-map, BPMN, function-schedule, or roadmap continuation pages"));
     }
   }
   if (plan.diagnostics?.distinctLayoutFamilyCount !== distinct.size) findings.push(error("/diagnostics/distinctLayoutFamilyCount", "must match actual layout family count"));
@@ -287,14 +291,29 @@ export function selectDynamicPageDecisions(proposalModel = {}, semanticModel = {
 
 function expandSelectedPageDecisions(decisions, context) {
   return decisions.flatMap((decision) => {
-    if (decision.kind !== "product_map") return [decision];
-    const segmentCount = productMapSegmentCount(context.semanticModel);
+    let segmentCount = 1;
+    let continuationReason = "";
+    if (decision.kind === "product_map") {
+      segmentCount = productMapSegmentCount(context.semanticModel);
+      continuationReason = "mind_map_continuation_for_readability";
+    } else if (decision.kind === "primary_flow") {
+      segmentCount = primaryFlowSegmentCount(context.semanticModel);
+      continuationReason = "bpmn_continuation_for_complete_process_coverage";
+    } else if (decision.kind === "function_price") {
+      segmentCount = Math.max(1, Math.ceil(buildProductDeliveryInventory(context.semanticModel).length / FUNCTION_SCHEDULE_ROWS_PER_PAGE));
+      continuationReason = "function_schedule_continuation_for_readability";
+    } else if (decision.kind === "roadmap") {
+      segmentCount = roadmapWorkstreamSegmentCount(context.semanticModel);
+      continuationReason = "roadmap_continuation_for_complete_scope_coverage";
+    } else {
+      return [decision];
+    }
     return Array.from({ length: segmentCount }, (_, index) => ({
       ...decision,
       segmentIndex: index + 1,
       segmentCount,
       reasons: segmentCount > 1
-        ? unique([...decision.reasons, "mind_map_continuation_for_readability"])
+        ? unique([...decision.reasons, continuationReason])
         : decision.reasons,
     }));
   });
@@ -521,6 +540,8 @@ function inclusionPolicy(kind, context, stats) {
     }
     case "function_price": {
       const inventory = array(context.proposalModel.functionPrice);
+      const scopedFunctions = array(context.semanticModel.scopeItems)
+        .filter((row) => !["deferred", "out_of_scope"].includes(String(row?.inclusion || "").toLowerCase()));
       const rows = inventory.filter((row) => Number(row.total ?? row.amount ?? row.price) > 0);
       const groundedRows = rows.filter((row) => FACT_TRUTH.has(truthOf(row)));
       const modeledRows = rows.filter((row) => MODEL_TRUTH.has(truthOf(row)) || RECOMMENDATION_TRUTH.has(truthOf(row)));
@@ -528,12 +549,21 @@ function inclusionPolicy(kind, context, stats) {
       const statedBudget = Number(context.brief.budget?.amount?.value || context.proposalModel.pricing?.projectPrice || 0);
       const reconciledModel = modeledRows.length >= 2 && statedBudget > 0 && Math.abs(modeledSubtotal - statedBudget) < 0.01;
       const transparentCostGap = inventory.length >= 2 && statedBudget > 0 && rows.length === 0;
-      include ||= groundedRows.length >= 2 || reconciledModel || transparentCostGap;
+      // The functional delivery schedule is a baseline proposal surface even
+      // when the client has not supplied a budget yet. In that state the page
+      // keeps the agreed/recommended blocks and timelines visible without
+      // inventing allocation amounts.
+      const functionalBaseline = inventory.length > 0 || scopedFunctions.length > 0;
+      include ||= groundedRows.length >= 2 || reconciledModel || transparentCostGap || functionalBaseline;
       if (groundedRows.length >= 2 && !requested) reasons.push("grounded_function_allocation_available");
       if (!groundedRows.length && reconciledModel && !requested) reasons.push("reconciled_function_planning_scenario_available");
       if (transparentCostGap && !requested) {
         reasons.push("functional_cost_inputs_pending");
         researchRequired = true;
+        fallbackMode = "transparent_model";
+      }
+      if (functionalBaseline && !groundedRows.length && !reconciledModel && !transparentCostGap && !requested) {
+        reasons.push("functional_schedule_available_cost_inputs_pending");
         fallbackMode = "transparent_model";
       }
       break;
@@ -572,6 +602,8 @@ function inclusionPolicy(kind, context, stats) {
     case "payments": {
       const groundedPayments = array(context.proposalModel.payments).filter((row) => FACT_TRUTH.has(truthOf(row)) && Number(row.amount) > 0);
       const scenarioRows = array(context.proposalModel.payments).filter((row) => Number(row.amount) > 0);
+      const commercialBaseline = array(context.proposalModel.functionPrice).length > 0
+        || array(context.semanticModel.scopeItems).some((row) => !["deferred", "out_of_scope"].includes(String(row?.inclusion || "").toLowerCase()));
       const statedBudget = Number(context.brief.budget?.amount?.value || 0);
       const explicitBudgetCurrency = String(context.brief.budget?.currency?.status || "").toLowerCase() === "explicit";
       const scenarioTotal = scenarioRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
@@ -582,10 +614,17 @@ function inclusionPolicy(kind, context, stats) {
         && statedBudget > 0
         && explicitBudgetCurrency
         && Math.abs(scenarioTotal - statedBudget) < 0.01;
-      include = requested || groundedPayments.length > 0 || budgetScenario;
+      // Keep the payment decision surface in every scoped commercial
+      // proposal. With no accepted schedule the renderer shows an explicit
+      // input-required state, not a fabricated payment plan.
+      include = requested || groundedPayments.length > 0 || budgetScenario || commercialBaseline;
       if (groundedPayments.length && !requested) reasons.push("grounded_payment_schedule_available");
       if (!groundedPayments.length && budgetScenario) {
         reasons.push("budget_based_payment_scenario_available");
+        fallbackMode = "transparent_model";
+      }
+      if (commercialBaseline && !groundedPayments.length && !budgetScenario && !requested) {
+        reasons.push("payment_schedule_inputs_pending");
         fallbackMode = "transparent_model";
       }
       if (!include) reasons.push("scenario_only_payment_schedule_suppressed");

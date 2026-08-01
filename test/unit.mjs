@@ -18,7 +18,20 @@ import {
   resolveStyleTokens,
   teamCostPlan,
 } from "../scripts/kp_pdf_reference_renderer.mjs";
-import { buildProductMapSegments } from "../scripts/kp_product_map_model.mjs";
+import { buildProductDeliveryInventory, buildProductMapModel, buildProductMapSegments } from "../scripts/kp_product_map_model.mjs";
+import { buildPresentationPlan, selectDynamicPageDecisions } from "../scripts/kp_presentation_planner.mjs";
+import { localizeRendererText } from "../scripts/kp_pdf_reference_locale.mjs";
+import { buildProposalSemanticModel, normalizeScopeItems, validateProposalSemanticModel } from "../scripts/kp_semantic_model.mjs";
+import {
+  buildPrimaryFlowSpec,
+  buildProductMapSpec,
+  buildRoadmapSpec,
+  buildRoadmapWorkstreamSegments,
+  primaryFlowSegmentCount,
+  ROADMAP_WORKSTREAM_PAGE_LIMIT,
+} from "../scripts/kp_visualization_planner.mjs";
+import { layoutVisualization, validateLayoutGeometry } from "../scripts/kp_diagram_layout.mjs";
+import { validateVisualizationSpecs } from "../scripts/kp_visualization_validator.mjs";
 import {
   checkBearerAuthorization,
   normalizeConfiguredApiKey,
@@ -418,8 +431,15 @@ assert.ok(screenshotCss.includes("@page{size:15in 10in;margin:0}"));
 assert.ok(screenshotCss.includes("-webkit-print-color-adjust:exact;print-color-adjust:exact"));
 assert.ok(screenshotCss.includes("@media print{html,body{width:15in!important;min-width:15in!important"));
 assert.ok(screenshotCss.includes("height:10in!important;min-height:10in!important;max-height:10in!important"));
+const printShadowResetIndex = screenshotCss.lastIndexOf("@media print{.proposal>.page");
+assert.ok(printShadowResetIndex > screenshotCss.lastIndexOf("box-shadow:0 6px"));
+assert.ok(screenshotCss.slice(printShadowResetIndex).includes("{box-shadow:none!important}"));
 assert.ok(screenshotCss.includes(".payment-head,.payment-row{display:grid;grid-template-columns:minmax(0,2.2fr) minmax(150px,.7fr) minmax(170px,.8fr)"));
 assert.ok(screenshotCss.includes(".payment-head>span:not(:first-child){text-align:right}"));
+assert.ok(screenshotCss.includes(".roadmap-stage-layout{width:100%;height:100%;min-height:0"));
+assert.ok(screenshotCss.includes(".roadmap-workstream-label{display:grid;grid-template-columns:22px minmax(0,1fr) 42px"));
+assert.ok(screenshotCss.includes(".roadmap-workstream-label>strong{min-width:0;margin:0;font-size:9px;line-height:1.05;white-space:normal;overflow-wrap:anywhere}"));
+assert.ok(screenshotCss.includes(".roadmap-workstream-bar{position:absolute;z-index:2;top:50%;height:18px"));
 
 const teamCostAllocation = teamCostPlan({
   hasProjectPrice: false,
@@ -485,14 +505,421 @@ const productMapScope = Array.from({ length: 14 }, (_, index) => ({
   truthStatus: "recommended",
 }));
 assert.equal(buildProductMapSegments({ project: { name: "Product" }, scopeItems: productMapScope }).length, 1);
-const oversizedProductMapScope = Array.from({ length: 17 }, (_, index) => ({
-  id: `SCOPE-LARGE-${index + 1}`,
-  epic: `Domain ${Math.floor(index / 3) + 1}`,
-  feature: `Large function ${index + 1}`,
-  detail: `Large function ${index + 1} detail`,
+
+function productMapSegmentTerminalRows(segment) {
+  return segment.branches.reduce((total, branch) => total + branch.functions.reduce(
+    (branchTotal, item) => branchTotal + Math.max(1, Array.isArray(item.details) ? item.details.length : 0),
+    0,
+  ), 0);
+}
+
+function productMapSegmentNodeCount(segment) {
+  return 1 + segment.branches.length + segment.branches.reduce((total, branch) => total + branch.functions.reduce(
+    (branchTotal, item) => branchTotal + 1 + (Array.isArray(item.details) ? item.details.length : 0),
+    0,
+  ), 0);
+}
+
+function assertProductMapSegmentContract(segments) {
+  assert.ok(segments.length >= 1);
+  for (const [index, segment] of segments.entries()) {
+    assert.equal(segment.segmentIndex, index + 1);
+    assert.equal(segment.segmentCount, segments.length);
+    assert.ok(segment.branches.length <= 8, `product-map segment ${index + 1} exceeds 8 branches`);
+    assert.ok(productMapSegmentTerminalRows(segment) <= 16, `product-map segment ${index + 1} exceeds 16 terminal rows`);
+    assert.ok(productMapSegmentNodeCount(segment) <= 42, `product-map segment ${index + 1} exceeds 42 visible nodes`);
+  }
+}
+
+const compoundDetailSemanticModel = {
+  project: { name: "Compound-detail product" },
+  scopeItems: [{
+    id: "SCOPE-COMPOUND-1",
+    epic: "Catalog",
+    feature: "Catalog discovery",
+    detail: "Search, filters and saved views",
+    phase: "3 weeks",
+    truthStatus: "recommended",
+  }],
+};
+const compoundDetailProductMap = buildProductMapModel(compoundDetailSemanticModel);
+assert.equal(compoundDetailProductMap.branches.length, 1);
+assert.equal(compoundDetailProductMap.branches[0].functions.length, 1);
+assert.deepEqual(
+  compoundDetailProductMap.branches[0].functions[0].details.map((item) => item.label),
+  ["Search", "filters", "saved views"],
+);
+const compoundDeliveryInventory = buildProductDeliveryInventory(compoundDetailSemanticModel);
+assert.equal(compoundDeliveryInventory.length, 3);
+assert.deepEqual(
+  compoundDeliveryInventory.map((row) => row.subfunctionLabel),
+  ["Search", "filters", "saved views"],
+);
+assert.ok(compoundDeliveryInventory.every((row) => row.epic === "Catalog"));
+assert.ok(compoundDeliveryInventory.every((row) => row.functionLabel === "Catalog discovery"));
+assert.ok(compoundDeliveryInventory.every((row) => row.deadline === "3 weeks" && row.phase === "3 weeks"));
+assert.equal(new Set(compoundDeliveryInventory.map((row) => row.id)).size, compoundDeliveryInventory.length);
+assert.deepEqual(
+  compoundDeliveryInventory.map((row) => row.id),
+  ["SUB-SCOPE-COMPOUND-1-DETAIL-1", "SUB-SCOPE-COMPOUND-1-DETAIL-2", "SUB-SCOPE-COMPOUND-1-DETAIL-3"],
+);
+assert.deepEqual(
+  compoundDeliveryInventory.map((row) => row.subfunctionId),
+  ["SCOPE-COMPOUND-1-DETAIL-1", "SCOPE-COMPOUND-1-DETAIL-2", "SCOPE-COMPOUND-1-DETAIL-3"],
+);
+assert.equal(localizeRendererText("Categories", "ru-RU"), "Категории");
+assert.equal(localizeRendererText("listings", "ru-RU"), "объявления");
+assert.equal(localizeRendererText("product cards", "uz-Latn"), "mahsulot kartalari");
+assert.equal(localizeRendererText("Business logic", "ru-RU"), "Бизнес-логика");
+assert.equal(localizeRendererText("service endpoints", "uz-Latn"), "servis nuqtalari");
+assertProductMapSegmentContract(buildProductMapSegments(compoundDetailSemanticModel));
+
+const normalizedDeliveryScope = normalizeScopeItems([{
+  id: "SCOPE-NORMALIZED-DEADLINE",
+  epic: "Catalog",
+  feature: "Catalog discovery",
+  detail: "Search, filters",
+  deadline: "4 weeks",
+  truthStatus: "recommended",
+}]);
+assert.equal(normalizedDeliveryScope[0].phase, "4 weeks");
+assert.ok(buildProductDeliveryInventory({ scopeItems: normalizedDeliveryScope }).every((row) => row.deadline === "4 weeks"));
+
+const terminalFunctionInventory = buildProductDeliveryInventory({
+  project: { name: "Terminal function product" },
+  scopeItems: [{
+    id: "SCOPE-TERMINAL-1",
+    epic: "Operations",
+    feature: "Operations workspace",
+    phase: "Month 2",
+    truthStatus: "recommended",
+    sourceIds: ["SRC-BRIEF"],
+    derivationRuleId: "SCOPE-MODEL-V1",
+  }],
+});
+assert.deepEqual(terminalFunctionInventory, [{
+  id: "CAP-SCOPE-TERMINAL-1",
+  epic: "Operations",
+  functionId: "SCOPE-TERMINAL-1",
+  functionLabel: "Operations workspace",
+  subfunctionId: null,
+  subfunctionLabel: "Operations workspace",
+  deadline: "Month 2",
+  phase: "Month 2",
+  truthStatus: "recommended",
+  inclusion: undefined,
+  sourceIds: ["SRC-BRIEF"],
+  derivationRuleId: "SCOPE-MODEL-V1",
+  dataRef: "/scopeItems/0",
+  sourceEntityIds: ["SCOPE-TERMINAL-1"],
+}]);
+
+const nineDomainSemanticModel = {
+  project: { name: "Nine-domain product" },
+  scopeItems: Array.from({ length: 9 }, (_, index) => ({
+    id: `SCOPE-DOMAIN-${index + 1}`,
+    epic: `Domain ${index + 1}`,
+    feature: `Domain function ${index + 1}`,
+    truthStatus: "recommended",
+  })),
+};
+const nineDomainSegments = buildProductMapSegments(nineDomainSemanticModel);
+assert.equal(nineDomainSegments.length, 2);
+assertProductMapSegmentContract(nineDomainSegments);
+assert.deepEqual(
+  nineDomainSegments.flatMap((segment) => segment.branches.map((branch) => branch.label)),
+  nineDomainSemanticModel.scopeItems.map((item) => item.epic),
+);
+
+const balancedProductMapScope = Array.from({ length: 17 }, (_, index) => ({
+  id: `SCOPE-BALANCED-${index + 1}`,
+  epic: "Core capabilities",
+  feature: `Balanced function ${index + 1}`,
   truthStatus: "recommended",
 }));
-assert.ok(buildProductMapSegments({ project: { name: "Large product" }, scopeItems: oversizedProductMapScope }).length > 1);
+const balancedProductMapSegments = buildProductMapSegments({ project: { name: "Balanced product" }, scopeItems: balancedProductMapScope });
+assert.equal(balancedProductMapSegments.length, 2);
+assert.deepEqual(
+  balancedProductMapSegments.map(productMapSegmentTerminalRows).sort((left, right) => left - right),
+  [8, 9],
+);
+assertProductMapSegmentContract(balancedProductMapSegments);
+assert.deepEqual(
+  balancedProductMapSegments.flatMap((segment) => segment.branches.flatMap((branch) => branch.functions.map((item) => item.label))),
+  balancedProductMapScope.map((item) => item.feature),
+);
+
+const structuredDetailLabels = Array.from({ length: 20 }, (_, index) => `Structured detail ${index + 1}`);
+const structuredDetailSemanticModel = {
+  project: { name: "Structured-detail product" },
+  scopeItems: [{
+    id: "SCOPE-STRUCTURED-1",
+    epic: "Operations",
+    feature: "Operations workspace",
+    details: structuredDetailLabels.map((label, index) => index % 2
+      ? { id: `DETAIL-${index + 1}`, label }
+      : label),
+    truthStatus: "recommended",
+  }],
+};
+const structuredDetailSegments = buildProductMapSegments(structuredDetailSemanticModel);
+assert.equal(structuredDetailSegments.length, 2);
+assertProductMapSegmentContract(structuredDetailSegments);
+const renderedStructuredDetailLabels = structuredDetailSegments.flatMap((segment) => segment.branches.flatMap(
+  (branch) => branch.functions.flatMap((item) => item.details.map((detail) => detail.label)),
+));
+assert.deepEqual(renderedStructuredDetailLabels, structuredDetailLabels);
+assert.deepEqual(
+  [...new Set(renderedStructuredDetailLabels)],
+  structuredDetailLabels,
+);
+const structuredDetailSpecs = structuredDetailSegments.map((_, index) => buildProductMapSpec({
+  semanticModel: structuredDetailSemanticModel,
+  requestId: "UNIT-PRODUCT-MAP",
+  pageNumber: index + 2,
+  segmentIndex: index + 1,
+  segmentCount: structuredDetailSegments.length,
+}));
+for (const [index, spec] of structuredDetailSpecs.entries()) {
+  assert.equal(spec.variant, "left_to_right_tree");
+  assert.equal(spec.segmentIndex, index + 1);
+  assert.equal(spec.segmentCount, structuredDetailSpecs.length);
+  assert.equal(spec.nodes.filter((node) => node.type === "core").length, 1);
+  assert.equal(spec.nodes.filter((node) => node.type === "domain").length, 1);
+  assert.equal(spec.nodes.filter((node) => node.type === "capability").length, 1);
+  assert.ok(spec.nodes.length <= 42);
+  assert.ok(spec.edges.length <= 41);
+}
+const structuredDetailSpecValidation = await validateVisualizationSpecs({
+  specs: structuredDetailSpecs,
+  semanticModel: structuredDetailSemanticModel,
+  presentationPlan: {
+    pages: structuredDetailSpecs.map((spec) => ({
+      pageNumber: spec.pageNumber,
+      kind: "product_map",
+      visualizationSpecId: spec.visualizationSpecId,
+    })),
+  },
+});
+assert.equal(
+  structuredDetailSpecValidation.ok,
+  true,
+  JSON.stringify(structuredDetailSpecValidation.findings, null, 2),
+);
+assert.deepEqual(
+  structuredDetailSpecs.flatMap((spec) => spec.nodes.filter((node) => node.type === "subfunction").map((node) => node.fullLabel)),
+  structuredDetailLabels,
+);
+assert.throws(
+  () => buildProductMapSpec({
+    semanticModel: structuredDetailSemanticModel,
+    requestId: "UNIT-PRODUCT-MAP",
+    pageNumber: 2,
+    segmentIndex: 1,
+    segmentCount: structuredDetailSegments.length + 1,
+  }),
+  (error) => error?.code === "CONTRACT_VISUALIZATION_SPEC_INVALID",
+);
+
+const detailedDeliverySemanticModel = {
+  ...structuredDetailSemanticModel,
+  scopeItems: structuredDetailSemanticModel.scopeItems.map((row) => ({ ...row, phase: "4 weeks" })),
+  roadmap: {
+    timeScale: { unit: "week", start: 1, end: 12 },
+    phases: [
+      { id: "PHASE-1", label: "Foundation", time: { unit: "week", start: 1, end: 4 }, inclusion: "recommended", truthStatus: "assumed", derivationRuleId: "UNIT-ROADMAP-V1" },
+      { id: "PHASE-2", label: "Implementation", time: { unit: "week", start: 5, end: 8 }, inclusion: "recommended", truthStatus: "assumed", derivationRuleId: "UNIT-ROADMAP-V1" },
+      { id: "PHASE-3", label: "Stabilization", time: { unit: "week", start: 9, end: 12 }, inclusion: "recommended", truthStatus: "assumed", derivationRuleId: "UNIT-ROADMAP-V1" },
+    ],
+    dependencies: [],
+  },
+};
+const detailedDeliveryInventory = buildProductDeliveryInventory(detailedDeliverySemanticModel);
+const roadmapSegments = buildRoadmapWorkstreamSegments(detailedDeliverySemanticModel);
+assert.deepEqual(roadmapSegments.map((rows) => rows.length), [10, 10]);
+const roadmapSpecs = roadmapSegments.map((_, index) => buildRoadmapSpec({
+  semanticModel: detailedDeliverySemanticModel,
+  requestId: "UNIT-ROADMAP",
+  pageNumber: index + 20,
+  segmentIndex: index + 1,
+  segmentCount: roadmapSegments.length,
+}));
+assert.deepEqual(
+  roadmapSpecs.flatMap((spec) => spec.nodes.filter((node) => node.type === "task").map((node) => node.id)),
+  detailedDeliveryInventory.map((row) => row.id),
+);
+assert.ok(roadmapSpecs.every((spec) => spec.nodes.filter((node) => node.type === "phase").length === 3));
+assert.ok(roadmapSpecs.every((spec) => spec.nodes.filter((node) => node.type === "task").length <= ROADMAP_WORKSTREAM_PAGE_LIMIT));
+const roadmapSpecValidation = await validateVisualizationSpecs({
+  specs: roadmapSpecs,
+  semanticModel: detailedDeliverySemanticModel,
+  presentationPlan: {
+    pages: roadmapSpecs.map((spec) => ({
+      pageNumber: spec.pageNumber,
+      kind: "roadmap",
+      visualizationSpecId: spec.visualizationSpecId,
+    })),
+  },
+});
+assert.equal(roadmapSpecValidation.ok, true, JSON.stringify(roadmapSpecValidation.findings, null, 2));
+
+const detailedMarketplaceProposal = {
+  requestId: "KP-BPMN-DENSE",
+  title: "Платформа маркетплейса",
+  brief: {
+    projectName: "Платформа маркетплейса",
+    type: "маркетплейс",
+    prompt: "Подготовить BPMN основного пользовательского процесса",
+    locale: "ru-RU",
+  },
+  scope: [
+    { id: "SCOPE-BPMN-1", epic: "Каталог", feature: "Каталог и карточка товара", detail: "Поиск и выбор товара", truthStatus: "recommended" },
+    { id: "SCOPE-BPMN-2", epic: "Заказы", feature: "Оформление и исполнение заказа", detail: "Корзина, оплата, доставка и возврат", truthStatus: "recommended" },
+  ],
+};
+const detailedMarketplaceSemanticModel = buildProposalSemanticModel(detailedMarketplaceProposal, {
+  requestId: detailedMarketplaceProposal.requestId,
+  locale: "ru-RU",
+});
+await validateProposalSemanticModel(detailedMarketplaceSemanticModel);
+assert.equal(detailedMarketplaceSemanticModel.actors.length, 4);
+assert.equal(detailedMarketplaceSemanticModel.tasks.length, 18);
+assert.equal(detailedMarketplaceSemanticModel.decisions.length, 4);
+assert.equal(detailedMarketplaceSemanticModel.events.length, 11);
+assert.equal(detailedMarketplaceSemanticModel.processRelations.length, 33);
+assert.equal(primaryFlowSegmentCount(detailedMarketplaceSemanticModel), 4);
+assert.deepEqual(detailedMarketplaceSemanticModel.processes.map((process) => process.nodeRefs.length), [10, 8, 9, 8]);
+assert.deepEqual(detailedMarketplaceSemanticModel.processes.map((process) => process.relationIds.length), [9, 7, 8, 9]);
+
+const nonMarketplaceOrderModel = buildProposalSemanticModel({
+  requestId: "KP-BPMN-NON-MARKETPLACE",
+  title: "CRM для отдела продаж",
+  brief: { projectName: "CRM", type: "CRM", prompt: "Управление заказами клиентов", locale: "ru-RU" },
+  scope: [{ id: "CRM-1", epic: "Продажи", feature: "Управление заказами клиентов", detail: "Внутренний реестр", truthStatus: "recommended" }],
+}, { requestId: "KP-BPMN-NON-MARKETPLACE", locale: "ru-RU" });
+assert.equal(nonMarketplaceOrderModel.actors.length, 0);
+assert.equal(nonMarketplaceOrderModel.processes.length, 0);
+
+const detailedMarketplacePlan = buildPresentationPlan({
+  requestId: detailedMarketplaceProposal.requestId,
+  proposalModel: detailedMarketplaceProposal,
+  semanticModel: detailedMarketplaceSemanticModel,
+  visualStyleProfile: {},
+});
+const detailedFlowPages = detailedMarketplacePlan.pages.filter((page) => page.kind === "primary_flow");
+assert.equal(detailedFlowPages.length, 4);
+assert.deepEqual(detailedFlowPages.map((page) => page.segmentIndex), [1, 2, 3, 4]);
+assert.ok(detailedFlowPages.every((page) => page.segmentCount === 4));
+const detailedFlowSpecs = detailedFlowPages.map((page) => buildPrimaryFlowSpec({
+  semanticModel: detailedMarketplaceSemanticModel,
+  requestId: detailedMarketplaceProposal.requestId,
+  pageNumber: page.pageNumber,
+  segmentIndex: page.segmentIndex,
+  segmentCount: page.segmentCount,
+}));
+const incompleteMarketplaceModel = JSON.parse(JSON.stringify(detailedMarketplaceSemanticModel));
+incompleteMarketplaceModel.processRelations = incompleteMarketplaceModel.processRelations.filter((row) => row.id !== "REL-MP-33");
+const segmentedQuestionsFallback = buildPrimaryFlowSpec({
+  semanticModel: incompleteMarketplaceModel,
+  requestId: detailedMarketplaceProposal.requestId,
+  pageNumber: detailedFlowPages[3].pageNumber,
+  segmentIndex: 4,
+  segmentCount: 4,
+});
+assert.equal(segmentedQuestionsFallback.variant, "questions");
+assert.equal(segmentedQuestionsFallback.segmentIndex, 4);
+assert.equal(segmentedQuestionsFallback.segmentCount, 4);
+assert.deepEqual(detailedFlowSpecs.map((spec) => spec.nodes.length), [10, 8, 9, 8]);
+assert.deepEqual(detailedFlowSpecs.map((spec) => spec.edges.length), [9, 7, 8, 9]);
+assert.ok(detailedFlowSpecs.every((spec) => spec.variant === "swimlane"));
+assert.deepEqual(detailedFlowSpecs.map((spec) => spec.nodes.filter((node) => node.type === "gateway").length), [1, 1, 0, 2]);
+assert.ok(detailedFlowSpecs.every((spec) => spec.nodes.filter((node) => node.type === "task").length >= 4));
+assert.deepEqual(detailedFlowSpecs.map((spec) => spec.groups.length), [2, 3, 4, 3]);
+for (const spec of detailedFlowSpecs) {
+  const geometry = validateLayoutGeometry(layoutVisualization(spec, { width: 1296, height: 646 }));
+  assert.equal(geometry.ok, true, JSON.stringify(geometry.findings, null, 2));
+}
+const detailedFlowValidation = await validateVisualizationSpecs({
+  specs: detailedFlowSpecs,
+  proposalModel: detailedMarketplaceProposal,
+  semanticModel: detailedMarketplaceSemanticModel,
+  presentationPlan: {
+    pages: detailedFlowPages.map((page, index) => ({
+      pageNumber: page.pageNumber,
+      kind: "primary_flow",
+      visualizationSpecId: detailedFlowSpecs[index].visualizationSpecId,
+      segmentIndex: page.segmentIndex,
+      segmentCount: page.segmentCount,
+    })),
+  },
+});
+assert.equal(detailedFlowValidation.ok, true, JSON.stringify(detailedFlowValidation.findings, null, 2));
+assert.ok(screenshotCss.includes(".semantic-layout-bpmn{justify-content:flex-start;gap:8px}"));
+assert.ok(screenshotCss.includes(".viz-bpmn-node{padding:8px 9px"));
+assert.ok(screenshotCss.includes("font-size:12.5px"));
+
+const pendingCommercialDecisions = selectDynamicPageDecisions({
+  groundedBrief: {
+    budget: {
+      amount: { status: "unknown", truthStatus: "unknown", value: null },
+      currency: { status: "unknown", truthStatus: "unknown", value: null },
+    },
+  },
+  functionPrice: [{
+    id: "FP-PENDING-1",
+    epic: "Catalog",
+    name: "Product catalog",
+    detail: "Categories and product cards",
+    deadline: "Month 1",
+    total: 0,
+    truthStatus: "recommended",
+  }],
+  payments: [],
+}, {
+  scopeItems: [{
+    id: "SCOPE-PENDING-1",
+    epic: "Catalog",
+    feature: "Product catalog",
+    inclusion: "recommended",
+    truthStatus: "recommended",
+  }],
+});
+const pendingFunctionPriceDecision = pendingCommercialDecisions.find((row) => row.kind === "function_price");
+const pendingPaymentsDecision = pendingCommercialDecisions.find((row) => row.kind === "payments");
+assert.equal(pendingFunctionPriceDecision.include, true);
+assert.equal(pendingFunctionPriceDecision.fallbackMode, "transparent_model");
+assert.ok(pendingFunctionPriceDecision.reasons.includes("functional_schedule_available_cost_inputs_pending"));
+assert.equal(pendingPaymentsDecision.include, true);
+assert.equal(pendingPaymentsDecision.fallbackMode, "transparent_model");
+assert.ok(pendingPaymentsDecision.reasons.includes("payment_schedule_inputs_pending"));
+
+const budgetCommercialDecisions = selectDynamicPageDecisions({
+  groundedBrief: {
+    budget: {
+      amount: { status: "explicit", truthStatus: "explicit", value: 100_000 },
+      currency: { status: "explicit", truthStatus: "explicit", value: "USD" },
+    },
+  },
+  functionPrice: [
+    { id: "FP-BUDGET-1", name: "Catalog", total: 60_000, truthStatus: "assumed" },
+    { id: "FP-BUDGET-2", name: "Checkout", total: 40_000, truthStatus: "assumed" },
+  ],
+  payments: [
+    { id: "PAY-BUDGET-1", name: "Kickoff", amount: 50_000, truthStatus: "assumed" },
+    { id: "PAY-BUDGET-2", name: "Acceptance", amount: 50_000, truthStatus: "assumed" },
+  ],
+}, {
+  scopeItems: [
+    { id: "SCOPE-BUDGET-1", feature: "Catalog", truthStatus: "recommended" },
+    { id: "SCOPE-BUDGET-2", feature: "Checkout", truthStatus: "recommended" },
+  ],
+});
+const budgetFunctionPriceDecision = budgetCommercialDecisions.find((row) => row.kind === "function_price");
+const budgetPaymentsDecision = budgetCommercialDecisions.find((row) => row.kind === "payments");
+assert.ok(budgetFunctionPriceDecision.reasons.includes("reconciled_function_planning_scenario_available"));
+assert.ok(!budgetFunctionPriceDecision.reasons.includes("functional_schedule_available_cost_inputs_pending"));
+assert.ok(budgetPaymentsDecision.reasons.includes("budget_based_payment_scenario_available"));
+assert.ok(!budgetPaymentsDecision.reasons.includes("payment_schedule_inputs_pending"));
 
 const aiDomainProfile = normalizeV5StyleProfile(null, {
   referenceMode: "none",

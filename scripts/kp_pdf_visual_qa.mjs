@@ -8,6 +8,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { localizeRendererText, resolveProposalRendererLocale } from "./kp_pdf_reference_locale.mjs";
+import { buildProductDeliveryInventory, decomposeProductMapDetail } from "./kp_product_map_model.mjs";
 
 const DEFAULT_DPI = 120;
 const EXPECTED_ASPECT_RATIO = Number(process.env.KP_PDF_EXPECTED_RATIO || 3 / 2);
@@ -58,6 +59,7 @@ export function buildPdfContentExpectations({
   mode = "v5",
   presentationPlan = null,
   proposalModel = null,
+  semanticModel = null,
   commercialLock = null,
   expectedPageCount = 0,
   domReport = null,
@@ -70,6 +72,8 @@ export function buildPdfContentExpectations({
   const pageByKind = Object.fromEntries(plannedPages
     .filter((page) => typeof page?.kind === "string" && page.kind.trim() && Number.isInteger(Number(page?.pageNumber)))
     .map((page) => [page.kind, Number(page.pageNumber)]));
+  const pagesByKind = Object.fromEntries([...new Set(plannedPages.map((page) => page?.kind).filter(Boolean))]
+    .map((kind) => [kind, plannedPages.filter((page) => page?.kind === kind).map((page) => Number(page.pageNumber))]));
   const domPageInventory = Array.isArray(domReport?.uiHardcheck?.perPage) ? domReport.uiHardcheck.perPage : [];
   const pageIdentities = plannedPages.map((planned) => {
     const domPage = domPageInventory.find((row) => Number(row?.pageNumber) === Number(planned?.pageNumber));
@@ -112,7 +116,7 @@ export function buildPdfContentExpectations({
   );
   const proposalFunctionRows = Array.isArray(proposalModel?.functionPrice) ? proposalModel.functionPrice : [];
   const proposalFunctionById = new Map(proposalFunctionRows.map((row) => [String(row?.id || ""), row]));
-  const functionRows = lock
+  const commercialFunctionRows = lock
     ? (lock.functionPrice || []).map((row) => {
         const proposalRow = proposalFunctionById.get(String(row.id || "")) || {};
         return {
@@ -128,6 +132,21 @@ export function buildPdfContentExpectations({
         deadline: localizedExpectationText(row.phase || row.deadline || "", 80),
         amountMinor: majorToMinorForExpectation(row.total ?? row.amount, exponent),
       }));
+  const canonicalDeliveryInventory = buildProductDeliveryInventory(semanticModel || {});
+  const functionRows = canonicalDeliveryInventory.length
+    ? canonicalDeliveryInventory.map((row) => ({
+        label: localizedExpectationText(row.functionLabel || "", 200),
+        detail: row.subfunctionId ? localizedExpectationText(row.subfunctionLabel || "", 240) : "",
+        deadline: localizedExpectationText(row.deadline || row.phase || "", 80),
+        // The amount remains on the unexpanded commercial inventory; this
+        // placeholder only keeps the text expectation row structurally valid.
+        amountMinor: 0,
+      }))
+    : commercialFunctionRows.flatMap((row) => {
+        const terminalDetails = decomposeProductMapDetail(row.detail || "");
+        if (!terminalDetails.length) return [row];
+        return terminalDetails.map((detail) => ({ ...row, detail: localizedExpectationText(detail, 240) }));
+      });
   const payments = lock
     ? (lock.payments || []).map((row) => ({
         label: localizedExpectationText(row.name, 200),
@@ -141,7 +160,7 @@ export function buildPdfContentExpectations({
       }));
   const functionSubtotalMinor = lock
     ? Number(lock.functionPriceSubtotalMinor)
-    : functionRows.reduce((sum, row) => sum + (Number.isSafeInteger(row.amountMinor) ? row.amountMinor : 0), 0);
+    : commercialFunctionRows.reduce((sum, row) => sum + (Number.isSafeInteger(row.amountMinor) ? row.amountMinor : 0), 0);
   const durationMonths = Number(lock?.durationMonths ?? proposalModel?.durationMonths ?? 0);
   const durationWeeks = Number(lock?.durationWeeks ?? proposalModel?.durationWeeks ?? 0);
   const coverage = buildExpectationCoverage({
@@ -158,6 +177,7 @@ export function buildPdfContentExpectations({
     projectName: safeExpectationText(proposalModel?.title || proposalModel?.projectName || "", 200),
     pageTitles,
     pageByKind,
+    pagesByKind,
     pageIdentities,
     minTextByPage: mode === "v5" ? Object.fromEntries(plannedPages.map((page) => [page.pageNumber, V5_MIN_TEXT_BY_KIND[page.kind] || 70])) : {},
     commercial: {
@@ -173,6 +193,9 @@ export function buildPdfContentExpectations({
     roadmap: {
       durationMonths: Number.isFinite(durationMonths) && durationMonths > 0 ? durationMonths : null,
       durationWeeks: Number.isFinite(durationWeeks) && durationWeeks > 0 ? durationWeeks : null,
+      workstreams: canonicalDeliveryInventory.length
+        ? canonicalDeliveryInventory.map((row) => localizedExpectationText(row.subfunctionLabel || row.functionLabel || "", 240)).filter(Boolean)
+        : functionRows.map((row) => row.detail || row.label).filter(Boolean),
     },
     team: {
       truthStatus: String(lock?.teamPlan?.truthStatus || proposalModel?.teamPlan?.truthStatus || "unknown").toLowerCase(),
@@ -669,10 +692,19 @@ def add_required_text_defect(hard_defects, page, requirement, message, evidence=
 
 def inspect_v5_story_content(page_texts, hard_defects, expectations):
     page_by_kind = expectations.get("pageByKind") or {}
+    pages_by_kind = expectations.get("pagesByKind") or {}
 
     def planned_page(kind):
         value = page_by_kind.get(kind)
         return value if isinstance(value, int) and 1 <= value <= len(page_texts) else None
+
+    def planned_pages(kind):
+        values = pages_by_kind.get(kind) or []
+        normalized = [value for value in values if isinstance(value, int) and 1 <= value <= len(page_texts)]
+        if normalized:
+            return normalized
+        value = planned_page(kind)
+        return [value] if value else []
 
     # Semantic payload markers apply only when that page is part of the adaptive
     # story. Russian and Uzbek stems keep localized output fail-closed.
@@ -720,13 +752,12 @@ def inspect_v5_story_content(page_texts, hard_defects, expectations):
             if not contains_any(text, alternatives):
                 add_required_text_defect(hard_defects, page_number, f"story_{kind}_group_{group_index}", f"Page {page_number} is missing required {kind} content")
 
-    flow_page = planned_page("primary_flow")
-    if flow_page:
+    for flow_page in planned_pages("primary_flow"):
         flow_text = page_texts[flow_page - 1]
         question_variant = contains_any(flow_text, ["process questions", "workflow questions", "вопросы процесса", "вопросы по процессу", "jarayon savollari"])
         connected_variant = (
-            contains_any(flow_text, ["start", "начало", "начат", "старт", "boshlanish", "boshla", "boshlan"])
-            and contains_any(flow_text, ["end", "outcome", "конец", "результат", "заверш", "оконч", "yakun", "natija"])
+            contains_any(flow_text, ["start", "received order", "outcome received", "delivery outcome", "начало", "начат", "старт", "получил заказ", "итог доставки", "boshlanish", "boshla", "boshlan", "buyurtmani oldi", "natijasi olindi"])
+            and contains_any(flow_text, ["end", "outcome", "handed", "stopped", "конец", "результат", "заверш", "оконч", "передан", "останов", "yakun", "natija", "yuboril"])
             and contains_any(flow_text, ["task", "decision", "gateway", "actor", "задач", "решени", "роль", "vazifa", "qaror", "ishtirokchi"])
         )
         if not question_variant and not connected_variant:
@@ -744,14 +775,22 @@ def inspect_dynamic_expectations(page_texts, hard_defects, expectations):
     if not page_texts:
         return
     page_by_kind = expectations.get("pageByKind") or {}
+    pages_by_kind = expectations.get("pagesByKind") or {}
+
+    def page_numbers(kind):
+        values = pages_by_kind.get(kind) or []
+        normalized = [value for value in values if isinstance(value, int) and 1 <= value <= len(page_texts)]
+        if normalized:
+            return normalized
+        value = page_by_kind.get(kind)
+        return [value] if isinstance(value, int) and 1 <= value <= len(page_texts) else []
 
     def page_number(kind):
-        value = page_by_kind.get(kind)
-        return value if isinstance(value, int) and 1 <= value <= len(page_texts) else None
+        values = page_numbers(kind)
+        return values[0] if values else None
 
     def page_text(kind):
-        value = page_number(kind)
-        return page_texts[value - 1] if value else ""
+        return "\n".join(page_texts[value - 1] for value in page_numbers(kind))
     project_name = expectations.get("projectName") or ""
     if project_name and not contains_phrase(page_texts[0], project_name):
         add_required_text_defect(
@@ -904,6 +943,9 @@ def inspect_dynamic_expectations(page_texts, hard_defects, expectations):
             duration_markers.extend([f"{weeks:g} week", f"{weeks:g} недел", f"{weeks:g} hafta"])
         if duration_markers and not contains_any(page_text("roadmap"), duration_markers):
             add_required_text_defect(hard_defects, roadmap_page, "roadmap_duration", f"Page {roadmap_page} does not contain the locked roadmap duration/scale")
+        for index, workstream in enumerate(roadmap.get("workstreams") or []):
+            if not contains_phrase(page_text("roadmap"), workstream):
+                add_required_text_defect(hard_defects, roadmap_page, f"roadmap_workstream_{index + 1}", "Roadmap continuation pages are missing a product-map workstream", {"rowIndex": index + 1})
 
     close_page = page_number("close")
     if close_page:
@@ -1642,6 +1684,7 @@ export async function runPdfVisualQa(pdfPathInput, outputDirInput, options = {})
     mode,
     presentationPlan: options.presentationPlan,
     proposalModel: options.proposalModel,
+    semanticModel: options.semanticModel,
     commercialLock: options.commercialLock,
     expectedPageCount: options.expectedPageCount ?? EXPECTED_PAGE_COUNT ?? 0,
     domReport: options.domReport,

@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { generateProposal } from "../src/agent.mjs";
+import { buildProductDeliveryInventory } from "../scripts/kp_product_map_model.mjs";
+import { primaryFlowSegmentCount, roadmapWorkstreamSegmentCount } from "../scripts/kp_visualization_planner.mjs";
 
 const directory = await fs.mkdtemp(path.join(os.tmpdir(), "standalone-kp-agent-"));
 const outputPath = path.join(directory, "proposal.pdf");
@@ -35,4 +37,38 @@ assert.ok(result.html.includes('.page[data-page-composition="dark"],.kp-page[dat
 assert.ok(result.html.includes("background-udevs-screenshot"));
 assert.ok(result.html.includes("data:image/png;base64,"));
 assert.ok(!result.html.includes(".page:nth-child(even),.kp-page:nth-child(even)"));
+const presentationPlan = JSON.parse(await fs.readFile(path.join(result.workspace, "contracts", "presentation-plan.json"), "utf8"));
+const semanticModel = JSON.parse(await fs.readFile(path.join(result.workspace, "contracts", "semantic-model.json"), "utf8"));
+const deliveryInventory = buildProductDeliveryInventory(semanticModel);
+const expectedFunctionPages = Math.max(1, Math.ceil(deliveryInventory.length / 14));
+const expectedPrimaryFlowPages = primaryFlowSegmentCount(semanticModel);
+const expectedRoadmapPages = roadmapWorkstreamSegmentCount(semanticModel);
+const pageKinds = presentationPlan.pages.map((page) => page.kind);
+assert.equal(pageKinds.filter((kind) => kind === "function_price").length, expectedFunctionPages);
+assert.equal(pageKinds.filter((kind) => kind === "primary_flow").length, expectedPrimaryFlowPages);
+assert.equal(pageKinds.filter((kind) => kind === "roadmap").length, expectedRoadmapPages);
+assert.equal(pageKinds.filter((kind) => kind === "payments").length, 1);
+assert.ok(pageKinds.indexOf("function_price") > pageKinds.lastIndexOf("product_map"));
+assert.ok(pageKinds.indexOf("payments") > pageKinds.lastIndexOf("roadmap"));
+assert.equal((result.html.match(/<section[^>]+data-page-kind="function_price"/g) || []).length, expectedFunctionPages);
+assert.equal((result.html.match(/<section[^>]+data-page-kind="primary_flow"/g) || []).length, expectedPrimaryFlowPages);
+assert.equal((result.html.match(/<section[^>]+data-page-kind="roadmap"/g) || []).length, expectedRoadmapPages);
+assert.equal((result.html.match(/<section[^>]+data-page-kind="payments"/g) || []).length, 1);
+const primaryFlowPages = presentationPlan.pages.filter((page) => page.kind === "primary_flow");
+const primaryFlowSpecs = await Promise.all(primaryFlowPages.map((page) => fs.readFile(
+  path.join(result.workspace, "contracts", "visualization-specs", `${page.visualizationSpecId}.json`),
+  "utf8",
+).then(JSON.parse)));
+assert.deepEqual(primaryFlowSpecs.map((spec) => spec.nodes.length), [10, 8, 9, 8]);
+assert.deepEqual(primaryFlowSpecs.map((spec) => spec.edges.length), [9, 7, 8, 9]);
+assert.ok(primaryFlowSpecs.every((spec) => spec.segmentCount === expectedPrimaryFlowPages));
+assert.equal((result.html.match(/data-viz-kind="bpmn"/g) || []).length, expectedPrimaryFlowPages);
+assert.equal((result.html.match(/data-viz-kind="bpmn"[^>]+data-viz-density="dense"/g) || []).length, 0);
+assert.ok(result.html.includes("ASOSIY JARAYON · 1/4"));
+for (const row of deliveryInventory) {
+  const escaped = row.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  assert.equal((result.html.match(new RegExp('data-node-id="' + escaped + '"', "g")) || []).length, 3);
+}
+assert.ok(result.html.includes("Funksional bloklar va muddatlar"));
+assert.ok(result.html.includes("To'lov jadvali taqdim etilmagan."));
 console.log(`Standalone KP agent PDF smoke PASS: ${outputPath}`);

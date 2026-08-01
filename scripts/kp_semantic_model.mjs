@@ -23,6 +23,10 @@ export function normalizeScopeItems(scope = []) {
       epic: clean(row.epic || row.module || row.domain || "Scope"),
       feature,
       detail: clean(row.detail || row.description || ""),
+      // Keep the client-facing delivery window on the semantic scope item.
+      // Product-map leaves inherit this value when the function schedule and
+      // development roadmap are expanded from the same canonical inventory.
+      phase: clean(row.phase || row.deadline || ""),
       priority: clean(row.priority || ""),
       capabilityIds: array(row.capabilityIds).length ? array(row.capabilityIds).map(String) : [id.replace(/^SCOPE/, "CAP")],
       inclusion,
@@ -316,6 +320,7 @@ export function validateSemanticReferences(model = {}) {
     if (!primary) errors.push(error("/primaryProcessId", "must reference a primary process"));
   }
   const relationIds = idSet(model.processRelations);
+  const processIds = idSet(model.processes);
   for (const [index, relation] of array(model.processRelations).entries()) {
     validateProcessRef(relation.fromRef, `/processRelations/${index}/fromRef`, idsByCollection, errors);
     validateProcessRef(relation.toRef, `/processRelations/${index}/toRef`, idsByCollection, errors);
@@ -324,6 +329,12 @@ export function validateSemanticReferences(model = {}) {
     for (const nodeRef of process.nodeRefs || []) validateProcessRef(nodeRef, `/processes/${index}/nodeRefs`, idsByCollection, errors);
     for (const relationId of process.relationIds || []) if (!relationIds.set.has(relationId)) errors.push(error(`/processes/${index}/relationIds`, `unknown process relation: ${relationId}`));
     for (const actorId of process.actorIds || []) if (!idsByCollection.actors.set.has(actorId)) errors.push(error(`/processes/${index}/actorIds`, `unknown actor: ${actorId}`));
+    if (process.continuationOf && (!processIds.set.has(process.continuationOf) || process.continuationOf === process.id)) {
+      errors.push(error(`/processes/${index}/continuationOf`, `must reference another process: ${process.continuationOf}`));
+    }
+    if (process.sequence !== undefined && (!Number.isInteger(process.sequence) || process.sequence < 1)) {
+      errors.push(error(`/processes/${index}/sequence`, "must be a positive integer"));
+    }
   }
   const componentIds = idSet(model.architecture?.components || []);
   for (const [index, component] of array(model.architecture?.components).entries()) {
@@ -363,8 +374,15 @@ function capabilityFromScope(item, scopeItems = []) {
 }
 
 function buildTemplateActors(proposalModel, scopeItems, locale = "en") {
-  const text = `${proposalModel.title || ""} ${proposalModel.brief?.type || ""} ${scopeItems.map((item) => `${item.epic} ${item.feature}`).join(" ")}`;
-  if (!/marketplace|marketpleys|маркетплейс|buyer|seller|заказ|vendor|merchant/i.test(text)) return [];
+  const text = `${proposalModel.title || ""} ${proposalModel.brief?.type || ""} ${proposalModel.brief?.prompt || ""} ${scopeItems.map((item) => `${item.epic} ${item.feature} ${item.detail}`).join(" ")}`;
+  const explicitCommerceIntent = /marketplace|marketpleys|маркетплейс|internet\s*magazin|online\s*store|e-?commerce|интернет[- ]?магазин|онлайн[- ]?магазин|elektron\s*tijorat/i.test(text);
+  const commerceSignals = [
+    /buyer|покупател|xaridor/i,
+    /seller|продавц|sotuvchi|vendor|merchant/i,
+    /catalog|каталог|katalog|product card|карточк[аи]\s+товар|mahsulot/i,
+    /cart|корзин|savat|checkout|оформлени[ея]\s+заказ/i,
+  ].filter((pattern) => pattern.test(text)).length;
+  if (!explicitCommerceIntent && commerceSignals < 2) return [];
   const labels = marketplaceProcessCopy(locale).actors;
   return [
     envelope("ACTOR-BUYER", labels.buyer, "recommended", [], "MARKETPLACE-JOURNEY-V1", { type: "end_user" }),
@@ -375,61 +393,199 @@ function buildTemplateActors(proposalModel, scopeItems, locale = "en") {
 }
 
 function buildRecommendedPrimaryProcess(proposalModel, actors = [], locale = "en") {
-  const text = `${proposalModel.title || ""} ${proposalModel.brief?.type || ""}`;
-  if (!actors.length || !/marketplace|marketpleys|маркетплейс/i.test(text)) {
+  // Template actors are created only after marketplace/e-commerce intent is
+  // detected across the title, brief, or normalized scope. Reuse that
+  // decision here so a generic synthesized brief title cannot erase a clear
+  // marketplace signal that was present in the client's scope.
+  if (!actors.length) {
     return { tasks: [], events: [], states: [], decisions: [], processes: [], processRelations: [], primaryProcessId: null };
   }
   const copy = marketplaceProcessCopy(locale);
   const derived = (id, label, extra) => envelope(id, label, "recommended", [], "MARKETPLACE-JOURNEY-V1", extra);
   const events = [
-    derived("EVENT-MARKETPLACE-START", copy.events.start, { type: "start", actorId: "ACTOR-BUYER" }),
-    derived("EVENT-MARKETPLACE-END", copy.events.end, { type: "end", actorId: "ACTOR-BUYER" }),
+    derived("EVENT-MARKETPLACE-START", copy.events.discoveryStarted, { type: "start", actorId: "ACTOR-BUYER" }),
+    derived("EVENT-CHECKOUT-READY", copy.events.checkoutReady, { type: "end", actorId: "ACTOR-MARKETPLACE-SERVICE" }),
+    derived("EVENT-ORDER-HANDOFF", copy.events.orderHandoff, { type: "end", actorId: "ACTOR-SELLER" }),
+    derived("EVENT-CHECKOUT-STOPPED", copy.events.checkoutStopped, { type: "end", actorId: "ACTOR-BUYER" }),
+    derived("EVENT-PAYMENT-START", copy.events.paymentStarted, { type: "start", actorId: "ACTOR-BUYER" }),
+    derived("EVENT-PAYMENT-STOPPED", copy.events.paymentStopped, { type: "end", actorId: "ACTOR-BUYER" }),
+    derived("EVENT-FULFILMENT-START", copy.events.fulfilmentStarted, { type: "start", actorId: "ACTOR-SELLER" }),
+    derived("EVENT-FULFILMENT-COMPLETED", copy.events.fulfilmentCompleted, { type: "end", actorId: "ACTOR-BUYER" }),
+    derived("EVENT-DELIVERY-ISSUE-HANDOFF", copy.events.deliveryIssueHandoff, { type: "end", actorId: "ACTOR-SUPPORT" }),
+    derived("EVENT-SUPPORT-CHECK-START", copy.events.supportCheckStarted, { type: "start", actorId: "ACTOR-MARKETPLACE-SERVICE" }),
+    derived("EVENT-MARKETPLACE-END", copy.events.orderCompleted, { type: "end", actorId: "ACTOR-BUYER" }),
   ];
   const tasks = [
     derived("TASK-CATALOG-DISCOVERY", copy.tasks.catalog, { actorId: "ACTOR-BUYER", type: "user_task" }),
-    derived("TASK-CART-CHECKOUT", copy.tasks.checkout, { actorId: "ACTOR-BUYER", type: "user_task" }),
+    derived("TASK-PRODUCT-SELECTION", copy.tasks.product, { actorId: "ACTOR-BUYER", type: "user_task" }),
+    derived("TASK-CART-CHECKOUT", copy.tasks.cart, { actorId: "ACTOR-BUYER", type: "user_task" }),
+    derived("TASK-DELIVERY-DETAILS", copy.tasks.delivery, { actorId: "ACTOR-BUYER", type: "user_task" }),
+    derived("TASK-CART-VALIDATION", copy.tasks.validation, { actorId: "ACTOR-MARKETPLACE-SERVICE", type: "service_task" }),
+    derived("TASK-CART-CORRECTION", copy.tasks.correction, { actorId: "ACTOR-BUYER", type: "user_task" }),
     derived("TASK-PAYMENT-ORDER", copy.tasks.payment, { actorId: "ACTOR-MARKETPLACE-SERVICE", type: "service_task" }),
-    derived("TASK-FULFILMENT-TRACKING", copy.tasks.fulfilment, { actorId: "ACTOR-SELLER", type: "manual_task" }),
-    derived("TASK-RETURN-SUPPORT", copy.tasks.support, { actorId: "ACTOR-SUPPORT", type: "review" }),
+    derived("TASK-PAYMENT-CORRECTION", copy.tasks.paymentCorrection, { actorId: "ACTOR-BUYER", type: "user_task" }),
+    derived("TASK-ROUTE-ORDER", copy.tasks.routeOrder, { actorId: "ACTOR-MARKETPLACE-SERVICE", type: "service_task" }),
+    derived("TASK-SELLER-ACCEPT", copy.tasks.sellerAccept, { actorId: "ACTOR-SELLER", type: "manual_task" }),
+    derived("TASK-PICK-PACK", copy.tasks.pickPack, { actorId: "ACTOR-SELLER", type: "manual_task" }),
+    derived("TASK-DELIVERY-HANDOFF", copy.tasks.deliveryHandoff, { actorId: "ACTOR-SELLER", type: "manual_task" }),
+    derived("TASK-TRACKING-UPDATE", copy.tasks.tracking, { actorId: "ACTOR-MARKETPLACE-SERVICE", type: "service_task" }),
+    derived("TASK-CONFIRM-RECEIPT", copy.tasks.receipt, { actorId: "ACTOR-BUYER", type: "user_task" }),
+    derived("TASK-SUPPORT-INTAKE", copy.tasks.supportIntake, { actorId: "ACTOR-SUPPORT", type: "review" }),
+    derived("TASK-SUPPORT-REVIEW", copy.tasks.supportReview, { actorId: "ACTOR-SUPPORT", type: "review" }),
+    derived("TASK-RETURN-REFUND", copy.tasks.returnRefund, { actorId: "ACTOR-SUPPORT", type: "manual_task" }),
+    derived("TASK-CLOSE-CASE", copy.tasks.closeCase, { actorId: "ACTOR-SUPPORT", type: "manual_task" }),
   ];
-  const states = [derived("STATE-ORDER-CONFIRMED", copy.states.confirmed, { type: "active", actorId: "ACTOR-MARKETPLACE-SERVICE" })];
-  const decisions = [derived("DECISION-EXCEPTION", copy.decision.label, {
-    actorId: "ACTOR-MARKETPLACE-SERVICE",
-    question: copy.decision.question,
-    branchLabels: [copy.decision.no, copy.decision.yes],
-  })];
-  const processRelations = [
+  const states = [
+    derived("STATE-ORDER-CONFIRMED", copy.states.confirmed, { type: "active", actorId: "ACTOR-MARKETPLACE-SERVICE" }),
+    derived("STATE-DELIVERY-COMPLETED", copy.states.delivered, { type: "active", actorId: "ACTOR-BUYER" }),
+  ];
+  const decisions = [
+    derived("DECISION-STOCK-AVAILABLE", copy.decisions.stock.label, {
+      actorId: "ACTOR-MARKETPLACE-SERVICE",
+      question: copy.decisions.stock.question,
+      branchLabels: [copy.decisions.stock.yes, copy.decisions.stock.no],
+    }),
+    derived("DECISION-PAYMENT-SUCCESS", copy.decisions.payment.label, {
+      actorId: "ACTOR-MARKETPLACE-SERVICE",
+      question: copy.decisions.payment.question,
+      branchLabels: [copy.decisions.payment.yes, copy.decisions.payment.no],
+    }),
+    derived("DECISION-SUPPORT-REQUIRED", copy.decisions.support.label, {
+      actorId: "ACTOR-MARKETPLACE-SERVICE",
+      question: copy.decisions.support.question,
+      branchLabels: [copy.decisions.support.no, copy.decisions.support.yes],
+    }),
+    derived("DECISION-CASE-APPROVED", copy.decisions.approval.label, {
+      actorId: "ACTOR-SUPPORT",
+      question: copy.decisions.approval.question,
+      branchLabels: [copy.decisions.approval.yes, copy.decisions.approval.no],
+    }),
+  ];
+  const checkoutRelations = [
     relation("REL-MP-01", "events/EVENT-MARKETPLACE-START", "tasks/TASK-CATALOG-DISCOVERY", "sequence", null),
-    relation("REL-MP-02", "tasks/TASK-CATALOG-DISCOVERY", "tasks/TASK-CART-CHECKOUT", "sequence", null),
-    relation("REL-MP-03", "tasks/TASK-CART-CHECKOUT", "tasks/TASK-PAYMENT-ORDER", "sequence", null),
-    relation("REL-MP-04", "tasks/TASK-PAYMENT-ORDER", "states/STATE-ORDER-CONFIRMED", "success", copy.relations.confirmed),
-    relation("REL-MP-05", "states/STATE-ORDER-CONFIRMED", "tasks/TASK-FULFILMENT-TRACKING", "sequence", null),
-    relation("REL-MP-06", "tasks/TASK-FULFILMENT-TRACKING", "decisions/DECISION-EXCEPTION", "sequence", null),
-    // Preserve the visible decision labels while assigning semantic path
-    // roles explicitly. A generic Yes/No answer is not enough to determine
-    // which branch is exceptional, so downstream code must not infer it from
-    // the label alone.
-    relation("REL-MP-07", "decisions/DECISION-EXCEPTION", "events/EVENT-MARKETPLACE-END", "success", copy.decision.no),
-    relation("REL-MP-08", "decisions/DECISION-EXCEPTION", "tasks/TASK-RETURN-SUPPORT", "exception", copy.decision.yes),
-    relation("REL-MP-09", "tasks/TASK-RETURN-SUPPORT", "events/EVENT-MARKETPLACE-END", "sequence", copy.relations.resolved),
+    relation("REL-MP-02", "tasks/TASK-CATALOG-DISCOVERY", "tasks/TASK-PRODUCT-SELECTION", "sequence", null),
+    relation("REL-MP-03", "tasks/TASK-PRODUCT-SELECTION", "tasks/TASK-CART-CHECKOUT", "sequence", null),
+    relation("REL-MP-04", "tasks/TASK-CART-CHECKOUT", "tasks/TASK-DELIVERY-DETAILS", "sequence", null),
+    relation("REL-MP-05", "tasks/TASK-DELIVERY-DETAILS", "tasks/TASK-CART-VALIDATION", "sequence", null),
+    relation("REL-MP-06", "tasks/TASK-CART-VALIDATION", "decisions/DECISION-STOCK-AVAILABLE", "sequence", null),
+    relation("REL-MP-07", "decisions/DECISION-STOCK-AVAILABLE", "events/EVENT-CHECKOUT-READY", "yes", copy.decisions.stock.yes),
+    relation("REL-MP-08", "decisions/DECISION-STOCK-AVAILABLE", "tasks/TASK-CART-CORRECTION", "no", copy.decisions.stock.no),
+    relation("REL-MP-09", "tasks/TASK-CART-CORRECTION", "events/EVENT-CHECKOUT-STOPPED", "sequence", copy.relations.cartUpdateRequired),
   ];
-  const process = derived("PROCESS-MARKETPLACE-JOURNEY", copy.process, {
+  const paymentRelations = [
+    relation("REL-MP-10", "events/EVENT-PAYMENT-START", "tasks/TASK-PAYMENT-ORDER", "sequence", null),
+    relation("REL-MP-11", "tasks/TASK-PAYMENT-ORDER", "decisions/DECISION-PAYMENT-SUCCESS", "sequence", null),
+    relation("REL-MP-12", "decisions/DECISION-PAYMENT-SUCCESS", "states/STATE-ORDER-CONFIRMED", "success", copy.decisions.payment.yes),
+    relation("REL-MP-13", "decisions/DECISION-PAYMENT-SUCCESS", "tasks/TASK-PAYMENT-CORRECTION", "no", copy.decisions.payment.no),
+    relation("REL-MP-14", "tasks/TASK-PAYMENT-CORRECTION", "events/EVENT-PAYMENT-STOPPED", "sequence", copy.relations.paymentNotCompleted),
+    relation("REL-MP-15", "states/STATE-ORDER-CONFIRMED", "tasks/TASK-ROUTE-ORDER", "sequence", copy.relations.confirmed),
+    relation("REL-MP-16", "tasks/TASK-ROUTE-ORDER", "events/EVENT-ORDER-HANDOFF", "message", copy.relations.orderTransferred),
+  ];
+  const fulfilmentRelations = [
+    relation("REL-MP-17", "events/EVENT-FULFILMENT-START", "tasks/TASK-SELLER-ACCEPT", "sequence", null),
+    relation("REL-MP-18", "tasks/TASK-SELLER-ACCEPT", "tasks/TASK-PICK-PACK", "sequence", null),
+    relation("REL-MP-19", "tasks/TASK-PICK-PACK", "tasks/TASK-DELIVERY-HANDOFF", "sequence", null),
+    relation("REL-MP-20", "tasks/TASK-DELIVERY-HANDOFF", "tasks/TASK-TRACKING-UPDATE", "message", copy.relations.shipmentRegistered),
+    relation("REL-MP-21", "tasks/TASK-TRACKING-UPDATE", "tasks/TASK-CONFIRM-RECEIPT", "sequence", null),
+    relation("REL-MP-22", "tasks/TASK-TRACKING-UPDATE", "events/EVENT-DELIVERY-ISSUE-HANDOFF", "exception", copy.relations.deliveryIssue),
+    relation("REL-MP-23", "tasks/TASK-CONFIRM-RECEIPT", "states/STATE-DELIVERY-COMPLETED", "success", copy.relations.delivered),
+    relation("REL-MP-24", "states/STATE-DELIVERY-COMPLETED", "events/EVENT-FULFILMENT-COMPLETED", "sequence", copy.relations.delivered),
+  ];
+  const supportRelations = [
+    relation("REL-MP-25", "events/EVENT-SUPPORT-CHECK-START", "decisions/DECISION-SUPPORT-REQUIRED", "sequence", null),
+    relation("REL-MP-26", "decisions/DECISION-SUPPORT-REQUIRED", "events/EVENT-MARKETPLACE-END", "success", copy.decisions.support.no),
+    relation("REL-MP-27", "decisions/DECISION-SUPPORT-REQUIRED", "tasks/TASK-SUPPORT-INTAKE", "exception", copy.decisions.support.yes),
+    relation("REL-MP-28", "tasks/TASK-SUPPORT-INTAKE", "tasks/TASK-SUPPORT-REVIEW", "sequence", null),
+    relation("REL-MP-29", "tasks/TASK-SUPPORT-REVIEW", "decisions/DECISION-CASE-APPROVED", "sequence", null),
+    relation("REL-MP-30", "decisions/DECISION-CASE-APPROVED", "tasks/TASK-RETURN-REFUND", "yes", copy.decisions.approval.yes),
+    relation("REL-MP-31", "decisions/DECISION-CASE-APPROVED", "tasks/TASK-CLOSE-CASE", "no", copy.decisions.approval.no),
+    relation("REL-MP-32", "tasks/TASK-RETURN-REFUND", "tasks/TASK-CLOSE-CASE", "sequence", null),
+    relation("REL-MP-33", "tasks/TASK-CLOSE-CASE", "events/EVENT-MARKETPLACE-END", "sequence", copy.relations.resolved),
+  ];
+  const journeyId = "JOURNEY-MARKETPLACE-ORDER";
+  const checkoutProcess = derived("PROCESS-MARKETPLACE-CHECKOUT", copy.processes.checkout, {
     type: "primary",
+    journeyId,
+    sequence: 1,
     nodeRefs: [
       "events/EVENT-MARKETPLACE-START",
       "tasks/TASK-CATALOG-DISCOVERY",
+      "tasks/TASK-PRODUCT-SELECTION",
       "tasks/TASK-CART-CHECKOUT",
-      "tasks/TASK-PAYMENT-ORDER",
-      "states/STATE-ORDER-CONFIRMED",
-      "tasks/TASK-FULFILMENT-TRACKING",
-      "decisions/DECISION-EXCEPTION",
-      "tasks/TASK-RETURN-SUPPORT",
-      "events/EVENT-MARKETPLACE-END",
+      "tasks/TASK-DELIVERY-DETAILS",
+      "tasks/TASK-CART-VALIDATION",
+      "decisions/DECISION-STOCK-AVAILABLE",
+      "tasks/TASK-CART-CORRECTION",
+      "events/EVENT-CHECKOUT-READY",
+      "events/EVENT-CHECKOUT-STOPPED",
     ],
-    relationIds: processRelations.map((row) => row.id),
+    relationIds: checkoutRelations.map((row) => row.id),
     actorIds: actors.map((row) => row.id),
   });
-  return { tasks, events, states, decisions, processes: [process], processRelations, primaryProcessId: process.id };
+  const paymentProcess = derived("PROCESS-MARKETPLACE-PAYMENT", copy.processes.payment, {
+    type: "supporting",
+    journeyId,
+    sequence: 2,
+    continuationOf: checkoutProcess.id,
+    nodeRefs: [
+      "events/EVENT-PAYMENT-START",
+      "tasks/TASK-PAYMENT-ORDER",
+      "decisions/DECISION-PAYMENT-SUCCESS",
+      "tasks/TASK-PAYMENT-CORRECTION",
+      "states/STATE-ORDER-CONFIRMED",
+      "tasks/TASK-ROUTE-ORDER",
+      "events/EVENT-PAYMENT-STOPPED",
+      "events/EVENT-ORDER-HANDOFF",
+    ],
+    relationIds: paymentRelations.map((row) => row.id),
+    actorIds: actors.map((row) => row.id),
+  });
+  const fulfilmentProcess = derived("PROCESS-MARKETPLACE-FULFILMENT", copy.processes.fulfilment, {
+    type: "supporting",
+    journeyId,
+    sequence: 3,
+    continuationOf: paymentProcess.id,
+    nodeRefs: [
+      "events/EVENT-FULFILMENT-START",
+      "tasks/TASK-SELLER-ACCEPT",
+      "tasks/TASK-PICK-PACK",
+      "tasks/TASK-DELIVERY-HANDOFF",
+      "tasks/TASK-TRACKING-UPDATE",
+      "tasks/TASK-CONFIRM-RECEIPT",
+      "states/STATE-DELIVERY-COMPLETED",
+      "events/EVENT-FULFILMENT-COMPLETED",
+      "events/EVENT-DELIVERY-ISSUE-HANDOFF",
+    ],
+    relationIds: fulfilmentRelations.map((row) => row.id),
+    actorIds: actors.map((row) => row.id),
+  });
+  const supportProcess = derived("PROCESS-MARKETPLACE-SUPPORT", copy.processes.support, {
+    type: "supporting",
+    journeyId,
+    sequence: 4,
+    continuationOf: fulfilmentProcess.id,
+    nodeRefs: [
+      "events/EVENT-SUPPORT-CHECK-START",
+      "decisions/DECISION-SUPPORT-REQUIRED",
+      "tasks/TASK-SUPPORT-INTAKE",
+      "tasks/TASK-SUPPORT-REVIEW",
+      "decisions/DECISION-CASE-APPROVED",
+      "tasks/TASK-RETURN-REFUND",
+      "tasks/TASK-CLOSE-CASE",
+      "events/EVENT-MARKETPLACE-END",
+    ],
+    relationIds: supportRelations.map((row) => row.id),
+    actorIds: actors.map((row) => row.id),
+  });
+  return {
+    tasks,
+    events,
+    states,
+    decisions,
+    processes: [checkoutProcess, paymentProcess, fulfilmentProcess, supportProcess],
+    processRelations: [...checkoutRelations, ...paymentRelations, ...fulfilmentRelations, ...supportRelations],
+    primaryProcessId: checkoutProcess.id,
+  };
 }
 
 function relation(id, fromRef, toRef, type, label) {
@@ -439,30 +595,45 @@ function relation(id, fromRef, toRef, type, label) {
 function marketplaceProcessCopy(locale = "en") {
   if (locale === "uz-Latn") return {
     actors: { buyer: "Xaridor", seller: "Sotuvchi", service: "Marketpleys xizmati", support: "Yordam operatori" },
-    events: { start: "Mahsulot qidiruvi boshlandi", end: "Buyurtma yakunlandi" },
-    tasks: { catalog: "Katalog va qidiruv", checkout: "Savat va checkout", payment: "To‘lov va buyurtmani yaratish", fulfilment: "Bajarish va kuzatish", support: "Qaytarish yoki yordam holatini hal qilish" },
-    states: { confirmed: "Buyurtma tasdiqlandi" },
-    decision: { label: "Istisno holati", question: "Qaytarish yoki yordam kerakmi?", no: "Yo‘q", yes: "Ha" },
-    relations: { confirmed: "buyurtma tasdiqlandi", resolved: "holat yopildi" },
-    process: "Tavsiya etilgan marketpleys buyurtma jarayoni",
+    events: { discoveryStarted: "Mahsulot qidiruvi boshlandi", checkoutReady: "Savat to‘lovga tayyor", orderHandoff: "Buyurtma sotuvchiga yuborildi", checkoutStopped: "Savatni yangilash kerak", paymentStarted: "To‘lov boshlandi", paymentStopped: "To‘lovni takrorlash kerak", fulfilmentStarted: "Sotuvchi buyurtmani oldi", fulfilmentCompleted: "Yetkazish yakunlandi", deliveryIssueHandoff: "Yordamga yuborildi", supportCheckStarted: "Yetkazish natijasi olindi", orderCompleted: "Buyurtma yakunlandi" },
+    tasks: { catalog: "Katalog va qidiruv", product: "Mahsulotni tanlash", cart: "Savat", delivery: "Manzil va yetkazib berish", validation: "Savat va qoldiqni tekshirish", correction: "Savatni yangilash", payment: "To‘lov va buyurtma yaratish", paymentCorrection: "To‘lov usulini o‘zgartirish", routeOrder: "Buyurtmani sotuvchiga yo‘naltirish", sellerAccept: "Buyurtmani qabul qilish", pickPack: "Yig‘ish va qadoqlash", deliveryHandoff: "Kuryerga topshirish", tracking: "Holat va trekni yangilash", receipt: "Qabulni tasdiqlash", supportIntake: "Yangi murojaat", supportReview: "Murojaatni tekshirish", returnRefund: "Qaytarish yoki pulni qaytarish", closeCase: "Murojaatni yopish" },
+    states: { confirmed: "Buyurtma yaratildi", delivered: "Yetkazib berildi" },
+    decisions: {
+      stock: { label: "Mavjudlik", question: "Mahsulotlar mavjudmi?", yes: "Mavjud", no: "Mavjud emas" },
+      payment: { label: "To‘lov natijasi", question: "To‘lov muvaffaqiyatlimi?", yes: "To‘landi", no: "Xato" },
+      support: { label: "Istisno", question: "Yordam yoki qaytarish kerakmi?", no: "Yo‘q", yes: "Ha" },
+      approval: { label: "Murojaat qarori", question: "Murojaat tasdiqlandimi?", yes: "Tasdiqlandi", no: "Rad etildi" },
+    },
+    relations: { cartUpdateRequired: "savatni yangilash kerak", paymentNotCompleted: "to‘lov yakunlanmadi", confirmed: "buyurtma tasdiqlandi", orderTransferred: "buyurtma yuborildi", shipmentRegistered: "jo‘natma ro‘yxatga olindi", deliveryIssue: "yetkazish muammosi", delivered: "qabul qilindi", resolved: "murojaat yopildi" },
+    processes: { checkout: "Katalog, savat va qoldiq", payment: "To‘lov va buyurtma yaratish", fulfilment: "Bajarish va yetkazish", support: "Yordam va qaytarish" },
   };
   if (locale === "ru" || locale === "ru-RU") return {
     actors: { buyer: "Покупатель", seller: "Продавец", service: "Сервис маркетплейса", support: "Оператор поддержки" },
-    events: { start: "Начат поиск товара", end: "Заказ завершён" },
-    tasks: { catalog: "Каталог и поиск", checkout: "Корзина и checkout", payment: "Оплата и создание заказа", fulfilment: "Исполнение и отслеживание", support: "Обработка возврата или обращения" },
-    states: { confirmed: "Заказ подтверждён" },
-    decision: { label: "Исключение", question: "Нужен возврат или поддержка?", no: "Нет", yes: "Да" },
-    relations: { confirmed: "заказ подтверждён", resolved: "обращение закрыто" },
-    process: "Рекомендуемый путь заказа маркетплейса",
+    events: { discoveryStarted: "Начат поиск товара", checkoutReady: "Корзина готова к оплате", orderHandoff: "Заказ передан продавцу", checkoutStopped: "Нужно обновить корзину", paymentStarted: "Начата оплата", paymentStopped: "Нужно повторить оплату", fulfilmentStarted: "Продавец получил заказ", fulfilmentCompleted: "Доставка завершена", deliveryIssueHandoff: "Передано в поддержку", supportCheckStarted: "Получен итог доставки", orderCompleted: "Заказ завершён" },
+    tasks: { catalog: "Каталог и поиск", product: "Выбор товара и варианта", cart: "Корзина", delivery: "Адрес и способ доставки", validation: "Проверка корзины и остатков", correction: "Обновить корзину", payment: "Оплата и создание заказа", paymentCorrection: "Изменить способ оплаты", routeOrder: "Передача заказа продавцу", sellerAccept: "Принять заказ", pickPack: "Собрать и упаковать", deliveryHandoff: "Передать в доставку", tracking: "Обновить статус и трек", receipt: "Заказ получен", supportIntake: "Новое обращение", supportReview: "Проверить обращение", returnRefund: "Оформить возврат средств", closeCase: "Закрыть обращение" },
+    states: { confirmed: "Заказ создан", delivered: "Заказ доставлен" },
+    decisions: {
+      stock: { label: "Наличие", question: "Все позиции доступны?", yes: "В наличии", no: "Нет в наличии" },
+      payment: { label: "Результат оплаты", question: "Оплата прошла?", yes: "Оплачено", no: "Ошибка" },
+      support: { label: "Исключение", question: "Нужен возврат или поддержка?", no: "Нет", yes: "Да" },
+      approval: { label: "Решение", question: "Обращение одобрено?", yes: "Одобрено", no: "Отказ" },
+    },
+    relations: { cartUpdateRequired: "корзина требует изменений", paymentNotCompleted: "оплата не завершена", confirmed: "заказ подтверждён", orderTransferred: "заказ передан", shipmentRegistered: "отправление зарегистрировано", deliveryIssue: "проблема доставки", delivered: "получено", resolved: "обращение закрыто" },
+    processes: { checkout: "Каталог, корзина и наличие", payment: "Оплата и создание заказа", fulfilment: "Исполнение и доставка", support: "Поддержка и возврат" },
   };
   return {
     actors: { buyer: "Buyer", seller: "Seller", service: "Marketplace service", support: "Support operator" },
-    events: { start: "Product discovery started", end: "Order completed" },
-    tasks: { catalog: "Catalog and search", checkout: "Cart and checkout", payment: "Payment and order creation", fulfilment: "Fulfilment and tracking", support: "Resolve return or support case" },
-    states: { confirmed: "Order confirmed" },
-    decision: { label: "Exception decision", question: "Is a return or support case required?", no: "No", yes: "Yes" },
-    relations: { confirmed: "order confirmed", resolved: "case resolved" },
-    process: "Recommended marketplace order journey",
+    events: { discoveryStarted: "Product discovery started", checkoutReady: "Cart ready for payment", orderHandoff: "Order handed to seller", checkoutStopped: "Cart update required", paymentStarted: "Payment started", paymentStopped: "Payment retry required", fulfilmentStarted: "Seller received order", fulfilmentCompleted: "Delivery completed", deliveryIssueHandoff: "Handed to support", supportCheckStarted: "Delivery outcome received", orderCompleted: "Order completed" },
+    tasks: { catalog: "Catalog and search", product: "Select product and variant", cart: "Cart", delivery: "Address and delivery method", validation: "Validate cart and stock", correction: "Update the cart", payment: "Payment and order creation", paymentCorrection: "Change payment method", routeOrder: "Route order to seller", sellerAccept: "Accept the order", pickPack: "Pick and pack", deliveryHandoff: "Hand over for delivery", tracking: "Update status and tracking", receipt: "Order received", supportIntake: "New support case", supportReview: "Review the case", returnRefund: "Arrange return or refund", closeCase: "Close the case" },
+    states: { confirmed: "Order created", delivered: "Order delivered" },
+    decisions: {
+      stock: { label: "Availability", question: "Are all items available?", yes: "Available", no: "Unavailable" },
+      payment: { label: "Payment result", question: "Did payment succeed?", yes: "Paid", no: "Failed" },
+      support: { label: "Exception", question: "Is return or support required?", no: "No", yes: "Yes" },
+      approval: { label: "Case decision", question: "Is the case approved?", yes: "Approved", no: "Declined" },
+    },
+    relations: { cartUpdateRequired: "cart update required", paymentNotCompleted: "payment not completed", confirmed: "order confirmed", orderTransferred: "order transferred", shipmentRegistered: "shipment registered", deliveryIssue: "delivery issue", delivered: "received", resolved: "case closed" },
+    processes: { checkout: "Catalog, cart, and stock", payment: "Payment and order creation", fulfilment: "Fulfilment and delivery", support: "Support and return" },
   };
 }
 

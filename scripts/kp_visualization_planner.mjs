@@ -1,9 +1,14 @@
 import { architectureLayerIdForNode } from "./kp_architecture_layers.mjs";
-import { buildProductMapModel, buildProductMapSegments } from "./kp_product_map_model.mjs";
+import {
+  buildProductDeliveryInventory,
+  buildProductMapModel,
+  buildProductMapSegments,
+} from "./kp_product_map_model.mjs";
 
 const TRUTH_STATUSES = new Set(["explicit", "verified", "single_source", "recommended", "inferred", "assumed", "unknown"]);
 const INCLUSIONS = new Set(["requested", "in_scope", "recommended", "deferred", "out_of_scope", "unknown"]);
 const FACTUAL_TRUTH = new Set(["explicit", "verified", "single_source"]);
+export const ROADMAP_WORKSTREAM_PAGE_LIMIT = 14;
 
 export function buildVisualizationSpecs({ semanticModel, presentationPlan }) {
   const builders = {
@@ -247,11 +252,17 @@ function buildPendingOwnershipSpec({ requestId, scope }) {
   });
 }
 
-export function buildProductMapSpec({ semanticModel, requestId, pageNumber = 10, segmentIndex = 1 }) {
+export function buildProductMapSpec({ semanticModel, requestId, pageNumber = 10, segmentIndex = 1, segmentCount = null }) {
   const productModel = buildProductMapModel(semanticModel);
-  if (productModel.branches.length < 2) return buildPendingProductMapSpec(requestId, productModel, pageNumber);
+  if (!productModel.branches.some((branch) => array(branch.functions).length)) return buildPendingProductMapSpec(requestId, productModel, pageNumber);
   const segments = buildProductMapSegments(semanticModel);
-  const effectiveSegmentIndex = Math.min(Math.max(1, Number(segmentIndex) || 1), segments.length);
+  const effectiveSegmentIndex = Number(segmentIndex) || 1;
+  if (!Number.isInteger(effectiveSegmentIndex) || effectiveSegmentIndex < 1 || effectiveSegmentIndex > segments.length) {
+    throw Object.assign(new Error(`Product-map segment ${segmentIndex} is outside 1..${segments.length}`), { code: "CONTRACT_VISUALIZATION_SPEC_INVALID" });
+  }
+  if (segmentCount !== null && segmentCount !== undefined && Number(segmentCount) !== segments.length) {
+    throw Object.assign(new Error(`Product-map segment count drift: plan=${segmentCount}, model=${segments.length}`), { code: "CONTRACT_VISUALIZATION_SPEC_INVALID" });
+  }
   const segment = segments[effectiveSegmentIndex - 1];
   const rootEntity = semanticModel?.project || {};
   const rootTruth = array(rootEntity.sourceIds).length ? "explicit" : "recommended";
@@ -355,16 +366,60 @@ function buildPendingProductMapSpec(requestId, branchModel, pageNumber = 10) {
   });
 }
 
-export function buildPrimaryFlowSpec({ semanticModel, requestId }) {
+export function primaryFlowProcesses(semanticModel = {}) {
   const processes = array(semanticModel?.processes);
-  const process = processes.find((row) => row.id === semanticModel?.primaryProcessId) || processes.find((row) => row.type === "primary");
-  if (!process) return buildProcessQuestionsSpec(requestId, "No grounded primary process was supplied");
+  const primary = processes.find((row) => row.id === semanticModel?.primaryProcessId) || processes.find((row) => row.type === "primary");
+  if (!primary) return [];
+  const sourceOrder = new Map(processes.map((row, index) => [row.id, index]));
+  const compareProcessOrder = (left, right) => {
+    const leftSequence = Number.isFinite(Number(left.sequence)) ? Number(left.sequence) : sourceOrder.get(left.id) || 0;
+    const rightSequence = Number.isFinite(Number(right.sequence)) ? Number(right.sequence) : sourceOrder.get(right.id) || 0;
+    return leftSequence - rightSequence || (sourceOrder.get(left.id) || 0) - (sourceOrder.get(right.id) || 0);
+  };
+  const selected = [primary];
+  const selectedIds = new Set([primary.id]);
+  let added = true;
+  while (added) {
+    added = false;
+    const next = processes
+      .filter((row) => row.type === "supporting" && !selectedIds.has(row.id) && selectedIds.has(row.continuationOf))
+      .sort(compareProcessOrder);
+    for (const row of next) {
+      selected.push(row);
+      selectedIds.add(row.id);
+      added = true;
+    }
+  }
+  return selected.sort(compareProcessOrder);
+}
+
+export function primaryFlowSegmentCount(semanticModel = {}) {
+  return Math.max(1, primaryFlowProcesses(semanticModel).length);
+}
+
+export function buildPrimaryFlowSpec({ semanticModel, requestId, pageNumber = 12, segmentIndex = 1, segmentCount = null }) {
+  const processSegments = primaryFlowProcesses(semanticModel);
+  const effectiveSegmentCount = Math.max(1, processSegments.length);
+  const effectiveSegmentIndex = Number(segmentIndex) || 1;
+  const questionsFallback = (reason) => buildProcessQuestionsSpec(requestId, reason, {
+    pageNumber,
+    segmentIndex: effectiveSegmentIndex,
+    segmentCount: effectiveSegmentCount,
+  });
+  if (!processSegments.length) return questionsFallback("No grounded primary process was supplied");
+  if (!Number.isInteger(effectiveSegmentIndex) || effectiveSegmentIndex < 1 || effectiveSegmentIndex > processSegments.length) {
+    throw Object.assign(new Error(`Primary-flow segment ${segmentIndex} is outside 1..${processSegments.length}`), { code: "CONTRACT_VISUALIZATION_SPEC_INVALID" });
+  }
+  if (segmentCount !== null && segmentCount !== undefined && Number(segmentCount) !== processSegments.length) {
+    throw Object.assign(new Error(`Primary-flow segment count drift: plan=${segmentCount}, model=${processSegments.length}`), { code: "CONTRACT_VISUALIZATION_SPEC_INVALID" });
+  }
+  const process = processSegments[effectiveSegmentIndex - 1];
   const entityLookup = buildProcessEntityLookup(semanticModel);
   const relationLookup = new Map(array(semanticModel?.processRelations).map((row) => [row.id, row]));
   const refs = array(process.nodeRefs);
   const relations = array(process.relationIds).map((id) => relationLookup.get(id)).filter(Boolean);
   if (!refs.length || !relations.length || relations.length !== array(process.relationIds).length) {
-    return buildProcessQuestionsSpec(requestId, "The primary process has no complete, grounded sequence");
+    return questionsFallback("The primary process has no complete, grounded sequence");
   }
 
   const actors = new Map(array(semanticModel?.actors).map((row) => [row.id, row]));
@@ -372,13 +427,13 @@ export function buildPrimaryFlowSpec({ semanticModel, requestId }) {
   const nodes = [];
   for (const [index, ref] of refs.entries()) {
     const resolved = entityLookup.get(ref);
-    if (!resolved) return buildProcessQuestionsSpec(requestId, `Process node ${index + 1} is unresolved`);
+    if (!resolved) return questionsFallback(`Process node ${index + 1} is unresolved`);
     const nodeId = `FLOW-${resolved.collection.toUpperCase()}-${safeId(resolved.entity.id)}`;
     refToNodeId.set(ref, nodeId);
     const visualType = processVisualType(resolved.collection, resolved.entity);
     const actorId = resolved.entity.actorId || null;
-    if (visualType === "task" && (!actorId || !actors.has(actorId))) return buildProcessQuestionsSpec(requestId, "Every process task needs a confirmed actor");
-    if (actorId && !actors.has(actorId)) return buildProcessQuestionsSpec(requestId, `Process node ${index + 1} references an unknown actor`);
+    if (visualType === "task" && (!actorId || !actors.has(actorId))) return questionsFallback("Every process task needs a confirmed actor");
+    if (actorId && !actors.has(actorId)) return questionsFallback(`Process node ${index + 1} references an unknown actor`);
     const laneId = actorId ? `LANE-${safeId(actorId)}` : null;
     nodes.push(nodeFromEntity(nodeId, entityLabel(resolved.entity), visualType, resolved.entity, {
       semanticRole: actorId && ["partner_actor", "system_actor"].includes(actors.get(actorId)?.type) ? "partner" : visualType === "end_event" ? "positive" : "owned",
@@ -392,7 +447,7 @@ export function buildPrimaryFlowSpec({ semanticModel, requestId }) {
   for (const [index, relation] of relations.entries()) {
     const from = refToNodeId.get(relation.fromRef);
     const to = refToNodeId.get(relation.toRef);
-    if (!from || !to) return buildProcessQuestionsSpec(requestId, `Process relation ${index + 1} has an unresolved endpoint`);
+    if (!from || !to) return questionsFallback(`Process relation ${index + 1} has an unresolved endpoint`);
     const type = processEdgeType(relation.type);
     const label = relation.label || processRelationLabel(relation.type);
     edges.push(semanticEdge(`FLOW-EDGE-${safeId(relation.id || index + 1)}`, from, to, type, {
@@ -405,17 +460,17 @@ export function buildPrimaryFlowSpec({ semanticModel, requestId }) {
     }));
   }
   if (!assignDeterministicProcessLanes(nodes, edges)) {
-    return buildProcessQuestionsSpec(requestId, "Every process node needs one unambiguous actor lane");
+    return questionsFallback("Every process node needs one unambiguous actor lane");
   }
   const laneIds = unique(nodes.filter(isLaneOwnedProcessNode).map((row) => row.lane));
-  if (laneIds.length > 6) return buildProcessQuestionsSpec(requestId, "The primary process exceeds the six-lane readability limit");
+  if (laneIds.length > 6) return questionsFallback("The primary process exceeds the six-lane readability limit");
   const groups = laneIds.map((laneId) => {
     const actorId = laneId.slice("LANE-".length);
     const actor = array(semanticModel?.actors).find((row) => safeId(row.id) === actorId) || {};
     const nodeIds = nodes.filter((row) => row.lane === laneId).map((row) => row.id);
     return semanticGroup(laneId, actor.label || "Process actor", "lane", ["partner_actor", "system_actor"].includes(actor.type) ? "partner" : "owned", nodeIds, [actor], "PROCESS-LANE-V1");
   });
-  const candidate = baseSpec(requestId, 12, {
+  const candidate = baseSpec(requestId, pageNumber, {
     kind: "bpmn",
     variant: nodes.some((row) => row.type === "gateway") || groups.length > 1 ? "swimlane" : "linear",
     intent: "process",
@@ -424,19 +479,24 @@ export function buildPrimaryFlowSpec({ semanticModel, requestId }) {
     nodes,
     edges,
     groups,
+    segmentIndex: effectiveSegmentIndex,
+    segmentCount: effectiveSegmentCount,
+    warnings: effectiveSegmentCount > 1
+      ? [`Primary-flow continuation ${effectiveSegmentIndex} of ${effectiveSegmentCount}; each page preserves a complete start-to-outcome subprocess.`]
+      : [],
   });
-  if (!isTrustworthyProcessSpec(candidate)) return buildProcessQuestionsSpec(requestId, "The supplied process does not form a valid start-to-outcome path");
+  if (!isTrustworthyProcessSpec(candidate)) return questionsFallback("The supplied process does not form a valid start-to-outcome path");
   return candidate;
 }
 
-function buildProcessQuestionsSpec(requestId, reason) {
+function buildProcessQuestionsSpec(requestId, reason, { pageNumber = 12, segmentIndex = 1, segmentCount = 1 } = {}) {
   const nodes = [
     semanticNode("PROCESS-QUESTIONS-TITLE", "Process questions: confirm the primary flow", "question", { truthStatus: "unknown", inclusion: "unknown", groupId: "GROUP-PROCESS-QUESTIONS" }),
     semanticNode("PROCESS-QUESTIONS-ACTOR", "Who starts the process and who owns each task?", "question", { truthStatus: "unknown", inclusion: "unknown", groupId: "GROUP-PROCESS-QUESTIONS" }),
     semanticNode("PROCESS-QUESTIONS-SEQUENCE", "What is the trusted order of tasks and messages?", "question", { truthStatus: "unknown", inclusion: "unknown", groupId: "GROUP-PROCESS-QUESTIONS" }),
     semanticNode("PROCESS-QUESTIONS-OUTCOME", "Which decisions, exceptions, and outcomes close the flow?", "question", { truthStatus: "unknown", inclusion: "unknown", groupId: "GROUP-PROCESS-QUESTIONS" }),
   ];
-  return baseSpec(requestId, 12, {
+  return baseSpec(requestId, pageNumber, {
     kind: "bpmn",
     variant: "questions",
     intent: "process",
@@ -445,6 +505,8 @@ function buildProcessQuestionsSpec(requestId, reason) {
     nodes,
     edges: [],
     groups: [semanticGroup("GROUP-PROCESS-QUESTIONS", "Process questions", "scenario_set", "neutral", nodes.map((row) => row.id), [], "PROCESS-QUESTIONS-V1")],
+    segmentIndex,
+    segmentCount,
     warnings: [reason],
   });
 }
@@ -591,37 +653,66 @@ function buildPendingArchitectureSpec(requestId, reason, components = []) {
   });
 }
 
-export function buildRoadmapSpec({ semanticModel, requestId }) {
+export function buildRoadmapWorkstreamSegments(semanticModel = {}, { maxRows = ROADMAP_WORKSTREAM_PAGE_LIMIT } = {}) {
+  const pageSize = Math.max(1, Math.floor(Number(maxRows) || ROADMAP_WORKSTREAM_PAGE_LIMIT));
+  const inventory = normalizeDeliveryInventory(buildProductDeliveryInventory(semanticModel));
+  if (!inventory.length) return [];
+  const segmentCount = Math.max(1, Math.ceil(inventory.length / pageSize));
+  const balancedSize = Math.ceil(inventory.length / segmentCount);
+  return Array.from({ length: segmentCount }, (_, index) => inventory.slice(index * balancedSize, (index + 1) * balancedSize))
+    .filter((rows) => rows.length);
+}
+
+export function roadmapWorkstreamSegmentCount(semanticModel = {}, options = {}) {
+  return Math.max(1, buildRoadmapWorkstreamSegments(semanticModel, options).length);
+}
+
+export function buildRoadmapSpec({ semanticModel, requestId, pageNumber = 18, segmentIndex = 1, segmentCount = null }) {
   const roadmap = semanticModel?.roadmap || {};
   const phases = array(roadmap.phases);
-  if (!phases.length || isSyntheticDefaultRoadmap(phases, roadmap)) return buildPendingRoadmapSpec(requestId, "Roadmap phases and acceptance gates were not supplied");
-  if (phases.length > 10) return buildPendingRoadmapSpec(requestId, "Roadmap exceeds ten visible workstreams; confirm an aggregation hierarchy");
+  const workstreamSegments = buildRoadmapWorkstreamSegments(semanticModel);
+  const effectiveSegmentIndex = workstreamSegments.length ? Number(segmentIndex) || 1 : 1;
+  const effectiveSegmentCount = Math.max(1, workstreamSegments.length);
+  const segmentOptions = { pageNumber, segmentIndex: effectiveSegmentIndex, segmentCount: effectiveSegmentCount };
+  if (workstreamSegments.length) {
+    if (!Number.isInteger(effectiveSegmentIndex) || effectiveSegmentIndex < 1 || effectiveSegmentIndex > workstreamSegments.length) {
+      throw Object.assign(new Error(`Roadmap segment ${segmentIndex} is outside 1..${workstreamSegments.length}`), { code: "CONTRACT_VISUALIZATION_SPEC_INVALID" });
+    }
+    if (segmentCount !== null && segmentCount !== undefined && Number(segmentCount) !== workstreamSegments.length) {
+      throw Object.assign(new Error(`Roadmap segment count drift: plan=${segmentCount}, model=${workstreamSegments.length}`), { code: "CONTRACT_VISUALIZATION_SPEC_INVALID" });
+    }
+  }
+  if (!phases.length || isSyntheticDefaultRoadmap(phases, roadmap)) return buildPendingRoadmapSpec(requestId, "Roadmap phases and acceptance gates were not supplied", phases, segmentOptions);
+  if (phases.length > 10) return buildPendingRoadmapSpec(requestId, "Roadmap exceeds ten visible phases; confirm an aggregation hierarchy", phases, segmentOptions);
+  if (!workstreamSegments.length) return buildPendingRoadmapSpec(requestId, "Roadmap functional workstreams were not supplied", phases, segmentOptions);
   const scale = normalizedTimeScale(roadmap.timeScale);
-  if (!scale) return buildPendingRoadmapSpec(requestId, "Roadmap duration or canonical time scale is missing or conflicting");
+  if (!scale) return buildPendingRoadmapSpec(requestId, "Roadmap duration or canonical time scale is missing or conflicting", phases, segmentOptions);
 
   const converted = phases.map((phase) => ({ phase, time: convertTimeToScale(phase.time, scale) }));
   const invalid = converted.filter((row) => row.time?.invalid || (row.time && (row.time.start < scale.start || row.time.end > scale.end)));
   const withTime = converted.filter((row) => row.time && !row.time.invalid);
   const withoutTime = converted.filter((row) => !row.time);
-  if (invalid.length || (withTime.length && withoutTime.length)) return buildPendingRoadmapSpec(requestId, "Roadmap periods conflict or only some phases have trustworthy spans", phases);
+  if (invalid.length || (withTime.length && withoutTime.length)) return buildPendingRoadmapSpec(requestId, "Roadmap periods conflict or only some phases have trustworthy spans", phases, segmentOptions);
 
   const dependencies = array(roadmap.dependencies);
   const phaseIds = new Set(phases.map((row) => row.id));
   if (dependencies.some((row) => !phaseIds.has(row.fromPhaseId) || !phaseIds.has(row.toPhaseId))) {
-    return buildPendingRoadmapSpec(requestId, "Roadmap dependency references an unknown phase", phases);
+    return buildPendingRoadmapSpec(requestId, "Roadmap dependency references an unknown phase", phases, segmentOptions);
   }
   const milestoneOnly = !withTime.length || converted.every((row) => row.time.start === row.time.end) || phases.every((row) => /^(soon|later|final stage|скоро|позже|финальный этап)$/iu.test(String(row.label || "").trim()));
-  if (milestoneOnly) return buildMilestoneRoadmapSpec({ requestId, phases, converted, dependencies, scale });
+  if (milestoneOnly) return buildMilestoneRoadmapSpec({ requestId, phases, converted, dependencies, scale, ...segmentOptions });
 
-  const nodes = converted.map(({ phase, time }, index) => nodeFromEntity(`ROADMAP-${safeId(phase.id || index + 1)}`, entityLabel(phase), "phase", phase, {
+  const phaseNodes = converted.map(({ phase, time }, index) => nodeFromEntity(`ROADMAP-${safeId(phase.id || index + 1)}`, entityLabel(phase), "phase", phase, {
     semanticRole: phase.inclusion === "deferred" ? "deferred" : "owned",
     inclusion: phase.inclusion,
     time,
     dataRef: `/roadmap/phases/${index}`,
     derivationRuleId: time.derived ? phase.derivationRuleId || "MONTH-TO-WEEK-V1" : phase.derivationRuleId,
   }));
+  const workstreamNodes = workstreamSegments[effectiveSegmentIndex - 1].map((row, index) => roadmapWorkstreamNode(row, index, scale));
+  const nodes = [...phaseNodes, ...workstreamNodes];
   const edges = dependencies.map((dependency, index) => dependencyEdge(dependency, index, phases));
-  return baseSpec(requestId, 18, {
+  return baseSpec(requestId, pageNumber, {
     kind: "gantt",
     variant: "gantt",
     intent: "schedule",
@@ -630,10 +721,94 @@ export function buildRoadmapSpec({ semanticModel, requestId }) {
     timeScale: scale,
     nodes,
     edges,
+    segmentIndex: effectiveSegmentIndex,
+    segmentCount: effectiveSegmentCount,
+    warnings: workstreamSegments.length > 1
+      ? [`Roadmap continuation ${effectiveSegmentIndex} of ${workstreamSegments.length}; phase bands repeat while functional workstreams continue.`]
+      : [],
   });
 }
 
-function buildMilestoneRoadmapSpec({ requestId, phases, converted, dependencies, scale }) {
+function normalizeDeliveryInventory(value) {
+  const rows = Array.isArray(value)
+    ? value
+    : array(value?.rows).length
+      ? value.rows
+      : array(value?.items).length
+        ? value.items
+        : array(value?.terminals);
+  return rows.map((row, index) => ({
+    ...row,
+    productLeafId: String(row?.productLeafId || row?.nodeId || row?.id || `DELIVERY-LEAF-${index + 1}`),
+    label: entityLabel({
+      label: row?.subfunctionLabel || row?.detailLabel || row?.detail || row?.label || row?.name || row?.functionLabel || row?.feature,
+    }),
+  }));
+}
+
+function roadmapWorkstreamNode(row, index, scale) {
+  const time = roadmapWorkstreamTime(row, index, scale);
+  return semanticNode(row.productLeafId, row.label, "task", {
+    semanticRole: row.inclusion === "deferred" ? "deferred" : "owned",
+    truthStatus: "assumed",
+    inclusion: row.inclusion || "recommended",
+    time,
+    dataRef: row.dataRef || null,
+    sourceIds: row.sourceIds,
+    derivationRuleId: "ROADMAP-WORKSTREAM-SCHEDULE-V1",
+    fullLabel: [row.epic, row.functionLabel || row.name || row.feature, row.subfunctionLabel || row.detailLabel || row.detail || row.label]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+      .join(" · ") || row.label,
+  });
+}
+
+function roadmapWorkstreamTime(row, index, scale) {
+  const text = [row.epic, row.functionLabel, row.name, row.feature, row.subfunctionLabel, row.detailLabel, row.detail, row.label]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const span = roadmapWorkstreamSpan(text, index);
+  const total = scale.end - scale.start + 1;
+  const requestedUnits = roadmapWorkstreamEffortUnits(row.deadline || row.phase, scale.unit);
+  const requestedDuration = requestedUnits === null ? null : Math.max(1, Math.min(total, requestedUnits));
+  const preferredStart = Math.min(scale.end, scale.start + Math.floor(total * span[0]));
+  // Late-stage rows (QA, UAT, release) shift left when their stated effort
+  // would otherwise be clipped by the end of the brief window.
+  const start = requestedDuration === null
+    ? preferredStart
+    : Math.max(scale.start, Math.min(preferredStart, scale.end - requestedDuration + 1));
+  const end = requestedDuration === null
+    ? Math.max(start, Math.min(scale.end, scale.start + Math.ceil(total * span[1]) - 1))
+    : start + requestedDuration - 1;
+  return { unit: scale.unit, start, end, derived: true };
+}
+
+function roadmapWorkstreamEffortUnits(value, scaleUnit) {
+  const text = String(value || "").trim().toLowerCase();
+  const match = text.match(/(\d+(?:[.,]\d+)?)\s*(weeks?|wks?|wk|нед(?:ел\p{L}*)?\.?|hafta|months?|mos?|mo|месяц\p{L}*|oy)/iu);
+  if (!match) return null;
+  const amount = Number(match[1].replace(",", "."));
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const sourceUnit = /^(?:month|mo|месяц|oy)/iu.test(match[2]) ? "month" : "week";
+  if (sourceUnit === scaleUnit) return Math.ceil(amount);
+  return scaleUnit === "week" ? Math.ceil(amount * 4) : Math.max(1, Math.ceil(amount / 4));
+}
+
+function roadmapWorkstreamSpan(text, index) {
+  if (/(?:discovery|research|analysis|requirements?|scope|backlog|исследован|анализ|требован|состав|tahlil|talab)/iu.test(text)) return [0, .25];
+  if (/(?:\bux\b|\bui\b|design|prototype|wireframe|дизайн|прототип|интерфейс|dizayn)/iu.test(text)) return [0, .5];
+  if (/(?:architect|environment|infrastructure|database|архитект|сред[аы]|инфраструктур|баз[аы]\s+данн|arxitektur|muhit)/iu.test(text)) return [0, .25];
+  if (/(?:integration|api|webhook|callback|notification|report|analytics|admin|operation|интеграц|уведом|отч[её]т|аналит|админ|операц|integrats|bildirish|hisobot|boshqaruv)/iu.test(text)) return [.25, .75];
+  if (/(?:\bqa\b|test|security|stabili|regression|bug|тест|безопас|стабилиз|регресс|исправлен|sinov|xavfsiz|mustahkam)/iu.test(text)) return [.5, .9375];
+  if (/(?:\buat\b|launch|release|deploy|production|handover|training|при[её]м|запуск|релиз|передач|обуч|ishga\s+tush|topshirish)/iu.test(text)) return [.75, 1];
+  // Unclassified product functions belong to the core implementation wave.
+  // A tiny deterministic offset prevents every bar from looking identical
+  // while preserving the same bounded implementation window.
+  return index % 2 ? [.125, .75] : [.125, .6875];
+}
+
+function buildMilestoneRoadmapSpec({ requestId, phases, converted, dependencies, scale, pageNumber = 18, segmentIndex = 1, segmentCount = 1 }) {
   const nodes = phases.map((phase, index) => nodeFromEntity(`ROADMAP-${safeId(phase.id || index + 1)}`, entityLabel(phase), "milestone", phase, {
     semanticRole: phase.inclusion === "deferred" ? "deferred" : "owned",
     inclusion: phase.inclusion,
@@ -649,7 +824,7 @@ function buildMilestoneRoadmapSpec({ requestId, phases, converted, dependencies,
         derivationRuleId: "ROADMAP-ORDER-V1",
         label: "ordered milestone",
       }));
-  return baseSpec(requestId, 18, {
+  return baseSpec(requestId, pageNumber, {
     kind: "gantt",
     variant: "milestone",
     intent: "schedule",
@@ -658,11 +833,13 @@ function buildMilestoneRoadmapSpec({ requestId, phases, converted, dependencies,
     timeScale: scale,
     nodes,
     edges,
+    segmentIndex,
+    segmentCount,
     warnings: ["Milestones show order only; their visual spacing does not imply duration."],
   });
 }
 
-function buildPendingRoadmapSpec(requestId, reason, phases = []) {
+function buildPendingRoadmapSpec(requestId, reason, phases = [], { pageNumber = 18, segmentIndex = 1, segmentCount = 1 } = {}) {
   const known = phases.slice(0, 4).map((row) => entityLabel(row)).filter(Boolean);
   const nodes = [
     semanticNode("ROADMAP-Q-TIMING", "Roadmap pending: confirm phase dates or periods", "question", { truthStatus: "unknown", inclusion: "unknown" }),
@@ -670,7 +847,7 @@ function buildPendingRoadmapSpec(requestId, reason, phases = []) {
     semanticNode("ROADMAP-Q-DEPENDENCIES", "Confirm dependencies and allowed overlaps", "question", { truthStatus: "unknown", inclusion: "unknown" }),
     ...(known.length ? [semanticNode("ROADMAP-KNOWN-PHASES", `Known ordered phases: ${known.join(", ")}`, "annotation", { truthStatus: "unknown", inclusion: "unknown" })] : []),
   ];
-  return baseSpec(requestId, 18, {
+  return baseSpec(requestId, pageNumber, {
     kind: "gantt",
     variant: "pending",
     intent: "schedule",
@@ -679,6 +856,8 @@ function buildPendingRoadmapSpec(requestId, reason, phases = []) {
     timeScale: null,
     nodes,
     edges: [],
+    segmentIndex,
+    segmentCount,
     warnings: [reason],
   });
 }

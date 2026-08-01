@@ -106,14 +106,16 @@ export function renderVisualization(spec, layout, styleProfile = {}, { locale = 
       + spec.nodes.filter((node) => node.type === "capability" && !(spec.edges || []).some((edge) => edge.from === node.id)).length
     : 0;
   const mindMapDense = spec.kind === "hub_spoke" && mindMapTerminalRows > 8;
+  const bpmnDense = spec.kind === "bpmn" && (spec.nodes || []).length > 12;
   const canvasClass = [
     "viz-canvas",
     spec.kind === "architecture" ? "viz-architecture" : "",
     spec.kind === "hub_spoke" ? "viz-mindmap" : "",
     mindMapDense ? "viz-mindmap-dense" : "",
     spec.kind === "bpmn" ? "viz-bpmn" : "",
+    bpmnDense ? "viz-bpmn-dense" : "",
   ].filter(Boolean).join(" ");
-  return `<div class="${canvasClass}" data-viz-id="${escapeHtmlAttribute(spec.visualizationSpecId)}" data-viz-kind="${escapeHtmlAttribute(spec.kind)}" data-viz-variant="${escapeHtmlAttribute(spec.variant)}"${mindMapDense ? ' data-viz-density="dense"' : ""} data-data-state="${escapeHtmlAttribute(spec.dataState)}" style="width:${finite(layout.canvas.width)}px;height:${finite(layout.canvas.height)}px;background:${s.background};color:${s.text}">
+  return `<div class="${canvasClass}" data-viz-id="${escapeHtmlAttribute(spec.visualizationSpecId)}" data-viz-kind="${escapeHtmlAttribute(spec.kind)}" data-viz-variant="${escapeHtmlAttribute(spec.variant)}"${mindMapDense || bpmnDense ? ' data-viz-density="dense"' : ""} data-data-state="${escapeHtmlAttribute(spec.dataState)}" style="width:${finite(layout.canvas.width)}px;height:${finite(layout.canvas.height)}px;background:${s.background};color:${s.text}">
     <div class="viz-groups">${architectureScaffold}${bpmnScaffold}</div>
     ${ganttGuides}
     <svg class="viz-edges" viewBox="0 0 ${finite(layout.canvas.width)} ${finite(layout.canvas.height)}" width="${finite(layout.canvas.width)}" height="${finite(layout.canvas.height)}">

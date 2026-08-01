@@ -781,12 +781,12 @@ export async function inspectRenderedProposalDomV5(page, presentationPlan) {
               required("label column", ".roadmap-label-column"),
               required("timeline column", ".roadmap-timeline-column"),
               required("phase track", ".roadmap-phase-track"),
-              required("phase bands", ".roadmap-phase-band", 1, 4),
+              required("phase bands", ".roadmap-phase-band", 1, 10),
               required("timeline axis", ".roadmap-week-track"),
-              required("workstream", ".roadmap-workstream-row", 7, 7),
-              required("workstream bars", ".roadmap-workstream-bar", 7, 7),
-              required("gate lines", ".roadmap-gate-line", 1, 4),
-              required("gate outcomes", ".roadmap-gate-card", 1, 4),
+              required("workstream", ".roadmap-workstream-row", 1, 14),
+              required("workstream bars", ".roadmap-workstream-bar", 1, 14),
+              required("gate lines", ".roadmap-gate-line", 1, 10),
+              required("gate outcomes", ".roadmap-gate-card", 1, 10),
               required("scenario disclosure", ".roadmap-stage-disclosure"),
             ] },
             { when: ":scope > .page-body > .semantic-layout:not(.roadmap-stage-layout)", requirements: [
@@ -1491,6 +1491,11 @@ export async function inspectRenderedProposalDomV5(page, presentationPlan) {
       metrics.paymentSchedulePageCount = paymentPages.length;
       for (const paymentPage of paymentPages) {
         const planned = pagePlan(paymentPage);
+        const renderedSchedule = Boolean(paymentPage.querySelector("[data-payment-schedule='true']"));
+        // A baseline commercial page may honestly state that the schedule is
+        // still missing. It is not a visible payment schedule and therefore
+        // must not be rejected as an unrequested modeled schedule.
+        if (!renderedSchedule) continue;
         const explicitRequest = paymentPage.dataset.explicitlyRequested === "true"
           || planned.explicitlyRequested === true
           || (planned.selectionReasons || []).includes("explicitly_requested_in_prompt")

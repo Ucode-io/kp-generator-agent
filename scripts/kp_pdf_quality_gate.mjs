@@ -352,6 +352,7 @@ export async function runPostRenderQualityGate(input = {}, options = {}) {
     requireFullContext: true,
     presentationPlan: input.presentationPlan,
     proposalModel: input.proposalModel,
+    semanticModel: input.semanticModel,
     commercialLock: input.commercialLock,
     domReport: input.domReport,
   });

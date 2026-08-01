@@ -173,7 +173,7 @@
     "decision": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["question", "branchLabels"], "properties": { "question": { "type": "string", "minLength": 1 }, "branchLabels": { "type": "array", "minItems": 2, "items": { "type": "string", "minLength": 1 } } } }] },
     "integration": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["type", "providerName"], "properties": { "type": { "enum": ["payment", "fiscal", "delivery", "messaging", "identity", "analytics", "other", "unknown"] }, "providerName": { "type": ["string", "null"] } } }] },
     "dataStore": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["kind"], "properties": { "kind": { "enum": ["relational_database", "operational_data", "cache", "search_index", "object_storage", "analytics_store", "unknown"] } } }] },
-    "process": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["nodeRefs", "relationIds", "actorIds", "type"], "properties": { "nodeRefs": { "$ref": "#/$defs/stringArray" }, "relationIds": { "$ref": "#/$defs/stringArray" }, "actorIds": { "$ref": "#/$defs/stringArray" }, "type": { "enum": ["primary", "supporting", "exception"] } } }] },
+    "process": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["nodeRefs", "relationIds", "actorIds", "type"], "properties": { "nodeRefs": { "$ref": "#/$defs/stringArray" }, "relationIds": { "$ref": "#/$defs/stringArray" }, "actorIds": { "$ref": "#/$defs/stringArray" }, "type": { "enum": ["primary", "supporting", "exception"] }, "journeyId": { "type": "string", "minLength": 1 }, "sequence": { "type": "integer", "minimum": 1 }, "continuationOf": { "type": "string", "minLength": 1 } } }] },
     "processRelation": {
       "type": "object",
       "additionalProperties": false,
@@ -186,7 +186,7 @@
         "label": { "type": ["string", "null"] }
       }
     },
-    "scopeItem": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["capabilityIds", "inclusion", "ownership", "phaseId"], "properties": { "capabilityIds": { "$ref": "#/$defs/stringArray" }, "inclusion": { "$ref": "#/$defs/inclusion" }, "ownership": { "$ref": "#/$defs/ownership" }, "phaseId": { "type": ["string", "null"] }, "epic": { "type": "string" }, "feature": { "type": "string" }, "detail": { "type": "string" }, "priority": { "type": "string" } } }] },
+    "scopeItem": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["capabilityIds", "inclusion", "ownership", "phaseId"], "properties": { "capabilityIds": { "$ref": "#/$defs/stringArray" }, "inclusion": { "$ref": "#/$defs/inclusion" }, "ownership": { "$ref": "#/$defs/ownership" }, "phaseId": { "type": ["string", "null"] }, "epic": { "type": "string" }, "feature": { "type": "string" }, "detail": { "type": "string" }, "phase": { "type": "string" }, "priority": { "type": "string" } } }] },
     "architectureComponent": { "allOf": [{ "$ref": "#/$defs/envelope" }, { "type": "object", "required": ["kind", "entityRef", "semanticRole"], "properties": { "kind": { "enum": ["channel", "application", "service", "data_store", "external"] }, "entityRef": { "type": ["string", "null"] }, "semanticRole": { "enum": ["owned", "partner", "deferred", "risk", "positive", "neutral"] } } }] },
     "architectureRelation": {
       "type": "object",

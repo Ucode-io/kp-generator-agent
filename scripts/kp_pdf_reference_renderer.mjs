@@ -22,8 +22,12 @@ import {
   resolveProposalRendererLocale,
 } from "./kp_pdf_reference_locale.mjs";
 import { canonicalizeTeamPlan } from "./kp_team_capacity.mjs";
+import { buildProductDeliveryInventory } from "./kp_product_map_model.mjs";
+import { ROADMAP_WORKSTREAM_PAGE_LIMIT } from "./kp_visualization_planner.mjs";
 
 export const KP_PDF_REFERENCE_RENDERER_VERSION = "reference-driven-v5";
+
+const FUNCTION_SCHEDULE_ROWS_PER_PAGE = 14;
 
 const RENDERER_DIR = path.dirname(fileURLToPath(import.meta.url));
 const UDEVS_BACKGROUND_DIR = path.resolve(RENDERER_DIR, "..", "assets", "kp-backgrounds");
@@ -433,6 +437,7 @@ export function buildReferenceDrivenProposalHtml(input = {}) {
   const safeStyleProfile = safeDiagramStyleProfile(normalized.visualStyleProfile, tokens);
   const dynamicRules = [];
   const specByPage = indexVisualizationSpecs(normalized.visualizationSpecs, normalized.presentationPlan);
+  assertFunctionSchedulePlanCoverage(normalized.presentationPlan, content);
   const pages = normalized.presentationPlan.pages.map((pagePlan) => renderPageFromPlan(pagePlan, {
     ...normalized,
     tokens,
@@ -484,6 +489,23 @@ export function buildReferenceDrivenProposalHtml(input = {}) {
     throw rendererError("CONTENT_RENDER_PLACEHOLDER_FORBIDDEN", "The rendered proposal contains forbidden placeholder copy");
   }
   return html;
+}
+
+function assertFunctionSchedulePlanCoverage(presentationPlan, content) {
+  const pages = array(presentationPlan?.pages).filter((page) => page.kind === "function_price");
+  if (!pages.length) return;
+  const rowCount = array(content.functionSchedule).length || array(content.functionPrice).length;
+  const expectedPageCount = Math.max(1, Math.ceil(rowCount / FUNCTION_SCHEDULE_ROWS_PER_PAGE));
+  const validSegments = pages.length === expectedPageCount && pages.every((page, index) => (
+    Number(page.segmentIndex || 1) === index + 1
+    && Number(page.segmentCount || 1) === expectedPageCount
+  ));
+  if (!validSegments) {
+    throw rendererError(
+      "CONTENT_FUNCTION_PRICE_SEGMENT_INVALID",
+      `Function-schedule pages do not cover ${rowCount} canonical product-map terminal rows`,
+    );
+  }
 }
 
 export function renderPageFromPlan(pagePlan, inputs = {}) {
@@ -622,7 +644,7 @@ export function assertRenderedPageContent(pagePlan, pageHtml, { content = {}, vi
     }
   }
   if (pageKind === "function_price") {
-    const rows = array(content.functionPrice);
+    const rows = functionScheduleRowsForPage(content, pagePlan);
     const renderedRowCount = (pageHtml.match(/class="function-price-row"/g) || []).length;
     const renderedHeaderCount = (pageHtml.match(/class="function-price-head"/g) || []).length;
     const uniqueIds = new Set(rows.map((row) => row.id));
@@ -634,10 +656,10 @@ export function assertRenderedPageContent(pagePlan, pageHtml, { content = {}, vi
       }
     } else {
     if (renderedRowCount !== rows.length || renderedHeaderCount !== 1 || uniqueIds.size !== rows.length || /class="allocation-bar|class="function-price-total|class="scenario-banner/.test(pageHtml)) {
-      throw rendererError("CONTENT_FUNCTION_PRICE_STRUCTURE_INVALID", "The function schedule requires one five-column table row per locked function and no pricing summary");
+      throw rendererError("CONTENT_FUNCTION_PRICE_STRUCTURE_INVALID", "The function schedule requires one five-column table row per product-map terminal block and no pricing summary");
     }
     if (!rows.every((row) => visible.includes(normalizeVisible(row.name)) && visible.includes(normalizeVisible(row.deadline)))) {
-      throw rendererError("CONTENT_FUNCTION_PRICE_MISSING", "The function schedule omitted a locked function label or delivery window");
+      throw rendererError("CONTENT_FUNCTION_PRICE_MISSING", "The function schedule omitted a product-map block label or delivery window");
     }
     const structuralCellCounts = ["function-price-index", "function-price-epic", "function-price-task", "function-price-subtask", "function-price-deadline"]
       .map((className) => (pageHtml.match(new RegExp('class="' + className + '(?:\\s|\")', "g")) || []).length);
@@ -743,7 +765,8 @@ export function assertRenderedPageContent(pagePlan, pageHtml, { content = {}, vi
     const scale = visualizationSpec.timeScale;
     const firstTick = scale ? timeAxisTickLabel(scale.unit, scale.start, content.locale) : "";
     const lastTick = scale ? timeAxisTickLabel(scale.unit, scale.end, content.locale) : "";
-    const expectedPhases = array(visualizationSpec.nodes).length;
+    const expectedPhases = array(visualizationSpec.nodes).filter((node) => node.type === "phase").length;
+    const expectedWorkstreams = array(visualizationSpec.nodes).filter((node) => node.type === "task").length;
     const phaseBands = (pageHtml.match(/class="roadmap-phase-band(?:\s|")/g) || []).length;
     const workstreamRows = (pageHtml.match(/class="roadmap-workstream-row(?:\s|")/g) || []).length;
     const workstreamBars = (pageHtml.match(/class="roadmap-workstream-bar(?:\s|")/g) || []).length;
@@ -754,13 +777,17 @@ export function assertRenderedPageContent(pagePlan, pageHtml, { content = {}, vi
     }
     if (!/class="viz-canvas viz-roadmap roadmap-stage-chart"/.test(pageHtml)
       || phaseBands !== expectedPhases
-      || workstreamRows !== 7
-      || workstreamBars !== 7
+      || workstreamRows !== expectedWorkstreams
+      || workstreamBars !== expectedWorkstreams
       || gateLines !== expectedPhases
       || gateCards !== expectedPhases
       || /<svg\b/i.test(pageHtml)
       || /class="viz-gantt-label(?:\s|")/.test(pageHtml)) {
-      throw rendererError("CONTENT_ROADMAP_STRUCTURE_INVALID", "The Development Stages page requires stage bands, seven parallel workstreams, and one planning gate per stage");
+      throw rendererError("CONTENT_ROADMAP_STRUCTURE_INVALID", "The Development Stages page requires stage bands, one row per segmented product-map block, and one planning gate per stage");
+    }
+    const expectedWorkstreamIds = array(visualizationSpec.nodes).filter((node) => node.type === "task").map((node) => String(node.id));
+    if (!expectedWorkstreamIds.every((id) => pageHtml.includes('data-node-id="' + escapeHtmlAttribute(id) + '"'))) {
+      throw rendererError("CONTENT_ROADMAP_SCOPE_COVERAGE_MISMATCH", "The Development Stages page omitted a product-map workstream");
     }
     if (!/data-warning-status="scenario"/.test(pageHtml)) {
       throw rendererError("CONTENT_ROADMAP_TRUTH_STATUS_INVALID", "Modeled roadmap workstreams and gates require one visible planning-scenario disclosure");
@@ -1053,6 +1080,8 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".semantic-note p{margin:0;color:" + t.muted + ";font-size:11px;line-height:1.35}",
     ".semantic-layout-product-map{justify-content:flex-start;gap:8px}",
     ".semantic-layout-product-map .semantic-note{width:100%}",
+    ".semantic-layout-bpmn{justify-content:flex-start;gap:8px}",
+    ".semantic-layout-bpmn .semantic-note{width:100%}",
     ".market-sizing-layout{height:100%;display:grid;grid-template-columns:minmax(0,.76fr) minmax(0,1.24fr);gap:42px;align-items:stretch}",
     ".market-story{min-width:0;display:flex;flex-direction:column;justify-content:space-between;padding:18px 0 14px}",
     ".market-thesis{max-width:390px;padding-left:18px;border-left:3px solid " + t.primary + "}",
@@ -1231,7 +1260,7 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".viz-gantt-label{position:absolute;display:flex;flex-direction:column;justify-content:center;padding-right:16px}",
     ".viz-gantt-label strong{font-size:12px;line-height:1.2}",
     ".viz-gantt-label small{margin-top:5px;color:" + t.muted + ";font:700 9px/1 " + t.metadataStack + "}",
-    ".roadmap-stage-layout{width:100%;display:grid;grid-template-rows:58px 494px 54px;gap:10px;align-content:center;align-items:stretch;justify-content:stretch}",
+    ".roadmap-stage-layout{width:100%;height:100%;min-height:0;display:grid;grid-template-rows:52px minmax(0,1fr) 42px;gap:8px;align-content:stretch;align-items:stretch;justify-content:stretch}",
     ".roadmap-stage-intro{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:14px;align-items:stretch}",
     ".roadmap-stage-thesis{display:flex;align-items:center;gap:16px;padding:0 18px;border-left:3px solid " + t.primary + ";background:" + alphaHex(t.surface2, .62) + "}",
     ".roadmap-stage-thesis span{flex:0 0 auto;color:" + t.secondary + ";font:700 9px/1 " + t.metadataStack + ";letter-spacing:.1em}",
@@ -1240,19 +1269,23 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".roadmap-duration-fact>span{color:" + t.muted + ";font:700 8px/1.1 " + t.metadataStack + ";letter-spacing:.08em}",
     ".roadmap-duration-fact>strong{font:700 18px/1 " + t.displayStack + ";white-space:nowrap}",
     ".roadmap-duration-fact .inline-sources{justify-content:flex-end;margin:0}",
-    ".roadmap-stage-chart{width:100%;height:494px;display:grid;grid-template-columns:244px minmax(0,1fr);border-radius:" + t.radiusMd + "px;background:" + alphaHex(t.surface, .9) + "}",
-    ".roadmap-label-column,.roadmap-timeline-column{display:grid;grid-template-rows:54px 30px repeat(7,45px) 91px;min-width:0;min-height:0}",
+    ".roadmap-stage-chart{width:100%;height:100%;min-height:0;display:grid;grid-template-columns:288px minmax(0,1fr);border-radius:" + t.radiusMd + "px;background:" + alphaHex(t.surface, .9) + "}",
+    ".roadmap-label-column,.roadmap-timeline-column{display:grid;grid-template-rows:48px 26px repeat(" + ROADMAP_WORKSTREAM_PAGE_LIMIT + ",32px) 78px;min-width:0;min-height:0}",
     ".roadmap-label-column{border-right:1px solid " + t.rule + ";background:" + alphaHex(t.surface2, .34) + "}",
     ".roadmap-label-cell{display:flex;min-width:0;flex-direction:column;justify-content:center;padding:0 15px;border-bottom:1px solid " + alphaHex(t.rule, .78) + "}",
     ".roadmap-label-cell>span{color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";letter-spacing:.08em}",
     ".roadmap-label-cell>strong{margin-top:4px;color:" + t.text + ";font-size:10.5px;line-height:1.16;overflow-wrap:anywhere}",
     ".roadmap-label-cell>small{margin-top:3px;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + "}",
+    ".roadmap-workstream-label{display:grid;grid-template-columns:22px minmax(0,1fr) 42px;column-gap:8px;align-items:center;padding:0 12px}",
+    ".roadmap-workstream-label>span{min-width:0;margin:0;white-space:nowrap}",
+    ".roadmap-workstream-label>strong{min-width:0;margin:0;font-size:9px;line-height:1.05;white-space:normal;overflow-wrap:anywhere}",
+    ".roadmap-workstream-label>small{min-width:0;margin:0;justify-self:end;white-space:nowrap}",
     ".roadmap-label-heading{background:" + alphaHex(t.surface2, .76) + "}",
     ".roadmap-label-heading>strong{margin-top:0;color:" + t.secondary + ";font:700 9px/1.2 " + t.metadataStack + ";letter-spacing:.08em}",
     ".roadmap-label-gates{justify-content:flex-start;padding-top:20px;border-bottom:0;background:" + alphaHex(t.surface2, .54) + "}",
     ".roadmap-timeline-column{position:relative;overflow:hidden}",
     ".roadmap-phase-track{position:relative;border-bottom:1px solid " + t.rule + ";background:" + alphaHex(t.surface2, .42) + "}",
-    ".roadmap-phase-band{position:absolute;top:6px;height:42px;display:flex;min-width:0;flex-direction:column;justify-content:center;padding:6px 10px;border:1px solid;border-top-width:3px;border-radius:" + t.radiusSm + "px;background:" + alphaHex(t.background, .96) + ";overflow:hidden}",
+    ".roadmap-phase-band{position:absolute;top:4px;height:40px;display:flex;min-width:0;flex-direction:column;justify-content:center;padding:5px 10px;border:1px solid;border-top-width:3px;border-radius:" + t.radiusSm + "px;background:" + alphaHex(t.background, .96) + ";overflow:hidden}",
     ".roadmap-phase-band strong{display:block;min-width:0;color:" + t.text + ";font-size:9.5px;line-height:1.08;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
     ".roadmap-phase-band small{margin-top:4px;color:" + t.muted + ";font:700 8px/1 " + t.metadataStack + ";white-space:nowrap}",
     ".roadmap-week-track.viz-gantt-axis{position:relative;inset:auto;z-index:3;display:flex;border-bottom:1px solid " + t.rule + ";background:" + alphaHex(t.surface, .74) + "}",
@@ -1263,13 +1296,13 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".roadmap-week-grid{position:absolute;inset:0;z-index:1;display:flex;pointer-events:none}",
     ".roadmap-grid-cell{flex:1 1 0;border-left:1px solid " + alphaHex(t.rule, .5) + "}",
     ".roadmap-grid-cell:first-child{border-left:0}",
-    ".roadmap-workstream-bar{position:absolute;z-index:2;top:10px;height:24px;display:flex;align-items:center;justify-content:flex-end;padding:0 9px;border:1px solid;border-radius:999px;color:" + t.background + ";overflow:hidden}",
+    ".roadmap-workstream-bar{position:absolute;z-index:2;top:50%;height:18px;display:flex;align-items:center;justify-content:flex-end;padding:0 7px;border:1px solid;border-radius:999px;color:" + t.background + ";overflow:hidden;transform:translateY(-50%)}",
     ".roadmap-workstream-bar small{font:700 8px/1 " + t.metadataStack + ";white-space:nowrap}",
     ".roadmap-gate-outcomes{position:relative;border-bottom:0;background:" + alphaHex(t.surface2, .42) + "}",
-    ".roadmap-gate-card{position:absolute;top:0;height:91px;display:flex;align-items:flex-start;justify-content:center;padding:40px 8px 7px;text-align:center}",
+    ".roadmap-gate-card{position:absolute;top:0;height:78px;display:flex;align-items:flex-start;justify-content:center;padding:34px 8px 6px;text-align:center}",
     ".roadmap-gate-card p{max-width:190px;margin:0;color:" + t.muted + ";font-size:8px;line-height:1.18;overflow-wrap:anywhere}",
     ".roadmap-gate-layer{position:absolute;inset:0;z-index:4;pointer-events:none}",
-    ".roadmap-gate-line{position:absolute;top:54px;bottom:68px;border-left:1px solid}",
+    ".roadmap-gate-line{position:absolute;top:48px;bottom:55px;border-left:1px solid}",
     ".roadmap-gate-line strong{position:absolute;left:-14px;bottom:-15px;display:grid;width:29px;height:29px;place-items:center;border:2px solid;border-color:inherit;border-radius:50%;background:" + t.background + ";color:" + t.text + ";font:700 8px/1 " + t.metadataStack + "}",
     ".roadmap-gate-line:last-child strong{left:-28px}",
     ".roadmap-stage-disclosure{display:grid;grid-template-columns:270px minmax(0,1fr);gap:18px;align-items:center;padding:9px 14px;border-left:3px solid " + t.warning + ";background:" + alphaHex(t.warning, .08) + "}",
@@ -1640,6 +1673,12 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     '.page[data-page-kind="team"] .team-capacity-total-label small{display:block;margin-top:4px;color:' + alphaHex(t.textOnAccent, .82) + ';font:600 8.5px/1 "Work Sans",Arial,sans-serif}',
     '.page[data-page-kind="team"] .team-cost-total{grid-column:5;color:' + t.textOnAccent + ';font:800 14px/1 "Sora",Arial,sans-serif;text-align:right}',
     ...dynamicRules,
+    // Chromium exports blurred shadows as soft-mask image layers. macOS
+    // Quartz/PDFKit can composite those layers as opaque brand-color
+    // rectangles, so keep shadows in HTML previews and flatten them only for
+    // print/PDF. This rule intentionally comes after dynamic rules and uses
+    // matching specificity for component-level !important declarations.
+    "@media print{.proposal>.page,.proposal>.page::before,.proposal>.page::after,.proposal>.page *,.proposal>.page *::before,.proposal>.page *::after,.proposal>.kp-page,.proposal>.kp-page::before,.proposal>.kp-page::after,.proposal>.kp-page *,.proposal>.kp-page *::before,.proposal>.kp-page *::after{box-shadow:none!important}}",
   ];
   return css.join("\n");
 }
@@ -1766,6 +1805,10 @@ function buildContentContext({ proposalModel = {}, semanticModel = {}, commercia
   const hasProjectPrice = Number.isSafeInteger(projectPriceMinor) && projectPriceMinor > 0;
   const hasClientBudget = Number.isSafeInteger(clientBudgetMinor) && clientBudgetMinor > 0;
   const functionPrice = normalizeFunctionPrice(commercialLock, semanticModel, proposalModel, currencyExponent, locale);
+  // Keep the commercial allocation intact, but render delivery pages from the
+  // same terminal inventory as the product mind map. This avoids multiplying
+  // locked amounts when one priced function expands into several subfunctions.
+  const functionSchedule = normalizeFunctionSchedule(semanticModel, functionPrice, locale);
   const functionPriceSubtotalMinor = commercialLock
     ? safeMinor(commercialLock.functionPriceSubtotalMinor, "functionPriceSubtotalMinor")
     : functionPrice.length
@@ -1836,6 +1879,7 @@ function buildContentContext({ proposalModel = {}, semanticModel = {}, commercia
     clientBudgetMinor,
     hasClientBudget,
     functionPrice,
+    functionSchedule,
     functionPriceSubtotalMinor,
     payments,
     scope,
@@ -2317,19 +2361,21 @@ function renderDeliveryChapter(content) {
   return chapter("15", statement, l(content, "Scope, capacity, roadmap, price, and payment stages are shown as one reconciled planning baseline."), drivers);
 }
 
-function renderFunctionPrice(content) {
-  if (!content.functionPrice.length) {
+function renderFunctionPrice(content, _tokens, _dynamicRules, pagePlan = {}) {
+  const pageRows = functionScheduleRowsForPage(content, pagePlan);
+  if (!pageRows.length) {
     return [
       '<div class="function-price-layout">',
       missingState(content, l(content, "Function schedule is not supplied."), l(content, "A complete list of functional blocks and delivery windows is required before the schedule can be presented."), [l(content, "Confirm the functional inventory."), l(content, "Confirm dependencies between blocks."), l(content, "Confirm the delivery window for each block.")]),
       "</div>",
     ].join("");
   }
-  const rows = content.functionPrice.map((row, index) => {
+  const offset = (Math.max(1, Number(pagePlan.segmentIndex) || 1) - 1) * FUNCTION_SCHEDULE_ROWS_PER_PAGE;
+  const rows = pageRows.map((row, index) => {
     const sourceIds = row.sourceIds?.length ? ' data-source-ids="' + escapeHtmlAttribute(row.sourceIds.join(",")) + '"' : "";
     return [
       '<div class="function-price-row" data-geometry-role="function_price_row" data-node-id="' + escapeHtmlAttribute(row.id) + '" data-node-type="function_price" data-truth-status="' + escapeHtmlAttribute(row.truthStatus || "unknown") + '" data-inclusion="' + escapeHtmlAttribute(row.scopeStatus || "to_confirm") + '"' + sourceIds + '>',
-      '<span class="function-price-index">' + e(String(index + 1).padStart(2, "0")) + "</span>",
+      '<span class="function-price-index">' + e(String(offset + index + 1).padStart(2, "0")) + "</span>",
       '<span class="function-price-epic">' + e(row.epic) + "</span>",
       '<strong class="function-price-task">' + e(row.name) + "</strong>",
       '<span class="function-price-subtask">' + e(row.detail) + "</span>",
@@ -2337,9 +2383,9 @@ function renderFunctionPrice(content) {
       "</div>",
     ].join("");
   }).join("");
-  const densityClass = content.functionPrice.length > 16
+  const densityClass = pageRows.length > 16
     ? " function-price-table-dense"
-    : content.functionPrice.length > 8
+    : pageRows.length > 8
       ? " function-price-table-compact"
       : "";
   return [
@@ -3008,12 +3054,14 @@ function renderSemanticPage(spec, pagePlan, styleProfile, dynamicRules, content)
     return renderMarketSizingPage(displaySpec, pagePlan, content);
   }
   const isProductMap = displaySpec.kind === "hub_spoke" && displaySpec.variant === "left_to_right_tree";
-  const canvas = isProductMap ? { width: 1296, height: 646 } : { width: 1120, height: 540 };
+  const isBpmn = displaySpec.kind === "bpmn";
+  const canvas = isProductMap || isBpmn ? { width: 1296, height: 646 } : { width: 1120, height: 540 };
   const layout = layoutVisualization(displaySpec, canvas);
   const rendered = renderVisualization(displaySpec, layout, styleProfile, { locale: content.locale });
   const safeMarkup = hoistTrustedInlineStyles(rendered, "viz-" + pagePlan.pageNumber, dynamicRules);
   const summary = semanticSummary(spec, pagePlan.pageNumber, content);
-  return '<div class="semantic-layout' + (isProductMap ? " semantic-layout-product-map" : "") + '">' + safeMarkup + '<div class="semantic-note"><span>' + e(summary.label) + '</span><p>' + e(summary.detail) + '</p>' + inlineSources(pagePlan.sourceIds, content, { compact: true }) + "</div></div>";
+  const expandedClass = isProductMap ? " semantic-layout-product-map" : isBpmn ? " semantic-layout-bpmn" : "";
+  return '<div class="semantic-layout' + expandedClass + '">' + safeMarkup + '<div class="semantic-note"><span>' + e(summary.label) + '</span><p>' + e(summary.detail) + '</p>' + inlineSources(pagePlan.sourceIds, content, { compact: true }) + "</div></div>";
 }
 
 function renderMarketSizingPage(spec, pagePlan, content) {
@@ -3204,6 +3252,7 @@ function renderDevelopmentStagesPage(spec, pagePlan, styleProfile, dynamicRules,
   const copy = developmentStagesCopy(content.locale, content.isMarketplace);
   const scale = normalizeDevelopmentScale(spec.timeScale);
   const phases = array(spec.nodes)
+    .filter((node) => node?.type === "phase")
     .filter((node) => Number.isFinite(Number(node?.time?.start)) && Number.isFinite(Number(node?.time?.end)))
     .map((node) => ({
       ...node,
@@ -3233,7 +3282,18 @@ function renderDevelopmentStagesPage(spec, pagePlan, styleProfile, dynamicRules,
     };
   });
   const workstreamColors = [tokens.primary, tokens.warning, tokens.secondary, tokens.primary, tokens.warning, tokens.critical, tokens.positive];
-  const workstreams = developmentWorkstreams(copy, scale).map((row, index) => ({ ...row, color: workstreamColors[index] }));
+  const workstreams = array(spec.nodes)
+    .filter((node) => node?.type === "task" && Number.isFinite(Number(node?.time?.start)) && Number.isFinite(Number(node?.time?.end)))
+    .map((node, index) => ({
+      ...node,
+      start: Math.max(scale.start, Math.min(scale.end, Math.floor(Number(node.time.start)))),
+      end: Math.max(scale.start, Math.min(scale.end, Math.floor(Number(node.time.end)))),
+      color: workstreamColors[index % workstreamColors.length],
+    }))
+    .map((node) => ({ ...node, end: Math.max(node.start, node.end) }));
+  if (!workstreams.length || workstreams.length > ROADMAP_WORKSTREAM_PAGE_LIMIT) {
+    throw rendererError("CONTENT_ROADMAP_STRUCTURE_INVALID", `The Development Stages page requires one to ${ROADMAP_WORKSTREAM_PAGE_LIMIT} product-map workstreams`);
+  }
   const ticks = Array.from({ length: totalUnits }, (_, index) => scale.start + index);
   const grid = ticks.map(() => '<span class="roadmap-grid-cell"></span>').join("");
 
@@ -3259,7 +3319,7 @@ function renderDevelopmentStagesPage(spec, pagePlan, styleProfile, dynamicRules,
     return [
       '<div class="roadmap-workstream-row">',
       '<div class="roadmap-week-grid">' + grid + "</div>",
-      '<span class="roadmap-workstream-bar" data-geometry-role="roadmap_workstream" data-semantic-role="recommended" data-truth-status="assumed" data-inclusion="recommended" style="left:' + percentValue(left + inset) + '%;width:' + percentValue(Math.max(.2, width - inset * 2)) + '%;border-color:' + row.color + ';background:' + row.color + ';color:' + readableTextColor(row.color, tokens.text, tokens.background) + '"><small>' + e(developmentRangeLabel(scale.unit, row.start, row.end, content.locale)) + "</small></span>",
+      '<span class="roadmap-workstream-bar" data-geometry-role="roadmap_workstream" data-node-id="' + escapeHtmlAttribute(row.id) + '" data-node-type="task" data-semantic-role="' + escapeHtmlAttribute(row.semanticRole || "owned") + '" data-truth-status="' + escapeHtmlAttribute(row.truthStatus || "assumed") + '" data-inclusion="' + escapeHtmlAttribute(row.inclusion || "recommended") + '" style="left:' + percentValue(left + inset) + '%;width:' + percentValue(Math.max(.2, width - inset * 2)) + '%;border-color:' + row.color + ';background:' + row.color + ';color:' + readableTextColor(row.color, tokens.text, tokens.background) + '"><small>' + e(developmentRangeLabel(scale.unit, row.start, row.end, content.locale)) + "</small></span>",
       "</div>",
     ].join("");
   }).join("");
@@ -3281,15 +3341,20 @@ function renderDevelopmentStagesPage(spec, pagePlan, styleProfile, dynamicRules,
     '<div class="roadmap-duration-fact"' + durationContainer + '><span>' + e(copy.briefDuration) + '</span><strong' + durationClaim + '>' + e(duration) + "</strong>" + sourceMarkup + "</div>",
     "</div>",
   ].join("");
+  const roadmapGridClass = addDynamicRule(
+    "roadmap-grid-" + pagePlan.pageNumber,
+    "grid-template-rows:48px 26px repeat(" + workstreams.length + ",minmax(0,1fr)) 78px",
+    dynamicRules,
+  );
   const chart = [
     '<div class="viz-canvas viz-roadmap roadmap-stage-chart" data-viz-id="' + escapeHtmlAttribute(spec.visualizationSpecId) + '" data-viz-kind="gantt" data-viz-variant="gantt" data-data-state="' + escapeHtmlAttribute(spec.dataState) + '">',
-    '<div class="roadmap-label-column">',
+    '<div class="roadmap-label-column ' + roadmapGridClass + '">',
     '<div class="roadmap-label-cell roadmap-label-heading"><strong>' + e(copy.stages) + "</strong></div>",
     '<div class="roadmap-label-cell"><span>' + e(copy.planningScale) + '</span><strong>' + e(formatRendererUnit(totalUnits, scale.unit, content.locale)) + "</strong></div>",
     workstreamLabels,
     '<div class="roadmap-label-cell roadmap-label-gates"><span>' + e(copy.gates) + '</span><strong>' + e(copy.targetOutcomes) + "</strong></div>",
     "</div>",
-    '<div class="roadmap-timeline-column">',
+    '<div class="roadmap-timeline-column ' + roadmapGridClass + '">',
     '<div class="roadmap-phase-track">' + phaseMarkup + "</div>",
     '<div class="viz-gantt-axis roadmap-week-track">' + tickMarkup + "</div>",
     workstreamRows,
@@ -3445,9 +3510,10 @@ function semanticSummary(spec, pageNumber, content) {
       : { label: l(content, "PRODUCT HIERARCHY"), detail: l(content, "The product root stays at the left; every direction, function, and subfunction expands to the right.") };
   }
   if (spec.kind === "bpmn") {
+    const segmentSuffix = Number(spec.segmentCount) > 1 ? ` · ${spec.segmentIndex}/${spec.segmentCount}` : "";
     return pending
-      ? { label: l(content, "PROCESS QUESTIONS"), detail: l(content, "Confirm actors, tasks, real decisions, exception routes, and accepted outcomes before approving this process.") }
-      : { label: l(content, "PRIMARY FLOW"), detail: l(content, "The directed flow shows actors, decisions, outcomes, and exception ownership.") };
+      ? { label: l(content, "PROCESS QUESTIONS") + segmentSuffix, detail: l(content, "Confirm actors, tasks, real decisions, exception routes, and accepted outcomes before approving this process.") }
+      : { label: l(content, "PRIMARY FLOW") + segmentSuffix, detail: l(content, "The directed flow shows actors, decisions, outcomes, and exception ownership.") };
   }
   if (spec.kind === "architecture") {
     const recommended = array(spec.nodes).some((node) => ["recommended", "inferred", "assumed"].includes(String(node.truthStatus || "").toLowerCase()));
@@ -3535,10 +3601,12 @@ function resolvePageBadge(pagePlan, content, spec) {
       gantt: "Delivery planning model",
     };
     if (spec.kind === "gantt" && spec.variant === "gantt") {
-      return developmentGateCountLabel(content.locale, array(spec.nodes).length);
+      const phaseCount = array(spec.nodes).filter((node) => node.type === "phase").length;
+      const label = developmentGateCountLabel(content.locale, phaseCount);
+      return Number(spec.segmentCount) > 1 ? `${label} · ${spec.segmentIndex}/${spec.segmentCount}` : label;
     }
     const label = l(content, labels[spec.kind] || "Inputs and recommendations");
-    return spec.kind === "hub_spoke" && Number(spec.segmentCount) > 1
+    return ["hub_spoke", "bpmn"].includes(spec.kind) && Number(spec.segmentCount) > 1
       ? `${label} · ${spec.segmentIndex}/${spec.segmentCount}`
       : label;
   }
@@ -3547,7 +3615,11 @@ function resolvePageBadge(pagePlan, content, spec) {
     if (content.organizationStructure.status === "pending") return l(content, "Requires confirmation");
     return l(content, "Recommended role model");
   }
-  if (pagePlan.kind === "function_price") return functionGroupsLabel(content, content.functionPrice.length);
+  if (pagePlan.kind === "function_price") {
+    const total = array(content.functionSchedule).length || array(content.functionPrice).length;
+    const label = functionGroupsLabel(content, total);
+    return Number(pagePlan.segmentCount) > 1 ? `${label} · ${pagePlan.segmentIndex}/${pagePlan.segmentCount}` : label;
+  }
   if (pagePlan.kind === "team") {
     const plan = teamCapacityPlan(content);
     if (plan) return rolesLabel(content, content.team.roles.length) + " · " + formatRendererUnit(plan.monthCount, "month", content.locale);
@@ -3603,6 +3675,52 @@ function normalizeFunctionPrice(lock, semanticModel, proposalModel, exponent, lo
       derivationRuleId: row.derivationRuleId || proposalRow?.derivationRuleId || null,
     };
   }).filter((row) => row.amountMinor !== null);
+}
+
+function normalizeFunctionSchedule(semanticModel, commercialRows, locale) {
+  const inventory = buildProductDeliveryInventory(semanticModel);
+  if (!inventory.length) return array(commercialRows);
+  const rows = array(commercialRows);
+  const rowForLeaf = (leaf) => {
+    const functionKey = normalizeFunctionMatchLabel(leaf.functionLabel);
+    const epicKey = normalizeFunctionMatchLabel(leaf.epic);
+    return rows.find((row) => normalizeFunctionMatchLabel(row.name) === functionKey
+      && (!epicKey || normalizeFunctionMatchLabel(row.epic) === epicKey))
+      || rows.find((row) => normalizeFunctionMatchLabel(row.name) === functionKey)
+      || null;
+  };
+  return inventory.map((leaf, index) => {
+    const commercial = rowForLeaf(leaf);
+    const terminalLabel = leaf.subfunctionLabel || leaf.functionLabel;
+    const hasDistinctSubfunction = Boolean(leaf.subfunctionId && normalizeFunctionMatchLabel(terminalLabel) !== normalizeFunctionMatchLabel(leaf.functionLabel));
+    return {
+      id: String(leaf.id || `PRODUCT-DELIVERY-${index + 1}`),
+      name: clientText(localizeRendererText(leaf.functionLabel || commercial?.name || `Function ${index + 1}`, locale), 120),
+      epic: clientText(localizeRendererText(leaf.epic || commercial?.epic || "To confirm", locale), 100),
+      detail: clientText(localizeRendererText(hasDistinctSubfunction ? terminalLabel : commercial?.detail || terminalLabel || "To confirm", locale), 170),
+      deadline: clientText(localizeRendererText(leaf.deadline || leaf.phase || commercial?.deadline || "To confirm", locale), 70),
+      scopeStatus: normalizeFunctionScopeStatus(leaf, commercial),
+      amountMinor: null,
+      truthStatus: normalizeTruthStatus(leaf.truthStatus, commercial?.truthStatus),
+      sourceIds: [...new Set([...array(leaf.sourceIds), ...array(commercial?.sourceIds)].map(String).filter(Boolean))].slice(0, 4),
+      derivationRuleId: leaf.derivationRuleId || commercial?.derivationRuleId || "PRODUCT-DELIVERY-INVENTORY-V1",
+      productFunctionId: leaf.functionId || null,
+      productLeafId: leaf.id || null,
+    };
+  });
+}
+
+function functionScheduleRowsForPage(content, pagePlan = {}) {
+  const allRows = array(content.functionSchedule).length ? array(content.functionSchedule) : array(content.functionPrice);
+  const segmentCount = Math.max(1, Number(pagePlan.segmentCount) || 1);
+  const segmentIndex = Math.max(1, Number(pagePlan.segmentIndex) || 1);
+  if (segmentCount === 1) return allRows;
+  const expectedCount = Math.max(1, Math.ceil(allRows.length / FUNCTION_SCHEDULE_ROWS_PER_PAGE));
+  if (segmentIndex > expectedCount || segmentCount !== expectedCount) {
+    throw rendererError("CONTENT_FUNCTION_PRICE_SEGMENT_INVALID", `Function-schedule segment ${segmentIndex}/${segmentCount} does not match ${allRows.length} terminal rows`);
+  }
+  const start = (segmentIndex - 1) * FUNCTION_SCHEDULE_ROWS_PER_PAGE;
+  return allRows.slice(start, start + FUNCTION_SCHEDULE_ROWS_PER_PAGE);
 }
 
 function findFunctionPriceScopeRow(row, proposalRow, scopeRows, index, inventoryLength) {
@@ -4450,12 +4568,13 @@ function assertRendererLocaleCoherence(content, visualizationSpecs) {
     candidates.push(["clientDependencies[" + index + "].label", row.label], ["clientDependencies[" + index + "].detail", row.detail]);
   }
   if (content.presentationKinds.has("function_price")) {
-    for (const [index, row] of content.functionPrice.entries()) {
+    const scheduleRows = array(content.functionSchedule).length ? content.functionSchedule : content.functionPrice;
+    for (const [index, row] of scheduleRows.entries()) {
       candidates.push(
-        ["functionPrice[" + index + "].name", row.name],
-        ["functionPrice[" + index + "].epic", row.epic],
-        ["functionPrice[" + index + "].detail", row.detail],
-        ["functionPrice[" + index + "].deadline", row.deadline],
+        ["functionSchedule[" + index + "].name", row.name],
+        ["functionSchedule[" + index + "].epic", row.epic],
+        ["functionSchedule[" + index + "].detail", row.detail],
+        ["functionSchedule[" + index + "].deadline", row.deadline],
       );
     }
   }

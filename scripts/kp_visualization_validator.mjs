@@ -1,5 +1,12 @@
 import { validateKpContract } from "./kp_reference_contracts.mjs";
 import { ARCHITECTURE_LAYER_ORDER, architectureLayerIdForNode } from "./kp_architecture_layers.mjs";
+import { PRODUCT_MAP_PAGE_LIMITS } from "./kp_product_map_model.mjs";
+import {
+  buildPrimaryFlowSpec,
+  buildRoadmapWorkstreamSegments,
+  primaryFlowProcesses,
+  ROADMAP_WORKSTREAM_PAGE_LIMIT,
+} from "./kp_visualization_planner.mjs";
 
 const GRAPH_KINDS = new Set(["ownership_boundary", "hub_spoke", "bpmn", "architecture"]);
 const FACTUAL_TRUTH = new Set(["explicit", "verified", "single_source"]);
@@ -10,10 +17,15 @@ const LIMITS = Object.freeze({
   ownership_boundary: { nodes: 19, edges: 24 },
   // The expanded product-map canvas carries up to 16 function/detail rows
   // plus their root and domain nodes without dropping below 11 px type.
-  hub_spoke: { nodes: 44, edges: 44 },
-  bpmn: { nodes: 14, edges: 20 },
+  hub_spoke: { nodes: PRODUCT_MAP_PAGE_LIMITS.maxVisibleNodes, edges: PRODUCT_MAP_PAGE_LIMITS.maxVisibleNodes - 1 },
+  // A full-width BPMN page safely carries one detailed subprocess with up to
+  // sixteen semantic nodes. Longer journeys continue on a second page.
+  bpmn: { nodes: 16, edges: 20 },
   architecture: { nodes: 20, edges: 28 },
-  gantt: { nodes: 10, edges: 16 },
+  // A detailed roadmap page carries up to ten macro phase bands plus fourteen
+  // terminal product workstreams. Continuation pages repeat the phase bands
+  // while advancing through the canonical product inventory.
+  gantt: { nodes: 24, edges: 16 },
 });
 const EXPECTED_PLAN_KIND = Object.freeze({
   market_sizing: "nested_market",
@@ -44,6 +56,8 @@ export async function validateVisualizationSpecs({ specs = [], proposalModel = {
   for (const spec of specs) {
     if (expectedIds.size && spec.pageNumber && !expectedIds.has(spec.visualizationSpecId)) findings.push(finding("SEM_UNPLANNED_SPEC", "BLOCKER", { visualizationSpecId: spec.visualizationSpecId }));
   }
+  findings.push(...validatePrimaryFlowSegmentCoverage(specs, semanticModel, presentationPlan));
+  findings.push(...validateRoadmapInventoryCoverage(specs, semanticModel, presentationPlan));
   return { ok: findings.length === 0, findings };
 }
 
@@ -192,10 +206,12 @@ function validateProductMap(spec) {
   const root = roots[0];
   if (!root) return findings;
   const branches = edges.filter((edge) => edge.from === root.id).map((edge) => nodes.find((row) => row.id === edge.to)).filter(Boolean);
-  const segmented = Number(spec.segmentCount) > 1;
-  const minimumBranches = segmented ? 1 : 2;
+  const minimumBranches = 1;
   const allowedBranchTypes = spec.variant === "left_to_right_tree" ? ["domain"] : ["domain", "surface", "aggregate"];
-  if (branches.length < minimumBranches || branches.length > 8 || branches.some((row) => !allowedBranchTypes.includes(row.type))) findings.push(finding("SEM_PRODUCT_MAP_BRANCH_MINIMUM", "BLOCKER", { page: spec.pageNumber, actual: branches.length }));
+  if (branches.length < minimumBranches || branches.length > PRODUCT_MAP_PAGE_LIMITS.maxBranches || branches.some((row) => !allowedBranchTypes.includes(row.type))) findings.push(finding("SEM_PRODUCT_MAP_BRANCH_MINIMUM", "BLOCKER", { page: spec.pageNumber, actual: branches.length }));
+  const terminalRows = nodes.filter((node) => node.type === "subfunction").length
+    + nodes.filter((node) => node.type === "capability" && !edges.some((edge) => edge.from === node.id)).length;
+  if (terminalRows > PRODUCT_MAP_PAGE_LIMITS.maxTerminalRows) findings.push(finding("SEM_PRODUCT_MAP_PAGE_LIMIT", "BLOCKER", { page: spec.pageNumber, actual: terminalRows, maximum: PRODUCT_MAP_PAGE_LIMITS.maxTerminalRows }));
   if (["two_sided_tree", "left_to_right_tree", "radial"].includes(spec.variant) && edges.length !== Math.max(0, nodes.length - 1)) findings.push(finding("SEM_PRODUCT_MAP_TREE_EDGE_COUNT", "BLOCKER", { page: spec.pageNumber }));
   if (spec.variant === "left_to_right_tree" && spec.layout?.engine !== "left_to_right_tree") findings.push(finding("SEM_PRODUCT_MAP_LAYOUT_INVALID", "BLOCKER", { page: spec.pageNumber }));
   if ((spec.segmentIndex || spec.segmentCount) && (!Number.isInteger(spec.segmentIndex) || !Number.isInteger(spec.segmentCount) || spec.segmentIndex < 1 || spec.segmentIndex > spec.segmentCount)) findings.push(finding("SEM_PRODUCT_MAP_SEGMENT_INVALID", "BLOCKER", { page: spec.pageNumber }));
@@ -236,6 +252,11 @@ function validateBpmn(spec) {
   }
   const starts = nodes.filter((node) => node.type === "start_event");
   const ends = nodes.filter((node) => node.type === "end_event");
+  const segmentIndex = Number(spec.segmentIndex || 1);
+  const segmentCount = Number(spec.segmentCount || 1);
+  if (!Number.isInteger(segmentIndex) || !Number.isInteger(segmentCount) || segmentIndex < 1 || segmentIndex > segmentCount) {
+    findings.push(finding("SEM_BPMN_SEGMENT_COVERAGE_MISMATCH", "BLOCKER", { page: spec.pageNumber, segmentIndex, segmentCount }));
+  }
   if (starts.length !== 1 || !ends.length) findings.push(finding("SEM_BPMN_PATH_INVALID", "BLOCKER", { page: spec.pageNumber, starts: starts.length, ends: ends.length }));
   const groups = array(spec.groups);
   const laneGroups = groups.filter((row) => row.type === "lane");
@@ -269,6 +290,100 @@ function validateBpmn(spec) {
     if (!targetCanFinish && !explicitLoop) findings.push(finding("SEM_BPMN_EXCEPTION_UNRESOLVED", "BLOCKER", { page: spec.pageNumber, edgeId: edge.id }));
   }
   return findings;
+}
+
+function validatePrimaryFlowSegmentCoverage(specs, semanticModel, presentationPlan) {
+  const expectedProcesses = primaryFlowProcesses(semanticModel);
+  if (!expectedProcesses.length) return [];
+  const plannedFlowPages = array(presentationPlan?.pages)
+    .filter((page) => page.kind === "primary_flow")
+    .sort((left, right) => Number(left.pageNumber) - Number(right.pageNumber));
+  const primaryFlowPageNumbers = new Set(plannedFlowPages.map((page) => Number(page.pageNumber)));
+  const eligibleSpecs = array(specs)
+    .filter((spec) => spec.kind === "bpmn" && spec.variant !== "questions" && (
+      primaryFlowPageNumbers.size ? primaryFlowPageNumbers.has(Number(spec.pageNumber)) : true
+    ));
+  const actualSpecs = plannedFlowPages.length
+    ? plannedFlowPages.map((page) => eligibleSpecs.find((spec) => spec.visualizationSpecId === page.visualizationSpecId))
+    : eligibleSpecs.sort((left, right) => Number(left.segmentIndex || 1) - Number(right.segmentIndex || 1));
+  const actualIndices = actualSpecs.filter(Boolean).map((spec) => Number(spec.segmentIndex || 1));
+  const sequenceValid = actualSpecs.length === expectedProcesses.length
+    && actualSpecs.every((spec, index) => spec
+      && Number(spec.segmentIndex || 1) === index + 1
+      && Number(spec.segmentCount || 1) === expectedProcesses.length
+      && (!plannedFlowPages[index] || (
+        Number(spec.pageNumber) === Number(plannedFlowPages[index].pageNumber)
+        && Number(plannedFlowPages[index].segmentIndex || index + 1) === index + 1
+        && Number(plannedFlowPages[index].segmentCount || expectedProcesses.length) === expectedProcesses.length
+      )));
+  const segmentMismatches = [];
+  for (const [index, process] of expectedProcesses.entries()) {
+    const spec = actualSpecs[index];
+    if (!spec) {
+      segmentMismatches.push({ segmentIndex: index + 1, reason: "missing_segment" });
+      continue;
+    }
+    const expectedNodeRefs = array(process.nodeRefs).map((ref) => processEntityDataRef(semanticModel, ref));
+    const actualNodeRefs = array(spec.nodes).map((node) => node.dataRef);
+    const expectedRelationRefs = array(process.relationIds).map((id) => {
+      const relationIndex = array(semanticModel?.processRelations).findIndex((row) => row.id === id);
+      return relationIndex >= 0 ? `/processRelations/${relationIndex}` : null;
+    });
+    const actualRelationRefs = array(spec.edges).map((edge) => edge.dataRef);
+    const canonical = buildPrimaryFlowSpec({
+      semanticModel,
+      requestId: spec.requestId || semanticModel?.requestId || "BPMN-COVERAGE",
+      pageNumber: spec.pageNumber,
+      segmentIndex: index + 1,
+      segmentCount: expectedProcesses.length,
+    });
+    const expectedNodeSignatures = array(canonical.nodes).map(bpmnNodeSignature);
+    const actualNodeSignatures = array(spec.nodes).map(bpmnNodeSignature);
+    const expectedEdgeSignatures = array(canonical.edges).map(bpmnEdgeSignature);
+    const actualEdgeSignatures = array(spec.edges).map(bpmnEdgeSignature);
+    if (expectedNodeRefs.some((value) => value === null)
+      || expectedRelationRefs.some((value) => value === null)
+      || expectedNodeRefs.length !== actualNodeRefs.length
+      || expectedRelationRefs.length !== actualRelationRefs.length
+      || expectedNodeRefs.some((value, refIndex) => value !== actualNodeRefs[refIndex])
+      || expectedRelationRefs.some((value, refIndex) => value !== actualRelationRefs[refIndex])
+      || expectedNodeSignatures.some((value, signatureIndex) => value !== actualNodeSignatures[signatureIndex])
+      || expectedEdgeSignatures.some((value, signatureIndex) => value !== actualEdgeSignatures[signatureIndex])) {
+      segmentMismatches.push({
+        segmentIndex: index + 1,
+        expectedNodeRefs,
+        actualNodeRefs,
+        expectedRelationRefs,
+        actualRelationRefs,
+        expectedNodeSignatures,
+        actualNodeSignatures,
+        expectedEdgeSignatures,
+        actualEdgeSignatures,
+      });
+    }
+  }
+  if (sequenceValid && !segmentMismatches.length) return [];
+  return [finding("SEM_BPMN_SEGMENT_COVERAGE_MISMATCH", "BLOCKER", {
+    reason: "bpmn_continuations_do_not_cover_canonical_process_segments",
+    expectedSegmentCount: expectedProcesses.length,
+    actualIndices,
+    segmentMismatches,
+  })];
+}
+
+function bpmnNodeSignature(node) {
+  return JSON.stringify([node?.id, node?.label, node?.fullLabel, node?.type, node?.semanticRole, node?.groupId, node?.lane, node?.dataRef]);
+}
+
+function bpmnEdgeSignature(edge) {
+  return JSON.stringify([edge?.id, edge?.from, edge?.to, edge?.type, edge?.label, edge?.semanticRole, edge?.dataRef]);
+}
+
+function processEntityDataRef(semanticModel, ref) {
+  const match = String(ref || "").match(/^(tasks|events|states|decisions)\/(.+)$/u);
+  if (!match) return null;
+  const index = array(semanticModel?.[match[1]]).findIndex((row) => row.id === match[2]);
+  return index >= 0 ? `/${match[1]}/${index}` : null;
 }
 
 function validateArchitecture(spec) {
@@ -365,7 +480,18 @@ function validateRoadmap(spec, semanticModel = {}) {
     findings.push(finding("SEM_ROADMAP_RANGE_INVALID", "BLOCKER", { page: spec.pageNumber, reason: "invalid_scale" }));
     return findings;
   }
-  if (spec.variant === "gantt" && (spec.layout?.engine !== "gantt" || nodes.some((row) => row.type !== "phase" || !row.time))) findings.push(finding("SEM_ROADMAP_RANGE_INVALID", "BLOCKER", { page: spec.pageNumber, reason: "gantt_requires_spans" }));
+  const phaseNodes = nodes.filter((row) => row.type === "phase");
+  const workstreamNodes = nodes.filter((row) => row.type === "task");
+  const unexpectedNodes = nodes.filter((row) => !["phase", "task"].includes(row.type));
+  if (spec.variant === "gantt" && (
+    spec.layout?.engine !== "gantt"
+    || !phaseNodes.length
+    || !workstreamNodes.length
+    || unexpectedNodes.length
+    || phaseNodes.some((row) => !row.time)
+    || workstreamNodes.some((row) => !row.time)
+    || workstreamNodes.length > ROADMAP_WORKSTREAM_PAGE_LIMIT
+  )) findings.push(finding("SEM_ROADMAP_RANGE_INVALID", "BLOCKER", { page: spec.pageNumber, reason: "gantt_requires_phase_and_terminal_workstream_spans" }));
   if (spec.variant === "milestone" && (spec.layout?.engine !== "milestone_timeline" || nodes.some((row) => row.type !== "milestone" || (row.time && row.time.start !== row.time.end)))) findings.push(finding("SEM_ROADMAP_FAKE_SPAN", "BLOCKER", { page: spec.pageNumber }));
   for (const node of nodes) {
     if (!node.time) continue;
@@ -391,7 +517,63 @@ function validateRoadmap(spec, semanticModel = {}) {
     const actual = edges.filter((row) => row.type === "dependency");
     if (actual.length !== expectedDependencies.length) findings.push(finding("SEM_ROADMAP_DEPENDENCY_INVALID", "BLOCKER", { page: spec.pageNumber, reason: "dependency_count_mismatch" }));
   }
+  if (spec.variant === "gantt") {
+    const expectedSegments = buildRoadmapWorkstreamSegments(semanticModel);
+    const effectiveSegmentIndex = Number(spec.segmentIndex || 1);
+    const expectedSegment = expectedSegments[effectiveSegmentIndex - 1] || [];
+    const expectedIds = expectedSegment.map((row) => String(row.productLeafId));
+    const actualIds = workstreamNodes.map((row) => String(row.id));
+    const segmentMetadataInvalid = !Number.isInteger(effectiveSegmentIndex)
+      || effectiveSegmentIndex < 1
+      || effectiveSegmentIndex > expectedSegments.length
+      || Number(spec.segmentCount || 1) !== expectedSegments.length;
+    if (segmentMetadataInvalid || expectedIds.length !== actualIds.length || expectedIds.some((id, index) => id !== actualIds[index])) {
+      findings.push(finding("SEM_ROADMAP_SCOPE_COVERAGE_MISMATCH", "BLOCKER", {
+        page: spec.pageNumber,
+        segmentIndex: effectiveSegmentIndex,
+        expectedSegmentCount: expectedSegments.length,
+        expectedIds,
+        actualIds,
+      }));
+    }
+    if (new Set(actualIds).size !== actualIds.length) {
+      findings.push(finding("SEM_ROADMAP_SCOPE_COVERAGE_MISMATCH", "BLOCKER", { page: spec.pageNumber, reason: "duplicate_terminal_workstream" }));
+    }
+  }
   return findings;
+}
+
+function validateRoadmapInventoryCoverage(specs, semanticModel, presentationPlan) {
+  const roadmapPageNumbers = new Set(array(presentationPlan?.pages)
+    .filter((page) => page.kind === "roadmap")
+    .map((page) => Number(page.pageNumber)));
+  const roadmapSpecs = array(specs).filter((spec) => spec.kind === "gantt" && (
+    roadmapPageNumbers.size ? roadmapPageNumbers.has(Number(spec.pageNumber)) : true
+  ));
+  const detailedSpecs = roadmapSpecs.filter((spec) => spec.variant === "gantt")
+    .sort((left, right) => Number(left.segmentIndex || 1) - Number(right.segmentIndex || 1));
+  if (!detailedSpecs.length) return [];
+
+  const expectedSegments = buildRoadmapWorkstreamSegments(semanticModel);
+  const expectedIds = expectedSegments.flatMap((segment) => segment.map((row) => String(row.productLeafId)));
+  const actualIds = detailedSpecs.flatMap((spec) => array(spec.nodes)
+    .filter((node) => node.type === "task")
+    .map((node) => String(node.id)));
+  const actualSegmentIndices = detailedSpecs.map((spec) => Number(spec.segmentIndex || 1));
+  const completeSegmentSequence = detailedSpecs.length === expectedSegments.length
+    && detailedSpecs.length === roadmapSpecs.length
+    && actualSegmentIndices.every((value, index) => value === index + 1);
+  const completeInventory = expectedIds.length === actualIds.length
+    && expectedIds.every((id, index) => id === actualIds[index])
+    && new Set(actualIds).size === actualIds.length;
+  if (completeSegmentSequence && completeInventory) return [];
+  return [finding("SEM_ROADMAP_SCOPE_COVERAGE_MISMATCH", "BLOCKER", {
+    reason: "roadmap_continuations_do_not_cover_canonical_terminal_inventory",
+    expectedSegmentCount: expectedSegments.length,
+    actualSegmentIndices,
+    expectedIds,
+    actualIds,
+  })];
 }
 
 function validateAggregation(spec) {

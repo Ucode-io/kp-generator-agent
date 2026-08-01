@@ -9560,6 +9560,7 @@ async function buildKpiPdfReportV5(question = "KP PDF generation", progress = as
     outputDir: path.join(workspace, "qa", "pdf-render"),
     presentationPlan,
     proposalModel,
+    semanticModel,
     commercialLock,
     domReport: domQa,
     manifest: options.manifest || null,

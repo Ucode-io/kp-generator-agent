@@ -195,15 +195,21 @@ export function layoutBpmn(spec, canvas) {
   const centerLeft = labelWidth + 54;
   const centerRight = canvas.width - 54;
   const columnStep = (centerRight - centerLeft) / maxDepth;
-  const taskWidth = Math.min(150, Math.max(92, columnStep - 14));
+  const denseColumns = maxDepth >= 10;
+  // Dense subprocess pages use more graph columns, so the task width follows
+  // the available column step instead of holding a 92px floor that makes
+  // adjacent nodes overlap. Short flows still retain the larger card size.
+  const taskWidth = denseColumns
+    ? Math.min(106, Math.max(64, columnStep - 10))
+    : Math.min(138, Math.max(92, columnStep - 8));
 
   for (const node of spec.nodes) {
     const lane = laneById.get(node.lane) || bpmnLanes[0] || { y: top, h: canvas.height - top - bottom };
     const depth = depthByNode.get(node.id) || 0;
     const size = node.type === "gateway"
-      ? { w: 84, h: Math.min(76, Math.max(66, lane.h - 12)) }
+      ? { w: denseColumns ? 72 : 84, h: Math.min(76, Math.max(66, lane.h - 12)) }
       : node.type === "start_event" || node.type === "end_event"
-        ? { w: 90, h: Math.min(80, Math.max(68, lane.h - 10)) }
+        ? { w: denseColumns ? 72 : 90, h: Math.min(80, Math.max(68, lane.h - 10)) }
         : { w: taskWidth, h: Math.min(80, Math.max(52, lane.h - 24)) };
     const centerX = centerLeft + (depth / maxDepth) * (centerRight - centerLeft);
     // Events and gateways draw their glyph around rect.y + 20; align that
@@ -288,9 +294,23 @@ function routeBpmnEdges(spec, nodes, canvas) {
     if (sameLane && movesRight) {
       const source = bpmnNodePort(from, fromNode, "right");
       const target = bpmnNodePort(to, toNode, "left");
-      paths[edge.id] = Math.abs(source.y - target.y) <= 2
+      const direct = Math.abs(source.y - target.y) <= 2
         ? [source, target]
         : orthogonalPath(source, target);
+      if (!bpmnPathHitsNode(direct, nodes, edge.from, edge.to)) {
+        paths[edge.id] = direct;
+        continue;
+      }
+      // A forward branch may intentionally skip a sibling node in the same
+      // lane (for example “declined” bypassing the refund task). Route that
+      // connector on a short rail above or below the cards instead of drawing
+      // through the skipped branch.
+      const topRailY = Math.min(from.y, to.y) - 12;
+      const useTopRail = topRailY >= 4;
+      const railY = useTopRail ? topRailY : Math.min(canvas.height - 4, Math.max(from.y + from.h, to.y + to.h) + 12);
+      const sourceRail = bpmnNodePort(from, fromNode, useTopRail ? "top" : "bottom");
+      const targetRail = bpmnNodePort(to, toNode, useTopRail ? "top" : "bottom");
+      paths[edge.id] = [sourceRail, { x: sourceRail.x, y: railY }, { x: targetRail.x, y: railY }, targetRail];
       continue;
     }
     if (sameLane) {
@@ -385,37 +405,67 @@ function placeBpmnEdgeLabels(spec, paths, nodes, canvas) {
     if (!gatewayBranch && !riskEdges.has(edge.id)) continue;
     const points = paths[edge.id] || [];
     if (points.length < 2) continue;
-    let segmentIndex = 0;
-    if (!gatewayBranch) {
-      let longest = -1;
-      for (let index = 0; index < points.length - 1; index += 1) {
-        const length = Math.abs(points[index + 1].x - points[index].x) + Math.abs(points[index + 1].y - points[index].y);
-        if (length > longest) {
-          longest = length;
-          segmentIndex = index;
+    const width = Math.min(126, Math.max(34, String(edge.label).length * 7 + 18));
+    const height = 24;
+    const segments = points.slice(0, -1)
+      .map((start, index) => {
+        const end = points[index + 1];
+        return {
+          start,
+          end,
+          length: Math.abs(end.x - start.x) + Math.abs(end.y - start.y),
+          sourceIndex: index,
+        };
+      })
+      .filter((segment) => segment.length > 1)
+      .sort((left, right) => right.length - left.length || left.sourceIndex - right.sourceIndex);
+    const candidates = [];
+    for (const [segmentRank, segment] of segments.entries()) {
+      const vertical = Math.abs(segment.end.y - segment.start.y) > Math.abs(segment.end.x - segment.start.x);
+      for (const [fractionRank, fraction] of [0.5, 0.3, 0.7].entries()) {
+        const anchorX = segment.start.x + (segment.end.x - segment.start.x) * fraction;
+        const anchorY = segment.start.y + (segment.end.y - segment.start.y) * fraction;
+        for (const [offsetRank, offset] of [7, 35, 63].entries()) {
+          if (vertical) {
+            candidates.push({ x: anchorX + offset, y: anchorY - height / 2, w: width, h: height, rank: segmentRank * 20 + fractionRank * 4 + offsetRank });
+            candidates.push({ x: anchorX - width - offset, y: anchorY - height / 2, w: width, h: height, rank: segmentRank * 20 + fractionRank * 4 + offsetRank + 1 });
+          } else {
+            candidates.push({ x: anchorX - width / 2, y: anchorY - height - offset, w: width, h: height, rank: segmentRank * 20 + fractionRank * 4 + offsetRank });
+            candidates.push({ x: anchorX - width / 2, y: anchorY + offset, w: width, h: height, rank: segmentRank * 20 + fractionRank * 4 + offsetRank + 1 });
+          }
         }
       }
     }
-    const start = points[segmentIndex];
-    const end = points[segmentIndex + 1];
-    const vertical = Math.abs(end.y - start.y) > Math.abs(end.x - start.x);
-    const width = Math.min(126, Math.max(34, String(edge.label).length * 7 + 18));
-    const height = 24;
-    const midX = (start.x + end.x) / 2;
-    const midY = (start.y + end.y) / 2;
-    const proposedX = vertical ? midX + 8 : midX - width / 2;
-    const proposedY = vertical ? midY - height / 2 : midY - height - 6;
+    const scored = candidates.map((candidate) => ({
+      candidate,
+      score: bpmnLabelCandidateScore(candidate, Object.values(nodes), labels, canvas),
+    })).sort((left, right) => left.score - right.score || left.candidate.rank - right.candidate.rank);
+    const selected = scored[0]?.candidate || { x: 4, y: 4, w: width, h: height };
     labels.push({
       id: edge.id,
       label: edge.label,
       role: riskEdges.has(edge.id) ? "risk" : "owned",
-      x: Math.max(4, Math.min(canvas.width - width - 4, proposedX)),
-      y: Math.max(4, Math.min(canvas.height - height - 4, proposedY)),
+      x: Math.max(4, Math.min(canvas.width - width - 4, selected.x)),
+      y: Math.max(4, Math.min(canvas.height - height - 4, selected.y)),
       w: width,
       h: height,
     });
   }
   return labels;
+}
+
+function bpmnLabelCandidateScore(candidate, nodeRects, placedLabels, canvas) {
+  let score = candidate.rank || 0;
+  if (candidate.x < 4 || candidate.y < 4 || candidate.x + candidate.w > canvas.width - 4 || candidate.y + candidate.h > canvas.height - 4) score += 1_000_000;
+  for (const rect of nodeRects) if (rectsOverlap(candidate, rect, 4)) score += 100_000 + rectangleOverlapArea(candidate, rect);
+  for (const label of placedLabels) if (rectsOverlap(candidate, label, 5)) score += 200_000 + rectangleOverlapArea(candidate, label);
+  return score;
+}
+
+function rectangleOverlapArea(left, right) {
+  const width = Math.max(0, Math.min(left.x + left.w, right.x + right.w) - Math.max(left.x, right.x));
+  const height = Math.max(0, Math.min(left.y + left.h, right.y + right.h) - Math.max(left.y, right.y));
+  return width * height;
 }
 
 function bpmnExceptionRouteEdges(spec) {
@@ -547,6 +597,18 @@ export function validateLayoutGeometry(layout) {
           findings.push({ code: "VIZ_EDGE_THROUGH_NODE", edgeId, nodeId });
         }
       }
+    }
+  }
+  const edgeLabels = (Array.isArray(layout.bpmnEdgeLabels) ? layout.bpmnEdgeLabels : []).map((label) => [label.id, label]);
+  for (const [edgeId, rect] of edgeLabels) {
+    if (rect.x < 0 || rect.y < 0 || rect.x + rect.w > canvasWidth || rect.y + rect.h > canvasHeight) findings.push({ code: "VIZ_EDGE_LABEL_OUT_OF_BOUNDS", edgeId });
+    for (const [nodeId, nodeRect] of rects) {
+      if (rectsOverlap(rect, nodeRect, 2)) findings.push({ code: "VIZ_EDGE_LABEL_NODE_OVERLAP", edgeId, nodeId });
+    }
+  }
+  for (let i = 0; i < edgeLabels.length; i += 1) {
+    for (let j = i + 1; j < edgeLabels.length; j += 1) {
+      if (rectsOverlap(edgeLabels[i][1], edgeLabels[j][1], 3)) findings.push({ code: "VIZ_EDGE_LABEL_OVERLAP", edges: [edgeLabels[i][0], edgeLabels[j][0]] });
     }
   }
   return { ok: findings.length === 0, findings };
