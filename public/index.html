@@ -240,11 +240,12 @@
         preview.srcdoc = lastPdfHtml;
         pdfTab.classList.add("active");
         prototypeTab.classList.remove("active");
-        prototypeTab.disabled = !payload.prototype?.url;
-        prototypeOpen.hidden = !payload.prototype?.url;
-        prototypeOpen.href = payload.prototype?.url || "#";
-        if (payload.prototype?.url) {
-          loadPrototypePreview(payload.prototype.url).catch((error) => {
+        const prototypeUrl = payload.prototype?.url || payload.prototypeUrl || "";
+        prototypeTab.disabled = !prototypeUrl;
+        prototypeOpen.hidden = !prototypeUrl;
+        prototypeOpen.href = prototypeUrl || "#";
+        if (prototypeUrl) {
+          loadPrototypePreview(prototypeUrl).catch((error) => {
             console.warn("Prototype preview failed", error);
           });
         }

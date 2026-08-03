@@ -168,6 +168,13 @@ export async function generateProposal(input = {}, hooks = {}) {
     await fs.mkdir(path.dirname(requestedOutput), { recursive: true });
     await fs.copyFile(result.documentPath, requestedOutput);
   }
+  const prototype = result.meta?.prototype || {
+    url: prototypeUrl,
+    path: null,
+    qaStatus: null,
+    screenCount: null,
+    rendererVersion: null,
+  };
   return {
     ok: true,
     requestId,
@@ -181,13 +188,8 @@ export async function generateProposal(input = {}, hooks = {}) {
     workspace: result.meta?.workspace || null,
     qaReportPath: result.meta?.qaReportPath || null,
     referenceMode: storedEvidenceBundle.selectionTrace?.mode || "none",
-    prototype: result.meta?.prototype || {
-      url: prototypeUrl,
-      path: null,
-      qaStatus: null,
-      screenCount: null,
-      rendererVersion: null,
-    },
+    prototypeUrl: prototype.url,
+    prototype,
     theme: {
       source: result.meta?.themeSource || null,
       referenceUrl: result.meta?.referenceUrl || "",

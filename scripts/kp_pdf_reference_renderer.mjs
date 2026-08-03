@@ -466,6 +466,9 @@ export function buildReferenceDrivenProposalHtml(input = {}) {
   const styles = referenceDrivenStyles(normalized.visualStyleProfile, dynamicRules);
   const readinessScript = renderReadinessScript();
   const description = l(content, "Commercial proposal prepared for client review.");
+  const encodedPrototypeUrl = normalized.prototypeUrl
+    ? Buffer.from(normalized.prototypeUrl, "utf8").toString("base64url")
+    : "";
   const html = [
     "<!doctype html>",
     '<html lang="' + escapeHtmlAttribute(content.locale) + '">',
@@ -473,6 +476,7 @@ export function buildReferenceDrivenProposalHtml(input = {}) {
     '<meta charset="utf-8">',
     '<meta name="author" content="Udevs">',
     '<meta name="description" content="' + escapeHtmlAttribute(description) + '">',
+    encodedPrototypeUrl ? '<meta name="kp:prototype-url-base64" content="' + escapeHtmlAttribute(encodedPrototypeUrl) + '">' : "",
     "<title>" + e(content.projectTitle) + "</title>",
     '<meta http-equiv="Content-Security-Policy" content="' + escapeHtmlAttribute(csp) + '">',
     '<style nonce="' + escapeHtmlAttribute(nonce) + '">' + styles + "</style>",
