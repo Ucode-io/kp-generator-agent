@@ -22,6 +22,8 @@ import { buildProductDeliveryInventory, buildProductMapModel, buildProductMapSeg
 import { buildPresentationPlan, selectDynamicPageDecisions } from "../scripts/kp_presentation_planner.mjs";
 import { localizeRendererText } from "../scripts/kp_pdf_reference_locale.mjs";
 import { buildProposalSemanticModel, normalizeScopeItems, validateProposalSemanticModel } from "../scripts/kp_semantic_model.mjs";
+import { buildAndValidateAppPrototypeSpec } from "../scripts/kp_app_prototype_planner.mjs";
+import { renderAppPrototypeHtml } from "../scripts/kp_app_prototype_renderer.mjs";
 import {
   buildPrimaryFlowSpec,
   buildProductMapSpec,
@@ -816,6 +818,69 @@ assert.equal(detailedMarketplaceSemanticModel.processRelations.length, 33);
 assert.equal(primaryFlowSegmentCount(detailedMarketplaceSemanticModel), 4);
 assert.deepEqual(detailedMarketplaceSemanticModel.processes.map((process) => process.nodeRefs.length), [10, 8, 9, 8]);
 assert.deepEqual(detailedMarketplaceSemanticModel.processes.map((process) => process.relationIds.length), [9, 7, 8, 9]);
+const marketplacePrototypeSpec = await buildAndValidateAppPrototypeSpec({
+  requestId: detailedMarketplaceProposal.requestId,
+  publicId: "AbCdEf1234",
+  locale: "ru-RU",
+  proposalModel: detailedMarketplaceProposal,
+  semanticModel: detailedMarketplaceSemanticModel,
+  visualStyleProfile: {
+    accents: { primary: "#1A54FE", secondary: "#0A0A0F" },
+    canvas: { background: "#F6F7F8", surface1: "#FFFFFF" },
+  },
+});
+assert.equal(marketplacePrototypeSpec.project.type, "marketplace");
+assert.equal(marketplacePrototypeSpec.screens.length, 55);
+assert.equal(marketplacePrototypeSpec.navigation.length, 6);
+assert.ok(marketplacePrototypeSpec.screens.some((screen) => screen.id === "catalog"));
+assert.ok(marketplacePrototypeSpec.screens.some((screen) => screen.id === "checkout"));
+assert.equal(
+  new Set(marketplacePrototypeSpec.navigation.flatMap((group) => group.screenIds)).size,
+  marketplacePrototypeSpec.screens.length,
+);
+const marketplacePrototypeHtml = renderAppPrototypeHtml(marketplacePrototypeSpec);
+assert.ok(marketplacePrototypeHtml.includes("data-screen=\"catalog\""));
+assert.ok(marketplacePrototypeHtml.includes("grid-template-columns:repeat(5,1fr)"));
+assert.ok(marketplacePrototypeHtml.includes("#4C3FA8 0%,#2A2570 55%,#221E5E 100%"));
+assert.ok(marketplacePrototypeHtml.includes("class=\"ui-button primary\""));
+assert.equal(/(?:file:\/\/|\/Users\/|\/tmp\/)/.test(marketplacePrototypeHtml), false);
+const crmPrototypeSpec = await buildAndValidateAppPrototypeSpec({
+  requestId: "KP-CRM-PAYMENT-TERMS",
+  publicId: "CrmType1234",
+  locale: "ru-RU",
+  proposalModel: {
+    title: "CRM-платформа для отдела продаж",
+    brief: { projectName: "CRM", type: "CRM", prompt: "CRM с оплатой счетов и клиентской базой" },
+  },
+  semanticModel: {
+    project: { name: "CRM-платформа" },
+    scopeItems: [{ id: "CRM-PAY", feature: "Оплата счета", detail: "Платеж клиента" }],
+    actors: [],
+  },
+});
+assert.equal(crmPrototypeSpec.project.type, "crm");
+assert.equal(crmPrototypeSpec.screens.length, 55);
+assert.ok(crmPrototypeSpec.screens.some((screen) => screen.id === "pipeline"));
+assert.equal(crmPrototypeSpec.screens.find((screen) => screen.id === "onboarding")?.content.layout, "onboarding");
+assert.equal(crmPrototypeSpec.screens.find((screen) => screen.id === "pipeline")?.content.layout, "kanban");
+assert.equal(crmPrototypeSpec.screens.find((screen) => screen.id === "calendar")?.content.layout, "calendar");
+assert.equal(crmPrototypeSpec.screens.find((screen) => screen.id === "permissions")?.content.layout, "permission-matrix");
+assert.equal(crmPrototypeSpec.screens.find((screen) => screen.id === "integrations")?.content.layout, "integration-grid");
+assert.equal(crmPrototypeSpec.screens.find((screen) => screen.id === "leads")?.content.items[0].title, "Азиза Каримова");
+const crmContentSignatures = crmPrototypeSpec.screens.map((screen) => JSON.stringify({
+  layout: screen.content.layout,
+  metrics: screen.content.metrics,
+  items: screen.content.items,
+  fields: screen.content.fields,
+  steps: screen.content.steps,
+  tabs: screen.content.tabs,
+  chart: screen.content.chart,
+}));
+assert.ok(new Set(crmContentSignatures).size / crmPrototypeSpec.screens.length >= 0.8);
+const crmPrototypeHtml = renderAppPrototypeHtml(crmPrototypeSpec);
+assert.ok(crmPrototypeHtml.includes("class=\"kanban-board\""));
+assert.ok(crmPrototypeHtml.includes("class=\"calendar-card\""));
+assert.ok(crmPrototypeHtml.includes("class=\"permission-list\""));
 
 const nonMarketplaceOrderModel = buildProposalSemanticModel({
   requestId: "KP-BPMN-NON-MARKETPLACE",

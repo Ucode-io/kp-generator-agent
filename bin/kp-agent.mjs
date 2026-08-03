@@ -19,7 +19,7 @@ try {
     },
   });
   if (args.json) console.log(JSON.stringify(result, null, 2));
-  else console.log(`PDF: ${result.documentPath}\nQA: ${result.qaStatus}\nPages: ${result.pageCount}\nRequest: ${result.requestId}`);
+  else console.log(`PDF: ${result.documentPath}\nPrototype: ${result.prototype?.url || "n/a"}\nQA: ${result.qaStatus}\nPages: ${result.pageCount}\nRequest: ${result.requestId}`);
 } catch (error) {
   console.error(`${error.code || "KP_AGENT_FAILED"}: ${error.message || error}`);
   process.exit(1);

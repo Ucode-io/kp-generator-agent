@@ -58,6 +58,39 @@
     .swatch { min-width: 92px; overflow: hidden; border: 1px solid #334155; border-radius: 9px; background: #0d1117; }
     .swatch-color { height: 30px; }
     .swatch-label { display: block; padding: 5px 7px; color: #cbd5e1; font: 11px/1.2 ui-monospace, monospace; }
+    .result-tools {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 18px;
+      border-bottom: 1px solid #273244;
+      background: #101722;
+    }
+    .result.visible .result-tools { display: flex; }
+    .tabs { display: flex; gap: 8px; }
+    .tab-button {
+      width: auto;
+      min-height: 36px;
+      padding: 0 12px;
+      border-color: #334155;
+      background: #0d1117;
+      color: #cbd5e1;
+      font-size: 13px;
+    }
+    .tab-button.active { border-color: #0052ff; background: #0052ff; color: #fff; }
+    .prototype-link {
+      display: inline-flex;
+      align-items: center;
+      min-height: 36px;
+      padding: 0 12px;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      color: #dbeafe;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 800;
+    }
     .preview-stage {
       position: relative;
       width: 100%;
@@ -121,6 +154,13 @@
         </div>
         <div id="palette" class="palette"></div>
       </div>
+      <div class="result-tools">
+        <div class="tabs" role="tablist" aria-label="Preview mode">
+          <button id="pdf-tab" class="tab-button active" type="button">PDF preview</button>
+          <button id="prototype-tab" class="tab-button" type="button">Prototype preview</button>
+        </div>
+        <a id="prototype-open" class="prototype-link" href="#" target="_blank" rel="noopener noreferrer">Открыть прототип ↗</a>
+      </div>
       <div id="preview-stage" class="preview-stage">
         <iframe id="preview" title="Сгенерированное коммерческое предложение"></iframe>
       </div>
@@ -138,12 +178,20 @@
     const resultSource = document.querySelector("#result-source");
     const dynamicPalettes = document.querySelector("#dynamic-palettes");
     const dynamicPalettesLabel = document.querySelector("#dynamic-palettes-label");
+    const pdfTab = document.querySelector("#pdf-tab");
+    const prototypeTab = document.querySelector("#prototype-tab");
+    const prototypeOpen = document.querySelector("#prototype-open");
+    let lastPdfHtml = "";
+    let lastPrototypeHtml = "";
 
     dynamicPalettes.addEventListener("change", () => {
       dynamicPalettesLabel.textContent = dynamicPalettes.checked
         ? "On — брать палитру сайта"
         : "Off — использовать стиль Udevs";
     });
+
+    pdfTab.addEventListener("click", () => switchPreview("pdf"));
+    prototypeTab.addEventListener("click", () => switchPreview("prototype"));
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -166,6 +214,7 @@
             prompt: document.querySelector("#prompt").value.trim(),
             locale: document.querySelector("#locale").value,
             dynamicColorPalettesEnabled: dynamicPalettes.checked,
+            prototypePublicBaseUrl: `${window.location.origin}/p`,
           }),
         });
         const payload = await response.json();
@@ -186,10 +235,22 @@
           ? `Палитра: ${source.kind} · ${source.reference || payload.theme.referenceUrl || ""}${selectionLabel}`
           : "Источник палитры не указан";
         renderPalette(payload.theme?.palette || {});
-        preview.srcdoc = payload.html || "";
+        lastPdfHtml = payload.html || "";
+        lastPrototypeHtml = "";
+        preview.srcdoc = lastPdfHtml;
+        pdfTab.classList.add("active");
+        prototypeTab.classList.remove("active");
+        prototypeTab.disabled = !payload.prototype?.url;
+        prototypeOpen.hidden = !payload.prototype?.url;
+        prototypeOpen.href = payload.prototype?.url || "#";
+        if (payload.prototype?.url) {
+          loadPrototypePreview(payload.prototype.url).catch((error) => {
+            console.warn("Prototype preview failed", error);
+          });
+        }
         result.classList.add("visible");
         requestAnimationFrame(fitPreview);
-        status.textContent = `Готово · ${payload.pageCount || "—"} страниц · QA ${payload.qaStatus || "—"}`;
+        status.textContent = `Готово · ${payload.pageCount || "—"} страниц · PDF QA ${payload.qaStatus || "—"} · Prototype QA ${payload.prototype?.qaStatus || "—"}`;
       } catch (error) {
         status.className = "status error";
         status.textContent = error.message || String(error);
@@ -237,6 +298,25 @@
       }
       fitPreview();
     });
+
+    async function loadPrototypePreview(url) {
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) throw new Error(`Prototype HTTP ${response.status}`);
+      lastPrototypeHtml = await response.text();
+      if (prototypeTab.classList.contains("active")) {
+        preview.srcdoc = lastPrototypeHtml;
+        requestAnimationFrame(fitPreview);
+      }
+    }
+
+    function switchPreview(mode) {
+      const prototypeMode = mode === "prototype";
+      pdfTab.classList.toggle("active", !prototypeMode);
+      prototypeTab.classList.toggle("active", prototypeMode);
+      preview.title = prototypeMode ? "Интерактивный HTML-прототип" : "Сгенерированное коммерческое предложение";
+      preview.srcdoc = prototypeMode ? (lastPrototypeHtml || "<!doctype html><body style=\"font:16px system-ui;padding:24px\">Prototype is loading…</body>") : lastPdfHtml;
+      requestAnimationFrame(fitPreview);
+    }
     new ResizeObserver(fitPreview).observe(previewStage);
   </script>
 </body>

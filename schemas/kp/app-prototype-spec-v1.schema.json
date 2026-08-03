@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://udevs.local/schemas/kp/app-prototype-spec-v1.schema.json",
+  "title": "KP AppPrototypeSpec v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "requestId", "publicId", "locale", "project", "theme", "navigation", "screens"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "requestId": { "type": "string", "minLength": 1 },
+    "publicId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+    "locale": { "enum": ["uz-Latn", "ru-RU", "en"] },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "description"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "type": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 260 }
+      }
+    },
+    "theme": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary", "secondary", "background", "surface"],
+      "properties": {
+        "primary": { "$ref": "#/$defs/hex" },
+        "secondary": { "$ref": "#/$defs/hex" },
+        "background": { "$ref": "#/$defs/hex" },
+        "surface": { "$ref": "#/$defs/hex" },
+        "success": { "$ref": "#/$defs/hex" },
+        "warning": { "$ref": "#/$defs/hex" },
+        "error": { "$ref": "#/$defs/hex" }
+      }
+    },
+    "navigation": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "screenIds"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "screenIds": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/$defs/id" }
+          }
+        }
+      }
+    },
+    "screens": {
+      "type": "array",
+      "minItems": 48,
+      "maxItems": 60,
+      "items": { "$ref": "#/$defs/screen" }
+    }
+  },
+  "$defs": {
+    "hex": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{1,63}$" },
+    "screenType": {
+      "enum": ["onboarding", "login", "dashboard", "list", "product_grid", "details", "form", "stepper", "checkout", "payment", "tracking", "history", "profile", "analytics", "settings", "success", "empty_state", "error_state"]
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "targetScreenId"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "targetScreenId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "content": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "metrics": { "type": "array", "maxItems": 6, "items": { "type": "object", "additionalProperties": true } },
+        "items": { "type": "array", "maxItems": 12, "items": { "type": "object", "additionalProperties": true } },
+        "fields": { "type": "array", "maxItems": 8, "items": { "type": "object", "additionalProperties": true } },
+        "steps": { "type": "array", "maxItems": 8, "items": { "type": "object", "additionalProperties": true } },
+        "tabs": { "type": "array", "maxItems": 6, "items": { "type": "string", "maxLength": 48 } }
+      }
+    },
+    "screen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "title", "description", "roleIds", "sourceRefs", "actions", "content"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "$ref": "#/$defs/screenType" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 180 },
+        "roleIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1, "maxLength": 80 }
+        },
+        "sourceRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1, "maxLength": 120 }
+        },
+        "actions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/action" }
+        },
+        "content": { "$ref": "#/$defs/content" }
+      }
+    }
+  }
+}

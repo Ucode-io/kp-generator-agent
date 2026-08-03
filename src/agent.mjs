@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { AGENT_ROOT, enterAgentRoot } from "./root.mjs";
+import { createPrototypePublicUrl } from "../scripts/kp_app_prototype_publisher.mjs";
 
 enterAgentRoot();
 
@@ -50,12 +51,16 @@ export async function generateProposal(input = {}, hooks = {}) {
   const locale = normalizeLocale(input.locale);
   const { contracts, runtime, store, pdf } = await engine();
   const requestId = contracts.createRequestId(new Date(), crypto.randomBytes(6).toString("hex"));
+  const publicId = crypto.randomBytes(9).toString("base64url");
   const paletteOverride = typeof input.dynamicColorPalettesEnabled === "boolean"
     ? { KP_DYNAMIC_COLOR_PALETTES_ENABLED: input.dynamicColorPalettesEnabled ? "1" : "0" }
     : {};
   const env = agentConfig({ ...process.env, ...(input.env || {}), ...paletteOverride });
   const requestTemp = path.join(AGENT_ROOT, "tmp", "requests", requestId);
   const outputRoot = path.resolve(input.outputRoot || path.join(AGENT_ROOT, "reports", "agent-kp"));
+  const prototypeUrl = createPrototypePublicUrl(publicId, {
+    baseUrl: input.prototypePublicBaseUrl || env.KP_PROTOTYPE_PUBLIC_BASE_URL || "",
+  });
   await fs.mkdir(requestTemp, { recursive: true });
   const referencePaths = await materializeReferences(input, requestTemp);
   if (referencePaths.length && !env.OPENAI_API_KEY && env.KP_REFERENCE_VISION_PROVIDER === "openai") {
@@ -151,6 +156,10 @@ export async function generateProposal(input = {}, hooks = {}) {
     referenceBaseDir: prepared.referenceBaseDir,
     skipWebResearch: input.skipWebResearch !== false,
     enableLlmSynthesis: input.enableLlmSynthesis === true,
+    appPrototype: {
+      publicId,
+      publicUrl: prototypeUrl,
+    },
   });
 
   const requestedOutput = input.outputPath ? path.resolve(String(input.outputPath)) : "";
@@ -172,6 +181,13 @@ export async function generateProposal(input = {}, hooks = {}) {
     workspace: result.meta?.workspace || null,
     qaReportPath: result.meta?.qaReportPath || null,
     referenceMode: storedEvidenceBundle.selectionTrace?.mode || "none",
+    prototype: result.meta?.prototype || {
+      url: prototypeUrl,
+      path: null,
+      qaStatus: null,
+      screenCount: null,
+      rendererVersion: null,
+    },
     theme: {
       source: result.meta?.themeSource || null,
       referenceUrl: result.meta?.referenceUrl || "",

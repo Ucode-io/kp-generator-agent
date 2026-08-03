@@ -31,6 +31,8 @@ export const KP_SCHEMA_FILES = Object.freeze({
   proposalRecord: "proposal-record-v1.schema.json",
   proposalRetention: "proposal-retention-v1.schema.json",
   promotionJournal: "promotion-journal-v1.schema.json",
+  appPrototypeSpec: "app-prototype-spec-v1.schema.json",
+  appPrototypeRecord: "app-prototype-record-v1.schema.json",
 });
 
 let cachedAjv;

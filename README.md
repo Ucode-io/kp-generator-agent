@@ -95,6 +95,25 @@ the prompt to `/v1/proposals`, exposes an Off/On control for dynamic website
 palettes, shows the active palette, and renders the returned proposal HTML in
 an iframe.
 
+Generated proposals also create an interactive app prototype. The PDF footer
+links to the prototype URL, and the local server can serve published prototype
+HTML at:
+
+```text
+GET /p/:publicId/
+```
+
+Set `KP_PROTOTYPE_PUBLIC_BASE_URL` to the production HTTPS base URL used in PDF
+links. If omitted, links use `https://kp.udevs.io/p/`.
+
+Public prototypes can be embedded by the local Professio app and
+`https://professio.ucode.co` by default. Override the CSP allowlist when the
+viewer is hosted on another origin:
+
+```bash
+KP_PROTOTYPE_FRAME_ANCESTORS="'self' https://professio.example.com" npm start
+```
+
 Health:
 
 ```bash
@@ -159,6 +178,13 @@ If `KP_AGENT_API_KEY` is set, send `Authorization: Bearer <key>`.
   "ok": true,
   "requestId": "KP-...",
   "documentPath": "/.../proposal.pdf",
+  "prototype": {
+    "url": "https://kp.udevs.io/p/7QmJv8Kx2A/",
+    "path": "/.../final/prototype/index.html",
+    "qaStatus": "PASS",
+    "screenCount": 11,
+    "rendererVersion": "app-prototype-v1"
+  },
   "qaStatus": "PASS",
   "pageCount": 9,
   "referenceMode": "explicit_full"

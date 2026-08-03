@@ -562,12 +562,15 @@ export function renderPageFromPlan(pagePlan, inputs = {}) {
     : renderTitleMarkup(title);
   const pageSummary = referencePageSummary(pagePlan, content);
   const pageSummaryMarkup = pageSummary ? '<p class="page-summary">' + e(pageSummary) + "</p>" : "";
+  const footerHtml = inputs.prototypeUrl
+    ? '<div class="page-footer"><span>' + e(content.projectTitle) + '</span><a class="prototype-link" href="' + escapeHtmlAttribute(inputs.prototypeUrl) + '" target="_blank" rel="noopener noreferrer"><span aria-hidden="true">☎</span>' + e(prototypeLinkLabel(content.locale)) + '</a><strong>' + padPage(pageNumber) + "</strong></div>"
+    : '<div class="page-footer"><span>' + e(content.projectTitle) + '</span><strong>' + padPage(pageNumber) + "</strong></div>";
   const pageHtml = [
     '<section class="page kp-page composition-' + composition + backgroundClass + " layout-" + family + " intent-" + intentClass + '" data-page-number="' + pageNumber + '" data-page-kind="' + escapeHtmlAttribute(pagePlan.kind) + '" data-page-composition="' + composition + '" data-explicitly-requested="' + String(explicitlyRequested) + '" data-layout-family="' + family + '">',
     '<header class="page-header"><span>' + e(content.projectTitle) + '</span><strong>' + padPage(pageNumber) + " / " + totalPages + "</strong></header>",
     '<div class="page-title-row"><div>' + pageKickerHtml + '<h1 class="page-title' + coverTitleClass + '">' + titleMarkup + "</h1>" + pageSummaryMarkup + '</div><span class="page-badge">' + e(badge) + "</span></div>",
     '<div class="page-body">' + body + "</div>",
-    '<div class="page-footer"><span>' + e(content.projectTitle) + '</span><strong>' + padPage(pageNumber) + "</strong></div>",
+    footerHtml,
     "</section>",
   ].join("");
   assertRenderedPageContent(pagePlan, pageHtml, {
@@ -948,6 +951,8 @@ export function referenceDrivenStyles(styleProfile = {}, dynamicRules = []) {
     ".page-badge{max-width:270px;padding:8px 11px;border:1px solid " + t.rule + ";border-radius:" + t.radiusSm + "px;color:" + t.muted + ";font:700 10px/1.25 " + t.metadataStack + ";text-align:right}",
     ".page-body{position:relative;height:670px;min-height:0}",
     ".page-footer{position:absolute;left:" + t.pagePaddingX + "px;right:" + t.pagePaddingX + "px;bottom:22px;display:flex;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid " + t.rule + ";color:" + t.muted + ";font:700 9px/1 " + t.metadataStack + ";letter-spacing:.08em}",
+    ".prototype-link{display:inline-flex;align-items:center;gap:5px;color:" + t.secondary + ";text-decoration:none;font:700 9px/1 " + t.metadataStack + ";letter-spacing:.04em}",
+    ".prototype-link span{font-size:11px;line-height:1}",
     ".panel{border:1px solid " + t.rule + ";border-radius:" + t.radiusMd + "px;background:" + t.surface + "}",
     ".panel-soft{border:1px solid " + t.rule + ";border-radius:" + t.radiusMd + "px;background:" + t.surface2 + "}",
     ".eyebrow{color:" + t.secondary + ";font:700 10px/1.1 " + t.metadataStack + ";letter-spacing:.12em}",
@@ -1692,7 +1697,26 @@ function normalizeRendererInput(input) {
     visualStyleProfile: input.visualStyleProfile || input.styleProfile || proposalPackage?.visualStyleProfile || {},
     presentationPlan: input.presentationPlan || proposalPackage?.presentationPlan || null,
     visualizationSpecs: input.visualizationSpecs || proposalPackage?.visualizationSpecs || [],
+    prototypeUrl: safePrototypeUrl(input.prototypeUrl || input.appPrototype?.publicUrl || ""),
   };
+}
+
+function prototypeLinkLabel(locale = "en") {
+  if (locale === "ru-RU") return "Открыть интерактивный прототип";
+  if (locale === "uz-Latn") return "Interaktiv prototipni ochish";
+  return "Open interactive prototype";
+}
+
+function safePrototypeUrl(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return "";
+    return url.toString();
+  } catch {
+    return "";
+  }
 }
 
 function validatePlan(plan) {

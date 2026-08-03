@@ -1,23 +1,44 @@
 import "dotenv/config";
 import http from "node:http";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { generateProposal } from "./agent.mjs";
 import { checkBearerAuthorization, normalizeConfiguredApiKey } from "./auth.mjs";
+import { AGENT_ROOT } from "./root.mjs";
+import { resolvePublishedPrototype } from "../scripts/kp_app_prototype_publisher.mjs";
 
 const host = process.env.KP_AGENT_HOST || "127.0.0.1";
 const port = Number(process.env.KP_AGENT_PORT || 8787);
 const maxBodyBytes = Number(process.env.KP_AGENT_MAX_BODY_BYTES || 25 * 1024 * 1024);
 const apiKey = normalizeConfiguredApiKey(process.env.KP_AGENT_API_KEY);
+const outputRoot = path.resolve(process.env.KP_AGENT_OUTPUT_ROOT || path.join(AGENT_ROOT, "reports", "agent-kp"));
+const prototypeFrameAncestors = normalizeFrameAncestors(process.env.KP_PROTOTYPE_FRAME_ANCESTORS);
 let queue = Promise.resolve();
 const frontendPath = new URL("../public/index.html", import.meta.url);
 
 const server = http.createServer(async (request, response) => {
   try {
+    const parsedUrl = new URL(request.url || "/", `http://${request.headers.host || `${host}:${port}`}`);
     if (request.method === "GET" && (request.url === "/" || request.url === "/index.html")) {
       const html = await fs.readFile(frontendPath);
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
+      });
+      response.end(html);
+      return;
+    }
+    const publicMatch = parsedUrl.pathname.match(/^\/p\/([A-Za-z0-9_-]{8,64})\/(?:index\.html)?$/);
+    if (request.method === "GET" && publicMatch) {
+      const published = await resolvePublishedPrototype(publicMatch[1], { outputRoot });
+      const html = await fs.readFile(published.htmlPath);
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        "content-security-policy": `default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors ${prototypeFrameAncestors}`,
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "x-robots-tag": "noindex, nofollow, noarchive",
       });
       response.end(html);
       return;
@@ -76,4 +97,12 @@ function readBody(request, limit) {
 function json(response, status, payload) {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   response.end(`${JSON.stringify(payload)}\n`);
+}
+
+function normalizeFrameAncestors(value) {
+  const normalized = String(value || "'self' http://127.0.0.1:* http://localhost:* https://professio.ucode.co").trim();
+  if (!normalized || /[\r\n;]/.test(normalized)) {
+    throw new Error("KP_PROTOTYPE_FRAME_ANCESTORS contains invalid CSP characters");
+  }
+  return normalized;
 }

@@ -21,6 +21,10 @@ import { buildPresentationPlan, persistPlanningArtifacts } from "./kp_presentati
 import { buildVisualizationSpecs } from "./kp_visualization_planner.mjs";
 import { validateVisualizationSpecs } from "./kp_visualization_validator.mjs";
 import { buildReferenceDrivenProposalHtml } from "./kp_pdf_reference_renderer.mjs";
+import { buildAndValidateAppPrototypeSpec } from "./kp_app_prototype_planner.mjs";
+import { renderAppPrototypeToFile } from "./kp_app_prototype_renderer.mjs";
+import { runAppPrototypeQa } from "./kp_app_prototype_qa.mjs";
+import { publishAppPrototype } from "./kp_app_prototype_publisher.mjs";
 import { inspectRenderedProposalDomV5 } from "./kp_pdf_semantic_qa.mjs";
 import { canonicalizeTeamPlan } from "./kp_team_capacity.mjs";
 import { buildReferenceFidelityTargets } from "./kp_pdf_fidelity_qa.mjs";
@@ -9484,6 +9488,44 @@ async function buildKpiPdfReportV5(question = "KP PDF generation", progress = as
   await atomicWriteJson(path.join(workspace, "model", "proposal-package.json"), proposalPackage, { schemaName: "proposalPackage" });
   await persistPlanningArtifacts(workspace, { semanticModel, presentationPlan, visualizationSpecs });
 
+  let appPrototype = null;
+  if (options.appPrototype?.publicId && options.appPrototype?.publicUrl) {
+    const appPrototypeSpec = await buildAndValidateAppPrototypeSpec({
+      requestId: requestContext.requestId,
+      publicId: options.appPrototype.publicId,
+      locale: requestContext.locale,
+      proposalModel,
+      semanticModel,
+      proposalPackage,
+      visualStyleProfile: styleProfile,
+    });
+    await atomicWriteJson(path.join(workspace, "contracts", "app-prototype-spec.json"), appPrototypeSpec, { schemaName: "appPrototypeSpec" });
+    const candidatePrototypePath = path.join(workspace, "candidate", "prototype", "index.html");
+    await renderAppPrototypeToFile(appPrototypeSpec, candidatePrototypePath);
+    const appPrototypeQa = await runAppPrototypeQa({
+      spec: appPrototypeSpec,
+      htmlPath: candidatePrototypePath,
+      outputPath: path.join(workspace, "qa", "app-prototype-qa.json"),
+    });
+    const published = await publishAppPrototype({
+      workspace,
+      outputRoot: options.outputDir || config.outputRoot,
+      requestId: requestContext.requestId,
+      publicId: options.appPrototype.publicId,
+      publicUrl: options.appPrototype.publicUrl,
+      candidateHtmlPath: candidatePrototypePath,
+      qaReport: appPrototypeQa,
+      screenCount: appPrototypeSpec.screens.length,
+    });
+    appPrototype = {
+      spec: appPrototypeSpec,
+      qa: appPrototypeQa,
+      record: published.record,
+      candidatePath: candidatePrototypePath,
+      finalPath: published.finalPath,
+    };
+  }
+
   const qualityPolicy = {
     mode: config.qualityGateMode === "shadow" ? "shadow" : "enforce",
     referenceMode,
@@ -9523,7 +9565,15 @@ async function buildKpiPdfReportV5(question = "KP PDF generation", progress = as
 
   status = await setStatus(workspace, status, "rendering", { progress: 55 });
   await progress("KP v5: reference-driven HTML render qilinyapti.");
-  const html = buildReferenceDrivenProposalHtml({ proposalModel, semanticModel, commercialLock, visualStyleProfile: styleProfile, presentationPlan, visualizationSpecs });
+  const html = buildReferenceDrivenProposalHtml({
+    proposalModel,
+    semanticModel,
+    commercialLock,
+    visualStyleProfile: styleProfile,
+    presentationPlan,
+    visualizationSpecs,
+    prototypeUrl: appPrototype?.record?.publicUrl || "",
+  });
   const htmlPath = path.join(workspace, "candidate", "proposal.html");
   const candidatePdfPath = path.join(workspace, "candidate", "proposal.candidate.pdf");
   await fs.writeFile(htmlPath, html, "utf8");
@@ -9606,7 +9656,11 @@ async function buildKpiPdfReportV5(question = "KP PDF generation", progress = as
   await createRetentionRecord({
     workspace,
     requestId: requestContext.requestId,
-    artifactRelativePaths: [finalRelativePath, path.relative(workspace, htmlPath)],
+    artifactRelativePaths: [
+      finalRelativePath,
+      path.relative(workspace, htmlPath),
+      ...(appPrototype?.record?.relativePath ? [appPrototype.record.relativePath] : []),
+    ],
   });
   status = await setStatus(workspace, status, "ready", { progress: 100 });
 
@@ -9644,6 +9698,14 @@ async function buildKpiPdfReportV5(question = "KP PDF generation", progress = as
         background: styleProfile.canvas.background,
         surface: styleProfile.canvas.surface1,
       },
+      prototype: appPrototype ? {
+        url: appPrototype.record.publicUrl,
+        path: appPrototype.finalPath,
+        qaStatus: appPrototype.record.qaStatus,
+        screenCount: appPrototype.record.screenCount,
+        rendererVersion: appPrototype.record.rendererVersion,
+        recordPath: path.join(workspace, "model", "app-prototype-record.json"),
+      } : null,
     },
   };
 }
