@@ -22,6 +22,7 @@ import { buildProductDeliveryInventory, buildProductMapModel, buildProductMapSeg
 import { buildPresentationPlan, selectDynamicPageDecisions } from "../scripts/kp_presentation_planner.mjs";
 import { localizeRendererText } from "../scripts/kp_pdf_reference_locale.mjs";
 import { buildProposalSemanticModel, normalizeScopeItems, validateProposalSemanticModel } from "../scripts/kp_semantic_model.mjs";
+import { getDomainResearchPacks, parseKpBrief } from "../scripts/kp_grounded_content.mjs";
 import { buildAndValidateAppPrototypeSpec } from "../scripts/kp_app_prototype_planner.mjs";
 import { renderAppPrototypeHtml } from "../scripts/kp_app_prototype_renderer.mjs";
 import {
@@ -844,6 +845,65 @@ assert.ok(marketplacePrototypeHtml.includes("grid-template-columns:repeat(5,1fr)
 assert.ok(marketplacePrototypeHtml.includes("#4C3FA8 0%,#2A2570 55%,#221E5E 100%"));
 assert.ok(marketplacePrototypeHtml.includes("class=\"ui-button primary\""));
 assert.equal(/(?:file:\/\/|\/Users\/|\/tmp\/)/.test(marketplacePrototypeHtml), false);
+
+const ecommerceDealPrompt = `Составь коммерческое предложение (КП) для клиента на основе данных сделки.
+Сделка: Сайфулло
+Компания: Udevs
+Сайт компании: https://udevs.io/
+Бюджет: 123 USD
+Тип проекта: E-commerce`;
+const ecommerceBrief = parseKpBrief(ecommerceDealPrompt);
+assert.equal(ecommerceBrief.productCategory.value, "E-commerce product");
+assert.deepEqual(getDomainResearchPacks(ecommerceDealPrompt).map((pack) => pack.key), ["ecommerce"]);
+const ecommercePrototypeSpec = await buildAndValidateAppPrototypeSpec({
+  requestId: "KP-ECOMMERCE-EXPLICIT",
+  publicId: "Ecommerce123",
+  locale: "ru-RU",
+  proposalModel: {
+    title: "Сайфулло",
+    brief: { projectName: "Сайфулло", type: ecommerceBrief.productCategory.value, prompt: ecommerceDealPrompt },
+  },
+  semanticModel: {
+    project: { name: "Сайфулло", category: ecommerceBrief.productCategory.value },
+    scopeItems: [{ id: "ECOM-1", feature: "Каталог и оформление заказа", detail: "Интернет-магазин" }],
+    actors: [],
+  },
+});
+assert.equal(ecommercePrototypeSpec.project.type, "ecommerce");
+assert.ok(ecommercePrototypeSpec.screens.some((screen) => screen.id === "admin_catalog"));
+assert.ok(ecommercePrototypeSpec.screens.some((screen) => screen.id === "checkout"));
+assert.equal(ecommercePrototypeSpec.screens.some((screen) => screen.id === "seller_workspace"), false);
+assert.equal(ecommercePrototypeSpec.screens.some((screen) => screen.id === "pipeline"), false);
+
+const erpDealPrompt = `Составь коммерческое предложение (КП) для клиента на основе данных сделки.
+Сделка: Сайфулло
+Компания: Udevs
+Сайт компании: https://udevs.io/
+Бюджет: 123 USD
+Тип проекта: ERP`;
+const erpBrief = parseKpBrief(erpDealPrompt);
+assert.equal(erpBrief.productCategory.value, "ERP / operations platform");
+assert.deepEqual(getDomainResearchPacks(erpDealPrompt).map((pack) => pack.key), ["erp"]);
+const erpPrototypeSpec = await buildAndValidateAppPrototypeSpec({
+  requestId: "KP-ERP-EXPLICIT",
+  publicId: "ErpSystem123",
+  locale: "ru-RU",
+  proposalModel: {
+    title: "Сайфулло",
+    brief: { projectName: "Сайфулло", type: "CRM / operations platform", prompt: erpDealPrompt },
+  },
+  semanticModel: {
+    project: { name: "Сайфулло", category: "CRM / operations platform" },
+    scopeItems: [{ id: "ERP-1", feature: "Сделки и данные клиента", detail: "Управление операциями" }],
+    actors: [],
+  },
+});
+assert.equal(erpPrototypeSpec.project.type, "erp");
+assert.ok(erpPrototypeSpec.screens.some((screen) => screen.id === "purchase_orders"));
+assert.ok(erpPrototypeSpec.screens.some((screen) => screen.id === "inventory"));
+assert.ok(erpPrototypeSpec.screens.some((screen) => screen.id === "finance_dashboard"));
+assert.equal(erpPrototypeSpec.screens.some((screen) => screen.id === "pipeline"), false);
+
 const crmPrototypeSpec = await buildAndValidateAppPrototypeSpec({
   requestId: "KP-CRM-PAYMENT-TERMS",
   publicId: "CrmType1234",

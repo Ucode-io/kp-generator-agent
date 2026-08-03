@@ -182,13 +182,13 @@ export function buildAppPrototypeSpec({
     sourceRefs,
   };
 
-  let screens = productFamily === "marketplace"
-    ? marketplaceScreens(context)
-    : productFamily === "fintech"
-      ? fintechScreens(context)
-      : productFamily === "crm"
-        ? crmScreens(context)
-        : businessScreens(context);
+  let screens;
+  if (productFamily === "ecommerce") screens = ecommerceScreens(context);
+  else if (productFamily === "erp") screens = erpScreens(context);
+  else if (productFamily === "marketplace") screens = marketplaceScreens(context);
+  else if (productFamily === "fintech") screens = fintechScreens(context);
+  else if (productFamily === "crm") screens = crmScreens(context);
+  else screens = businessScreens(context);
 
   screens = enforceScreenCount(dedupeScreens(screens), context).slice(0, SCREEN_LIMIT);
   screens = connectScreenActions(screens, context);
@@ -316,6 +316,106 @@ function marketplaceScreens(context) {
     ["moderation", "list", "Модерация", "Проверка карточек и спорного контента", "admin"],
     ["reports", "analytics", t.reports, "Продажи, возвраты и качество сервиса", "admin"],
     ["settings", "settings", t.settings, "Параметры магазина и уведомлений", "admin"],
+  ]);
+}
+
+function ecommerceScreens(context) {
+  const { t } = context;
+  return catalogScreens(context, [
+    ...sharedScreenDefinitions(t),
+    ["home", "dashboard", t.home, "Персональная витрина интернет-магазина"],
+    ["catalog", "product_grid", t.catalog, "Каталог товаров собственного магазина"],
+    ["categories", "product_grid", "Категории", "Навигация по разделам ассортимента"],
+    ["catalog_filters", "form", "Фильтры", "Цена, бренд, наличие и характеристики"],
+    ["search_suggestions", "list", "Подсказки поиска", "Популярные категории и недавние запросы"],
+    ["search_empty", "empty_state", "Ничего не найдено", "Альтернативные товары и категории"],
+    ["product", "details", t.product, "Описание, цена, наличие и варианты товара"],
+    ["product_gallery", "details", "Галерея товара", "Фотографии и выбранный вариант"],
+    ["product_reviews", "list", "Отзывы", "Оценки покупателей и вопросы о товаре"],
+    ["favorites", "product_grid", "Избранное", "Сохранённые товары"],
+    ["compare", "list", "Сравнение", "Сопоставление характеристик товаров"],
+    ["cart", "list", t.cart, "Товары, количество и стоимость"],
+    ["cart_empty", "empty_state", "Корзина пуста", "Возврат к каталогу и рекомендациям"],
+    ["checkout", "checkout", t.checkout, "Контакты получателя и оформление заказа"],
+    ["delivery_address", "form", "Адрес доставки", "Добавление и проверка адреса"],
+    ["delivery_method", "list", "Способ доставки", "Курьер, пункт выдачи или самовывоз"],
+    ["pickup_points", "list", "Пункты выдачи", "Выбор точки получения на карте"],
+    ["promo_code", "form", "Промокод", "Применение скидки магазина"],
+    ["order_summary", "checkout", "Проверка заказа", "Товары, доставка, скидка и итог"],
+    ["payment_methods", "list", "Способ оплаты", "Карта, наличные или онлайн-оплата"],
+    ["payment", "payment", t.payment, "Подтверждение суммы и оплаты"],
+    ["payment_processing", "stepper", "Оплата обрабатывается", "Проверка статуса платежа"],
+    ["confirmation", "success", t.confirmation, "Заказ принят интернет-магазином"],
+    ["orders", "history", "Мои заказы", "Активные и завершённые покупки"],
+    ["order_details", "details", "Детали заказа", "Состав, доставка, оплата и документы"],
+    ["tracking", "tracking", t.tracking, "Сборка, передача и доставка заказа"],
+    ["return_request", "form", "Оформление возврата", "Товары, причина и способ возврата"],
+    ["return_status", "tracking", "Статус возврата", "Проверка товара и возврат средств"],
+    ["support", "list", "Поддержка", "Вопросы о заказах, товарах и доставке"],
+    ["chat", "details", "Чат с магазином", "Диалог по заказу или возврату"],
+    ["profile_orders", "history", "История покупок", "Повторный заказ и электронные чеки"],
+    ["admin_dashboard", "dashboard", "Управление магазином", "Заказы, выручка и остатки", "admin"],
+    ["admin_catalog", "product_grid", "Управление каталогом", "Товары, категории и публикация", "admin"],
+    ["admin_product_create", "form", "Новый товар", "Контент, цена, варианты и остаток", "admin"],
+    ["admin_product_edit", "form", "Редактирование товара", "Карточка, SEO и доступность", "admin"],
+    ["admin_inventory", "list", "Остатки", "Наличие по складам и резервам", "admin"],
+    ["admin_orders", "list", "Управление заказами", "Сборка, доставка и исключения", "admin"],
+    ["admin_order_details", "details", "Заказ магазина", "Покупатель, товары и исполнение", "admin"],
+    ["admin_promotions", "list", "Акции и промокоды", "Скидки, периоды и аудитории", "admin"],
+    ["admin_customers", "list", "Покупатели", "Заказы, сегменты и согласия", "admin"],
+    ["admin_analytics", "analytics", "Аналитика магазина", "Продажи, конверсия и средний чек", "admin"],
+    ["admin_content", "settings", "Контент витрины", "Баннеры, подборки и страницы", "admin"],
+    ["admin_settings", "settings", t.settings, "Оплата, доставка и правила магазина", "admin"],
+  ]);
+}
+
+function erpScreens(context) {
+  const { t } = context;
+  return catalogScreens(context, [
+    ...sharedScreenDefinitions(t, "operator"),
+    ["dashboard", "dashboard", t.dashboard, "Закупки, запасы, финансы и отклонения", "operator"],
+    ["activity_feed", "history", "Операционная лента", "Последние документы и изменения статусов", "operator"],
+    ["quick_create", "form", "Быстрое создание", "Заявка, заказ, перемещение или расход", "operator"],
+    ["procurement_requests", "list", "Заявки на закупку", "Потребности подразделений и приоритеты", "operator"],
+    ["procurement_request_create", "form", "Новая заявка", "Номенклатура, количество и центр затрат", "operator"],
+    ["procurement_request_details", "details", "Карточка заявки", "Позиции, инициатор и доступный бюджет", "operator"],
+    ["procurement_approval", "stepper", "Согласование закупки", "Руководитель, бюджетный контроль и снабжение", "operator"],
+    ["suppliers", "list", "Поставщики", "Условия, рейтинг и активные договоры", "operator"],
+    ["supplier_details", "details", "Карточка поставщика", "Реквизиты, договоры и история поставок", "operator"],
+    ["purchase_orders", "list", "Заказы поставщикам", "Открытые, подтверждённые и просроченные заказы", "operator"],
+    ["purchase_order_create", "form", "Новый заказ поставщику", "Поставщик, позиции, цены и даты", "operator"],
+    ["purchase_order_details", "details", "Заказ поставщику", "Поставка, оплата и связанные документы", "operator"],
+    ["purchase_order_approval", "stepper", "Согласование заказа", "Проверка условий и лимитов", "operator"],
+    ["goods_receipts", "list", "Приёмка товаров", "Ожидаемые и принятые поставки", "operator"],
+    ["inventory", "list", "Номенклатура и остатки", "Свободный запас, резерв и доступность", "operator"],
+    ["inventory_item", "details", "Карточка номенклатуры", "Единицы, партии, цены и движения", "operator"],
+    ["stock_movements", "history", "Движения запасов", "Приходы, расходы и корректировки", "operator"],
+    ["stock_transfer", "form", "Перемещение между складами", "Склад-источник, получатель и позиции", "operator"],
+    ["stock_count", "stepper", "Инвентаризация", "Подсчёт, расхождения и корректировка", "operator"],
+    ["warehouses", "list", "Склады", "Загрузка, ёмкость и ответственные", "operator"],
+    ["warehouse_details", "details", "Карточка склада", "Зоны хранения и текущие остатки", "operator"],
+    ["sales_orders", "list", "Заказы клиентов", "Резерв, комплектация и отгрузка", "operator"],
+    ["sales_order_details", "details", "Заказ клиента", "Позиции, оплата и исполнение", "operator"],
+    ["shipment_planning", "stepper", "Планирование отгрузки", "Комплектация, документы и передача", "operator"],
+    ["finance_dashboard", "dashboard", "Финансы", "Денежный поток, задолженность и лимиты", "operator"],
+    ["invoices", "list", "Счета и накладные", "Документы к оплате и сроки", "operator"],
+    ["invoice_details", "details", "Карточка счёта", "Контрагент, проводки и связанные документы", "operator"],
+    ["payment_register", "history", "Реестр платежей", "Плановые и проведённые операции", "operator"],
+    ["expense_requests", "list", "Заявки на расходы", "Суммы, статьи и согласование", "operator"],
+    ["budget_control", "analytics", "Контроль бюджета", "План, факт и доступные лимиты", "operator"],
+    ["manufacturing_plan", "analytics", "Производственный план", "Потребность, загрузка и сроки", "operator"],
+    ["work_orders", "list", "Производственные задания", "Очередь, выпуск и отклонения", "operator"],
+    ["bill_of_materials", "details", "Спецификация изделия", "Материалы, нормы и версии", "operator"],
+    ["maintenance", "list", "Обслуживание оборудования", "Регламентные работы и простои", "operator"],
+    ["reports", "analytics", t.reports, "Сводные показатели ERP", "admin"],
+    ["inventory_report", "analytics", "Отчёт по запасам", "Оборачиваемость, дефицит и излишки", "admin"],
+    ["procurement_report", "analytics", "Отчёт по закупкам", "Сроки, цены и поставщики", "admin"],
+    ["finance_report", "analytics", "Финансовый отчёт", "Доходы, расходы и задолженность", "admin"],
+    ["roles", "settings", "Роли", "Функциональные роли подразделений", "admin"],
+    ["permissions", "settings", "Права доступа", "Матрица модулей, организаций и складов", "admin"],
+    ["integrations", "settings", "Интеграции", "Банк, бухгалтерия, ЭДО и внешние системы", "admin"],
+    ["audit_log", "history", "Журнал аудита", "Документы, проводки и критичные изменения", "admin"],
+    ["settings", "settings", t.settings, "Организации, справочники и учётная политика", "admin"],
   ]);
 }
 
@@ -960,7 +1060,7 @@ function buildNavigation(screens, roles, productFamily, t) {
     { id: "foundation", title: foundationTitle(t), match: (id) => id === "design_system" },
     { id: "start", title: t.onboarding, match: (id) => /^(onboarding|language|login|password|verification|identity|selfie)/.test(id) },
     { id: "overview", title: t.overview, match: (id) => /^(home|dashboard|activity_feed|quick_create|notifications|notification_settings|global_search|search_results)/.test(id) },
-    { id: "product", title: productFamily === "crm" ? t.leads : productFamily === "marketplace" ? t.catalog : t.workspace, match: () => false },
+    { id: "product", title: productFamily === "crm" ? t.leads : ["marketplace", "ecommerce"].includes(productFamily) ? t.catalog : t.workspace, match: () => false },
     { id: "operations", title: productFamily === "crm" ? t.workspace : t.history, match: (id) => /(task|calendar|client|order|return|tracking|payment|history|document|statement|schedule)/.test(id) },
     { id: "management", title: roles.some((role) => role.kind === "seller") ? t.seller : t.settings, match: (id) => /(profile|security|support|chat|help|seller|admin|operator|moderation|report|analytics|team|roles|permissions|integration|audit|settings)/.test(id) },
   ];
@@ -982,14 +1082,25 @@ function foundationTitle(t) {
 }
 
 function resolveRoles(semanticModel, productFamily, t) {
-  const roles = (semanticModel.actors || [])
+  let roles = (semanticModel.actors || [])
     .filter((actor) => !SYSTEM_ACTOR_TYPES.has(actor.type))
     .map((actor) => ({
       id: safeRoleId(actor.id || actor.label),
       title: cleanText(actor.label || actor.id || t.customer, 80),
       kind: actorKind(actor),
     }));
-  if (roles.length) return dedupeRoles(roles);
+  roles = dedupeRoles(roles);
+  if (productFamily === "ecommerce") {
+    const buyer = roles.find((role) => role.kind === "buyer") || { id: "buyer", title: t.customer, kind: "buyer" };
+    const admin = roles.find((role) => role.kind === "admin") || { id: "admin", title: t.admin, kind: "admin" };
+    return dedupeRoles([buyer, admin]);
+  }
+  if (productFamily === "erp") {
+    const operator = roles.find((role) => role.kind === "operator") || { id: "operator", title: t.operator, kind: "operator" };
+    const admin = roles.find((role) => role.kind === "admin") || { id: "admin", title: t.admin, kind: "admin" };
+    return dedupeRoles([operator, admin]);
+  }
+  if (roles.length) return roles;
   if (productFamily === "crm") return [{ id: "operator", title: t.operator, kind: "operator" }, { id: "admin", title: t.admin, kind: "admin" }];
   if (productFamily === "marketplace") return [{ id: "buyer", title: t.customer, kind: "buyer" }, { id: "seller", title: t.seller, kind: "seller" }, { id: "admin", title: t.admin, kind: "admin" }];
   return [{ id: "user", title: t.customer, kind: "buyer" }, { id: "admin", title: t.admin, kind: "admin" }];
@@ -1004,20 +1115,42 @@ function actorKind(actor) {
 }
 
 function detectProductFamily(proposalModel, semanticModel) {
+  const explicitType = extractDeclaredProductType(proposalModel);
+  const explicitFamily = productFamilyForDeclaredType(explicitType);
+  if (explicitFamily) return explicitFamily;
   const declaredText = JSON.stringify({
     title: proposalModel.title,
     projectName: proposalModel.brief?.projectName,
     type: proposalModel.brief?.type,
-    prompt: proposalModel.brief?.prompt,
   });
+  if (/\berp\b|enterprise\s+resource\s+planning|procurement|inventory|warehouse|планировани[ея]\s+ресурс/i.test(declaredText)) return "erp";
+  if (/e-?commerce|online\s+store|internet\s+shop|интернет.?магазин|онлайн.?магазин/i.test(declaredText)) return "ecommerce";
+  if (/marketplace|маркетплейс|маркет плейс/i.test(declaredText)) return "marketplace";
   if (/\bcrm\b|sales crm|crm[- ]?систем|система управления клиент/i.test(declaredText)) return "crm";
-  if (/marketplace|маркетплейс|маркет плейс|e-?commerce|интернет.?магазин/i.test(declaredText)) return "marketplace";
   if (/bnpl|fintech|finance|bank|loan|installment|рассроч|кредит|скоринг/i.test(declaredText)) return "fintech";
   const text = searchableText(semanticModel, proposalModel);
+  if (/\berp\b|enterprise\s+resource\s+planning|procurement|purchase order|inventory|warehouse|закуп|склад|запас/i.test(text)) return "erp";
+  if (/e-?commerce|online\s+store|internet\s+shop|интернет.?магазин|онлайн.?магазин/i.test(text)) return "ecommerce";
+  if (/marketplace|маркетплейс|маркет плейс|seller|merchant|vendor|продавц/i.test(text)) return "marketplace";
   if (/\bcrm\b|lead|pipeline|sales|воронк|лид|сделк|client management/i.test(text)) return "crm";
-  if (/marketplace|маркетплейс|маркет плейс|e-?commerce|internet magazin|интернет.?магазин|catalog|cart|seller|merchant|vendor|товар|корзин/i.test(text)) return "marketplace";
   if (/bnpl|fintech|finance|bank|loan|installment|рассроч|кредит|оплат|скоринг|limit/i.test(text)) return "fintech";
   return "business-app";
+}
+
+function extractDeclaredProductType(proposalModel = {}) {
+  const prompt = String(proposalModel.brief?.prompt || "");
+  const match = prompt.match(/(?:^|[\r\n])\s*(?:тип\s+проекта|project\s+type|loyiha\s+turi)\s*[:=-]\s*([^\r\n;]+)/iu);
+  return cleanText(match?.[1] || proposalModel.brief?.type || "", 120);
+}
+
+function productFamilyForDeclaredType(value = "") {
+  const normalized = String(value).toLowerCase();
+  if (/\berp\b|enterprise\s+resource\s+planning|планировани[ея]\s+ресурс/.test(normalized)) return "erp";
+  if (/\bcrm\b|customer\s+relationship|управлени[ея]\s+клиент/.test(normalized)) return "crm";
+  if (/marketplace|маркетплейс|маркет\s+плейс/.test(normalized)) return "marketplace";
+  if (/e-?commerce|online\s+store|internet\s+shop|интернет.?магазин|онлайн.?магазин/.test(normalized)) return "ecommerce";
+  if (/bnpl|fintech|finance|bank|loan|installment|рассроч|кредит|скоринг/.test(normalized)) return "fintech";
+  return "";
 }
 
 function normalizeTheme(profile = {}, tokens = null) {

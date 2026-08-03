@@ -375,14 +375,17 @@ function capabilityFromScope(item, scopeItems = []) {
 
 function buildTemplateActors(proposalModel, scopeItems, locale = "en") {
   const text = `${proposalModel.title || ""} ${proposalModel.brief?.type || ""} ${proposalModel.brief?.prompt || ""} ${scopeItems.map((item) => `${item.epic} ${item.feature} ${item.detail}`).join(" ")}`;
-  const explicitCommerceIntent = /marketplace|marketpleys|маркетплейс|internet\s*magazin|online\s*store|e-?commerce|интернет[- ]?магазин|онлайн[- ]?магазин|elektron\s*tijorat/i.test(text);
+  const explicitMarketplaceIntent = /marketplace|marketpleys|маркетплейс|маркет\s+плейс/i.test(text);
+  const explicitEcommerceIntent = /internet\s*magazin|online\s*store|e-?commerce|интернет[- ]?магазин|онлайн[- ]?магазин|elektron\s*tijorat/i.test(text);
+  const sellerIntent = /seller|продавц|sotuvchi|vendor|merchant/i.test(text);
   const commerceSignals = [
     /buyer|покупател|xaridor/i,
     /seller|продавц|sotuvchi|vendor|merchant/i,
     /catalog|каталог|katalog|product card|карточк[аи]\s+товар|mahsulot/i,
     /cart|корзин|savat|checkout|оформлени[ея]\s+заказ/i,
   ].filter((pattern) => pattern.test(text)).length;
-  if (!explicitCommerceIntent && commerceSignals < 2) return [];
+  if (explicitEcommerceIntent && !explicitMarketplaceIntent && !sellerIntent) return [];
+  if (!explicitMarketplaceIntent && commerceSignals < 2) return [];
   const labels = marketplaceProcessCopy(locale).actors;
   return [
     envelope("ACTOR-BUYER", labels.buyer, "recommended", [], "MARKETPLACE-JOURNEY-V1", { type: "end_user" }),

@@ -242,15 +242,36 @@ function extractScope(text = "") {
 }
 
 function detectCategory(text = "", scope = [], analogName = "") {
+  const declaredType = extractDeclaredProjectType(text);
+  const explicitCategory = categoryForDeclaredProjectType(declaredType);
+  if (explicitCategory) return explicitCategory;
   const combined = `${text} ${scope.map((item) => item.value).join(" ")} ${analogName}`.toLowerCase();
   if (/restaurant|restoran|courier|kuryer|food\s*delivery|yandex\s*eats|express24|wolt/.test(combined)) return "Food delivery marketplace";
   if (/cashback|loyalty|bonus|reward|wallet|merchant|payout/.test(combined)) return "Cashback / loyalty product";
-  if (/marketplace|seller|vendor|buyer|e-?commerce/.test(combined)) return "Marketplace product";
+  if (/\berp\b|enterprise\s+resource\s+planning|планировани[ея]\s+ресурс/.test(combined)) return "ERP / operations platform";
+  if (/e-?commerce|online\s+store|internet\s+shop|интернет[- ]?магазин|онлайн[- ]?магазин/.test(combined)) return "E-commerce product";
+  if (/marketplace|seller|vendor|buyer|маркетплейс/.test(combined)) return "Marketplace product";
   if (/\bcrm\b|lead\s+pipeline|sales\s+automation/.test(combined)) return "CRM / operations platform";
   if (/\btms\b|fleet|shipment|dispatch|transport\s+management/.test(combined)) return "TMS / logistics platform";
   if (/mobile|app|ios|android/.test(combined)) return "Mobile product";
   if (/website|websitye|websayt|site/.test(combined)) return "Web product";
   return "Custom software product";
+}
+
+function extractDeclaredProjectType(text = "") {
+  const match = String(text).match(/(?:^|[\r\n])\s*(?:тип\s+проекта|project\s+type|loyiha\s+turi)\s*[:=-]\s*([^\r\n;]+)/iu);
+  return match?.[1]?.trim() || "";
+}
+
+function categoryForDeclaredProjectType(value = "") {
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized) return "";
+  if (/\berp\b|enterprise\s+resource\s+planning|планировани[ея]\s+ресурс/.test(normalized)) return "ERP / operations platform";
+  if (/\bcrm\b|customer\s+relationship|управлени[ея]\s+клиент/.test(normalized)) return "CRM / operations platform";
+  if (/marketplace|маркетплейс|маркет\s+плейс/.test(normalized)) return "Marketplace product";
+  if (/e-?commerce|online\s+store|internet\s+shop|интернет[- ]?магазин|онлайн[- ]?магазин/.test(normalized)) return "E-commerce product";
+  if (/fintech|bnpl|bank|finance|финтех|банк/.test(normalized)) return "Fintech product";
+  return "";
 }
 
 function detectBriefLanguage(text = "") {
@@ -265,6 +286,9 @@ function workingTitleFor(category = "", locale = "en") {
   const en = {
     "Food delivery marketplace": "Food delivery platform",
     "Marketplace product": "Marketplace platform",
+    "E-commerce product": "E-commerce store",
+    "ERP / operations platform": "ERP platform",
+    "Fintech product": "Fintech platform",
     "Cashback / loyalty product": "Cashback platform",
     "CRM / operations platform": "CRM platform",
     "TMS / logistics platform": "Logistics platform",
@@ -274,6 +298,9 @@ function workingTitleFor(category = "", locale = "en") {
   const uz = {
     "Food delivery marketplace": "Ovqat yetkazib berish platformasi",
     "Marketplace product": "Marketpleys platformasi",
+    "E-commerce product": "E-commerce do‘koni",
+    "ERP / operations platform": "ERP platformasi",
+    "Fintech product": "Fintech platformasi",
     "Cashback / loyalty product": "Keshbek platformasi",
     "CRM / operations platform": "CRM platformasi",
     "TMS / logistics platform": "Logistika platformasi",
@@ -283,6 +310,9 @@ function workingTitleFor(category = "", locale = "en") {
   const ru = {
     "Food delivery marketplace": "Платформа доставки еды",
     "Marketplace product": "Платформа маркетплейса",
+    "E-commerce product": "Интернет-магазин",
+    "ERP / operations platform": "ERP-платформа",
+    "Fintech product": "Финтех-платформа",
     "Cashback / loyalty product": "Кешбэк-платформа",
     "CRM / operations platform": "CRM-платформа",
     "TMS / logistics platform": "Логистическая платформа",
@@ -429,7 +459,37 @@ export function getDomainResearchPacks(input = "") {
       ],
     });
   }
-  if (/marketplace|marketpleys|seller|vendor|buyer|e-?commerce|uzum|маркетплейс|маркет-?плейс|продавц|покупател|интернет-?магазин/u.test(lower) && !packs.some((pack) => pack.key === "food-delivery")) {
+  const marketplaceIntent = /marketplace|marketpleys|seller|vendor|buyer|uzum|маркетплейс|маркет-?плейс|продавц|покупател/u.test(lower);
+  const ecommerceIntent = /e-?commerce|online\s+store|internet\s+shop|интернет-?магазин|онлайн-?магазин/u.test(lower);
+  if (ecommerceIntent && !marketplaceIntent && !packs.some((pack) => pack.key === "food-delivery")) {
+    packs.push({
+      key: "ecommerce",
+      industry: "E-commerce product",
+      analog: "Direct-to-customer online stores",
+      description: "A single-merchant online store covering storefront, catalog, checkout, fulfilment and store operations.",
+      scope: [
+        "Storefront, categories, search and filters",
+        "Product cards, variants and availability",
+        "Cart, promo codes and checkout",
+        "Customer registration and profile",
+        "Payment and delivery methods",
+        "Order fulfilment and notifications",
+        "Returns and customer support",
+        "Store catalog and inventory management",
+        "Promotions and content management",
+        "Sales and conversion analytics",
+      ],
+      blockers: [
+        { name: "Store fulfilment rules", status: "Stock reservation, delivery zones and return policy must be confirmed" },
+        { name: "Catalog ownership", status: "Product content, pricing and inventory ownership must be confirmed" },
+      ],
+      infrastructure: [
+        { component: "Search service", type: "Application service", cost: "Architecture estimate required", period: "Monthly" },
+        { component: "Object storage / CDN", type: "Cloud service", cost: "Usage based", period: "Monthly" },
+      ],
+    });
+  }
+  if (marketplaceIntent && !packs.some((pack) => pack.key === "food-delivery")) {
     packs.push({
       key: "marketplace",
       industry: "Marketplace product",
@@ -456,6 +516,31 @@ export function getDomainResearchPacks(input = "") {
         { component: "Search service", type: "Application service", cost: "Architecture estimate required", period: "Monthly" },
         { component: "Object storage / CDN", type: "Cloud service", cost: "Usage based", period: "Monthly" },
       ],
+    });
+  }
+  if (/\berp\b|enterprise\s+resource\s+planning|планировани[ея]\s+ресурс/u.test(lower)) {
+    packs.push({
+      key: "erp",
+      industry: "ERP / operations platform",
+      analog: "Enterprise resource planning systems",
+      description: "An internal operations platform covering procurement, inventory, finance, production and governance.",
+      scope: [
+        "Procurement requests and approvals",
+        "Supplier and purchase order management",
+        "Goods receipt and warehouse operations",
+        "Inventory, reservations and stock movements",
+        "Customer orders and shipment planning",
+        "Invoices, payments and expense control",
+        "Budget plan-versus-actual control",
+        "Production plans and work orders",
+        "Operational and financial reporting",
+        "Roles, permissions, audit and integrations",
+      ],
+      blockers: [
+        { name: "Accounting model", status: "Organizations, chart of accounts, currencies and tax rules must be confirmed" },
+        { name: "Master data", status: "Item, supplier, warehouse and cost-center ownership must be confirmed" },
+      ],
+      infrastructure: [],
     });
   }
   if (/\bcrm\b|\bсрм\b|lead\s+pipeline|sales\s+automation|воронк\p{L}*\s+продаж|автоматизаци\p{L}*\s+продаж/u.test(lower)) {

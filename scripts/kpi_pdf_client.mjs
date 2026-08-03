@@ -4576,11 +4576,25 @@ const pageTitles = {
 };
 
 function projectType(project = {}) {
+  const declaredCategory = String(
+    project.grounded_brief?.productCategory?.value
+    || project.groundedBrief?.productCategory?.value
+    || project.category
+    || project.type
+    || "",
+  );
+  if (/\berp\b|enterprise\s+resource\s+planning/i.test(declaredCategory)) return "ERP / operations platform";
+  if (/e-?commerce|online\s+store|internet\s+shop/i.test(declaredCategory)) return "E-commerce product";
+  if (/marketplace/i.test(declaredCategory)) return "Marketplace product";
+  if (/\bcrm\b|customer\s+relationship/i.test(declaredCategory)) return "CRM / operations platform";
+  if (/fintech|bnpl|finance|bank/i.test(declaredCategory)) return "Fintech product";
   const text = `${project.title || ""} ${(project.scope || []).map((item) => item.subtask || item.epic || "").join(" ")}`;
   if (/restaurant|restoran|courier|kuryer|food\s*delivery|yandex\s*eats|express24|wolt/i.test(text)) return "Food delivery marketplace";
   if (/cashback|cash back|loyalty|bonus|reward|wallet|merchant|partner|payout|reconciliation/i.test(text)) return "Cashback / loyalty product";
+  if (/\berp\b|enterprise\s+resource\s+planning|procurement|inventory|warehouse/i.test(text)) return "ERP / operations platform";
+  if (/e-?commerce|online\s+store|internet\s+shop|интернет[- ]?магазин/i.test(text)) return "E-commerce product";
   if (/marketplace|buyer|vendor|seller/i.test(text)) return "Marketplace product";
-  if (/\bcrm\b|sales|lead|client/i.test(text)) return "CRM / operations platform";
+  if (/\bcrm\b|sales\s+pipeline|lead\s+management|customer\s+relationship/i.test(text)) return "CRM / operations platform";
   if (/\btms\b|transport\s+management|fleet|shipment|dispatch|logistic/i.test(text)) return "TMS / logistics platform";
   if (/mobile|ios|android|app/i.test(text)) return "Mobile product";
   if (/website|site|web/i.test(text)) return "Web product";
