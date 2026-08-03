@@ -34,7 +34,7 @@ assert.ok(result.html.includes("--kp-brand-accent:#0A0A0F"));
 assert.ok(result.prototype.url.startsWith("https://kp.udevs.io/p/"));
 assert.equal(result.prototypeUrl, result.prototype.url);
 assert.equal(result.prototype.qaStatus, "PASS");
-assert.equal(result.prototype.screenCount, 55);
+assert.equal(result.prototype.screenCount, 57);
 assert.ok((await fs.stat(result.prototype.path)).size > 20_000);
 assert.ok(result.html.includes(result.prototype.url));
 assert.ok(result.html.includes('<meta name="kp:prototype-url-base64"'));
@@ -43,6 +43,9 @@ assert.equal(prototypeRecord.publicUrl, result.prototype.url);
 assert.equal(prototypeRecord.relativePath, "final/prototype/index.html");
 assert.equal(prototypeRecord.qaStatus, "PASS");
 const prototypeSpec = JSON.parse(await fs.readFile(path.join(result.workspace, "contracts", "app-prototype-spec.json"), "utf8"));
+assert.equal(prototypeSpec.project.type, "ecommerce");
+assert.ok(prototypeSpec.screens.some((screen) => screen.id === "admin_catalog"));
+assert.equal(prototypeSpec.screens.some((screen) => screen.id === "seller_workspace"), false);
 assert.equal(prototypeSpec.screens.length, result.prototype.screenCount);
 assert.equal(new Set(prototypeSpec.navigation.flatMap((group) => group.screenIds)).size, prototypeSpec.screens.length);
 const prototypeQa = JSON.parse(await fs.readFile(path.join(result.workspace, "qa", "app-prototype-qa.json"), "utf8"));
@@ -62,7 +65,7 @@ const presentationPlan = JSON.parse(await fs.readFile(path.join(result.workspace
 const semanticModel = JSON.parse(await fs.readFile(path.join(result.workspace, "contracts", "semantic-model.json"), "utf8"));
 const deliveryInventory = buildProductDeliveryInventory(semanticModel);
 const expectedFunctionPages = Math.max(1, Math.ceil(deliveryInventory.length / 14));
-const expectedPrimaryFlowPages = primaryFlowSegmentCount(semanticModel);
+const expectedPrimaryFlowPages = semanticModel.processes?.length ? primaryFlowSegmentCount(semanticModel) : 0;
 const expectedRoadmapPages = roadmapWorkstreamSegmentCount(semanticModel);
 const pageKinds = presentationPlan.pages.map((page) => page.kind);
 assert.equal(pageKinds.filter((kind) => kind === "function_price").length, expectedFunctionPages);
@@ -80,12 +83,11 @@ const primaryFlowSpecs = await Promise.all(primaryFlowPages.map((page) => fs.rea
   path.join(result.workspace, "contracts", "visualization-specs", `${page.visualizationSpecId}.json`),
   "utf8",
 ).then(JSON.parse)));
-assert.deepEqual(primaryFlowSpecs.map((spec) => spec.nodes.length), [10, 8, 9, 8]);
-assert.deepEqual(primaryFlowSpecs.map((spec) => spec.edges.length), [9, 7, 8, 9]);
 assert.ok(primaryFlowSpecs.every((spec) => spec.segmentCount === expectedPrimaryFlowPages));
 assert.equal((result.html.match(/data-viz-kind="bpmn"/g) || []).length, expectedPrimaryFlowPages);
 assert.equal((result.html.match(/data-viz-kind="bpmn"[^>]+data-viz-density="dense"/g) || []).length, 0);
-assert.ok(result.html.includes("ASOSIY JARAYON · 1/4"));
+assert.equal(semanticModel.actors.length, 0);
+assert.equal(semanticModel.processes.length, 0);
 for (const row of deliveryInventory) {
   const escaped = row.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   assert.equal((result.html.match(new RegExp('data-node-id="' + escaped + '"', "g")) || []).length, 3);

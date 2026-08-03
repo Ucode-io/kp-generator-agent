@@ -2398,7 +2398,8 @@ function renderFunctionPrice(content, _tokens, _dynamicRules, pagePlan = {}) {
       "</div>",
     ].join("");
   }
-  const offset = (Math.max(1, Number(pagePlan.segmentIndex) || 1) - 1) * FUNCTION_SCHEDULE_ROWS_PER_PAGE;
+  const allRows = array(content.functionSchedule).length ? array(content.functionSchedule) : array(content.functionPrice);
+  const offset = functionSchedulePageBounds(allRows.length, pagePlan).start;
   const rows = pageRows.map((row, index) => {
     const sourceIds = row.sourceIds?.length ? ' data-source-ids="' + escapeHtmlAttribute(row.sourceIds.join(",")) + '"' : "";
     return [
@@ -3546,7 +3547,7 @@ function semanticSummary(spec, pageNumber, content) {
   if (spec.kind === "architecture") {
     const recommended = array(spec.nodes).some((node) => ["recommended", "inferred", "assumed"].includes(String(node.truthStatus || "").toLowerCase()));
     return pending
-      ? { label: l(content, "CONTEXT TO CONFIRM"), detail: l(content, "Confirm channels, trusted application boundary, operational data needs, and partner dependencies.") }
+      ? { label: l(content, "ARCHITECTURE QUESTIONS"), detail: l(content, "Confirm channels, trusted application boundary, operational data needs, and partner dependencies.") }
       : { label: recommended ? l(content, "Recommendation") : l(content, "TRUST BOUNDARY"), detail: l(content, "Channels reach the trusted product core; data remains inside and partner services remain outside.") };
   }
   const scale = spec.timeScale || {};
@@ -3740,15 +3741,23 @@ function normalizeFunctionSchedule(semanticModel, commercialRows, locale) {
 
 function functionScheduleRowsForPage(content, pagePlan = {}) {
   const allRows = array(content.functionSchedule).length ? array(content.functionSchedule) : array(content.functionPrice);
+  const bounds = functionSchedulePageBounds(allRows.length, pagePlan);
+  return allRows.slice(bounds.start, bounds.end);
+}
+
+function functionSchedulePageBounds(rowCount, pagePlan = {}) {
   const segmentCount = Math.max(1, Number(pagePlan.segmentCount) || 1);
   const segmentIndex = Math.max(1, Number(pagePlan.segmentIndex) || 1);
-  if (segmentCount === 1) return allRows;
-  const expectedCount = Math.max(1, Math.ceil(allRows.length / FUNCTION_SCHEDULE_ROWS_PER_PAGE));
+  if (segmentCount === 1) return { start: 0, end: rowCount };
+  const expectedCount = Math.max(1, Math.ceil(rowCount / FUNCTION_SCHEDULE_ROWS_PER_PAGE));
   if (segmentIndex > expectedCount || segmentCount !== expectedCount) {
-    throw rendererError("CONTENT_FUNCTION_PRICE_SEGMENT_INVALID", `Function-schedule segment ${segmentIndex}/${segmentCount} does not match ${allRows.length} terminal rows`);
+    throw rendererError("CONTENT_FUNCTION_PRICE_SEGMENT_INVALID", `Function-schedule segment ${segmentIndex}/${segmentCount} does not match ${rowCount} terminal rows`);
   }
-  const start = (segmentIndex - 1) * FUNCTION_SCHEDULE_ROWS_PER_PAGE;
-  return allRows.slice(start, start + FUNCTION_SCHEDULE_ROWS_PER_PAGE);
+  const baseSize = Math.floor(rowCount / segmentCount);
+  const largerSegments = rowCount % segmentCount;
+  const start = (segmentIndex - 1) * baseSize + Math.min(segmentIndex - 1, largerSegments);
+  const size = baseSize + (segmentIndex <= largerSegments ? 1 : 0);
+  return { start, end: start + size };
 }
 
 function findFunctionPriceScopeRow(row, proposalRow, scopeRows, index, inventoryLength) {

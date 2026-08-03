@@ -196,7 +196,9 @@ const scopeMatchers = [
   ["Food ordering app", /food\s*order|ovqat\s*buyurtma|заказ\s*ед/i],
   ["Restaurant admin panel", /restoran|restaurant|ресторан/i],
   ["Courier app", /courier|kuryer|курьер/i],
-  ["Marketplace", /marketplace|e-?commerce|seller|vendor|buyer|маркетплейс/i],
+  ["E-commerce", /e-?commerce|online\s+store|internet\s+shop|internet\s+magazin|onlayn\s+magazin|(?:internet|onlayn)\s+do['’]?kon|интернет[- ]?магазин|онлайн[- ]?магазин/i],
+  ["Marketplace", /marketplace|seller|vendor|buyer|маркетплейс/i],
+  ["SaaS", /\bsaas\b|software\s+as\s+a\s+service/i],
   ["Customer mobile app", /customer\s+(?:mobile\s+)?app|client\s+app|mijoz\s+ilova/i],
   ["Mobile app", /mobile|mobilka|mobilkasi|ios|android|прилож/i],
   ["Admin panel", /admin|админ/i],
@@ -229,7 +231,9 @@ function normalizeScopeChunk(chunk = "") {
 }
 
 function extractScope(text = "") {
-  const source = String(text || "").replace(/\s+/g, " ");
+  const source = String(text || "")
+    .replace(/(?:^|[\r\n])\s*(?:сайт\s+компании|company\s+(?:website|site))\s*[:=-]\s*[^\r\n]*/giu, "\n")
+    .replace(/\s+/g, " ");
   const explicitMatch = source.match(/\b(?:scope|funksional|functional|modules?|модули?|функционал)\s*[:=-]\s*([\s\S]+?)(?=\b(?:budget|budjet|byudjet|бюджет|duration|timeline|muddat|срок|kp|kpi)\b|$)/iu);
   const explicitChunks = explicitMatch
     ? explicitMatch[1].split(/[,;|]+|\s+\+\s+|\s+va\s+|\s+hamda\s+|\s+и\s+/iu).map(normalizeScopeChunk).filter(Boolean)
@@ -249,11 +253,12 @@ function detectCategory(text = "", scope = [], analogName = "") {
   if (/restaurant|restoran|courier|kuryer|food\s*delivery|yandex\s*eats|express24|wolt/.test(combined)) return "Food delivery marketplace";
   if (/cashback|loyalty|bonus|reward|wallet|merchant|payout/.test(combined)) return "Cashback / loyalty product";
   if (/\berp\b|enterprise\s+resource\s+planning|планировани[ея]\s+ресурс/.test(combined)) return "ERP / operations platform";
-  if (/e-?commerce|online\s+store|internet\s+shop|интернет[- ]?магазин|онлайн[- ]?магазин/.test(combined)) return "E-commerce product";
+  if (/\btms\b|transport\s+management|fleet\s+management|управлени[ея]\s+транспорт/.test(combined)) return "TMS / logistics platform";
+  if (/\bsaas\b|software\s+as\s+a\s+service|subscription\s+platform/.test(combined)) return "SaaS product";
+  if (/e-?commerce|online\s+store|internet\s+shop|internet\s+magazin|onlayn\s+magazin|(?:internet|onlayn)\s+do['’]?kon|интернет[- ]?магазин|онлайн[- ]?магазин/.test(combined)) return "E-commerce product";
   if (/marketplace|seller|vendor|buyer|маркетплейс/.test(combined)) return "Marketplace product";
   if (/\bcrm\b|lead\s+pipeline|sales\s+automation/.test(combined)) return "CRM / operations platform";
-  if (/\btms\b|fleet|shipment|dispatch|transport\s+management/.test(combined)) return "TMS / logistics platform";
-  if (/mobile|app|ios|android/.test(combined)) return "Mobile product";
+  if (/mobile\s+app|mobile\s+application|ios|android|мобильн\p{L}*\s+приложен/u.test(combined)) return "Mobile product";
   if (/website|websitye|websayt|site/.test(combined)) return "Web product";
   return "Custom software product";
 }
@@ -267,9 +272,14 @@ function categoryForDeclaredProjectType(value = "") {
   const normalized = String(value).trim().toLowerCase();
   if (!normalized) return "";
   if (/\berp\b|enterprise\s+resource\s+planning|планировани[ея]\s+ресурс/.test(normalized)) return "ERP / operations platform";
+  if (/\btms\b|transport\s+management|fleet\s+management|управлени[ея]\s+транспорт/.test(normalized)) return "TMS / logistics platform";
   if (/\bcrm\b|customer\s+relationship|управлени[ея]\s+клиент/.test(normalized)) return "CRM / operations platform";
+  if (/\bsaas\b|software\s+as\s+a\s+service/.test(normalized)) return "SaaS product";
   if (/marketplace|маркетплейс|маркет\s+плейс/.test(normalized)) return "Marketplace product";
-  if (/e-?commerce|online\s+store|internet\s+shop|интернет[- ]?магазин|онлайн[- ]?магазин/.test(normalized)) return "E-commerce product";
+  if (/e-?commerce|online\s+store|internet\s+shop|internet\s+magazin|onlayn\s+magazin|(?:internet|onlayn)\s+do['’]?kon|интернет[- ]?магазин|онлайн[- ]?магазин/.test(normalized)) return "E-commerce product";
+  if (/mobile\s+app|mobile\s+application|ios|android|мобильн\p{L}*\s+приложен/u.test(normalized)) return "Mobile product";
+  if (/^website$|^web\s*site$|веб[- ]?сайт|вебсайт/.test(normalized)) return "Web product";
+  if (/^other$|^другое$|^бошқа$|^boshqa$/.test(normalized)) return "Custom software product";
   if (/fintech|bnpl|bank|finance|финтех|банк/.test(normalized)) return "Fintech product";
   return "";
 }
@@ -288,6 +298,7 @@ function workingTitleFor(category = "", locale = "en") {
     "Marketplace product": "Marketplace platform",
     "E-commerce product": "E-commerce store",
     "ERP / operations platform": "ERP platform",
+    "SaaS product": "SaaS platform",
     "Fintech product": "Fintech platform",
     "Cashback / loyalty product": "Cashback platform",
     "CRM / operations platform": "CRM platform",
@@ -300,6 +311,7 @@ function workingTitleFor(category = "", locale = "en") {
     "Marketplace product": "Marketpleys platformasi",
     "E-commerce product": "E-commerce do‘koni",
     "ERP / operations platform": "ERP platformasi",
+    "SaaS product": "SaaS platformasi",
     "Fintech product": "Fintech platformasi",
     "Cashback / loyalty product": "Keshbek platformasi",
     "CRM / operations platform": "CRM platformasi",
@@ -312,6 +324,7 @@ function workingTitleFor(category = "", locale = "en") {
     "Marketplace product": "Платформа маркетплейса",
     "E-commerce product": "Интернет-магазин",
     "ERP / operations platform": "ERP-платформа",
+    "SaaS product": "SaaS-платформа",
     "Fintech product": "Финтех-платформа",
     "Cashback / loyalty product": "Кешбэк-платформа",
     "CRM / operations platform": "CRM-платформа",
@@ -426,8 +439,13 @@ export function bindBriefSourceIds(brief = {}, sourceId = "SRC-PROMPT") {
 export function getDomainResearchPacks(input = "") {
   const text = typeof input === "string" ? input : JSON.stringify(input);
   const lower = text.toLowerCase();
+  const declaredCategory = categoryForDeclaredProjectType(extractDeclaredProjectType(text));
+  const matchesType = (category, pattern) => declaredCategory
+    ? declaredCategory === category
+    : pattern.test(lower);
   const packs = [];
-  if (/restaurant|restoran|courier|kuryer|food\s*delivery|yandex\s*eats|express24|wolt|ресторан|курьер|доставк\p{L}*\s+ед|ед\p{L}*\s+доставк/u.test(lower)) {
+  if ((!declaredCategory || declaredCategory === "Marketplace product")
+    && /restaurant|restoran|courier|kuryer|food\s*delivery|yandex\s*eats|express24|wolt|ресторан|курьер|доставк\p{L}*\s+ед|ед\p{L}*\s+доставк/u.test(lower)) {
     packs.push({
       key: "food-delivery",
       industry: "Food delivery marketplace",
@@ -459,8 +477,8 @@ export function getDomainResearchPacks(input = "") {
       ],
     });
   }
-  const marketplaceIntent = /marketplace|marketpleys|seller|vendor|buyer|uzum|маркетплейс|маркет-?плейс|продавц|покупател/u.test(lower);
-  const ecommerceIntent = /e-?commerce|online\s+store|internet\s+shop|интернет-?магазин|онлайн-?магазин/u.test(lower);
+  const marketplaceIntent = matchesType("Marketplace product", /marketplace|marketpleys|seller|vendor|buyer|uzum|маркетплейс|маркет-?плейс|продавц|покупател/u);
+  const ecommerceIntent = matchesType("E-commerce product", /e-?commerce|online\s+store|internet\s+shop|internet\s+magazin|onlayn\s+magazin|(?:internet|onlayn)\s+do['’]?kon|интернет-?магазин|онлайн-?магазин/u);
   if (ecommerceIntent && !marketplaceIntent && !packs.some((pack) => pack.key === "food-delivery")) {
     packs.push({
       key: "ecommerce",
@@ -518,7 +536,7 @@ export function getDomainResearchPacks(input = "") {
       ],
     });
   }
-  if (/\berp\b|enterprise\s+resource\s+planning|планировани[ея]\s+ресурс/u.test(lower)) {
+  if (matchesType("ERP / operations platform", /\berp\b|enterprise\s+resource\s+planning|планировани[ея]\s+ресурс/u)) {
     packs.push({
       key: "erp",
       industry: "ERP / operations platform",
@@ -543,7 +561,7 @@ export function getDomainResearchPacks(input = "") {
       infrastructure: [],
     });
   }
-  if (/\bcrm\b|\bсрм\b|lead\s+pipeline|sales\s+automation|воронк\p{L}*\s+продаж|автоматизаци\p{L}*\s+продаж/u.test(lower)) {
+  if (matchesType("CRM / operations platform", /\bcrm\b|\bсрм\b|lead\s+pipeline|sales\s+automation|воронк\p{L}*\s+продаж|автоматизаци\p{L}*\s+продаж/u)) {
     packs.push({
       key: "crm",
       industry: "CRM / operations platform",
@@ -564,6 +582,110 @@ export function getDomainResearchPacks(input = "") {
         { name: "Migration scope", status: "Source systems, data quality and duplicate rules must be confirmed" },
       ],
       infrastructure: [],
+    });
+  }
+  if (matchesType("SaaS product", /\bsaas\b|software\s+as\s+a\s+service|subscription\s+platform|multi[- ]?tenant/u)) {
+    packs.push({
+      key: "saas",
+      industry: "SaaS product",
+      analog: "Subscription-based B2B and B2C software products",
+      description: "A subscription software product covering workspaces, collaboration, automation, billing and platform administration.",
+      scope: [
+        "Workspace and project management",
+        "Records, tasks and team collaboration",
+        "Templates and workflow automation",
+        "Role-based access and invitations",
+        "Subscription plans and checkout",
+        "Invoices, payment methods and usage limits",
+        "API keys, webhooks and integrations",
+        "Product analytics and audit trail",
+      ],
+      blockers: [
+        { name: "Tenant model", status: "Workspace ownership, isolation and member roles must be confirmed" },
+        { name: "Subscription policy", status: "Plans, limits, trials, upgrades and billing periods must be confirmed" },
+      ],
+      infrastructure: [
+        { component: "Subscription billing", type: "Third-party API", cost: "Provider fee", period: "Per transaction" },
+        { component: "Transactional email", type: "Cloud service", cost: "Usage based", period: "Monthly" },
+      ],
+    });
+  }
+  if (matchesType("Mobile product", /mobile\s+app|mobile\s+application|ios|android|мобильн\p{L}*\s+приложен/u)) {
+    packs.push({
+      key: "mobile-app",
+      industry: "Mobile product",
+      analog: "Native and cross-platform mobile applications",
+      description: "A mobile-first product covering onboarding, core user workflows, device capabilities, offline states and release operations.",
+      scope: [
+        "Mobile onboarding and authentication",
+        "Home, discovery and search",
+        "Core record creation and review flow",
+        "Push notifications and in-app messaging",
+        "Camera, media and location permissions",
+        "Offline access and data synchronization",
+        "Privacy, accessibility and device security",
+        "Content, users, campaigns and release administration",
+      ],
+      blockers: [
+        { name: "Platform strategy", status: "iOS, Android and cross-platform implementation priorities must be confirmed" },
+        { name: "Offline policy", status: "Cached data, conflict resolution and synchronization rules must be confirmed" },
+      ],
+      infrastructure: [
+        { component: "Push notifications", type: "Firebase / APNs", cost: "Usage policy applies", period: "Usage based" },
+        { component: "App distribution", type: "Apple / Google", cost: "Store account fees", period: "Annual" },
+      ],
+    });
+  }
+  if (matchesType("Web product", /website|websitye|websayt|web\s*site|веб[- ]?сайт|вебсайт/u)) {
+    packs.push({
+      key: "website",
+      industry: "Web product",
+      analog: "Content and lead-generation websites",
+      description: "A public website covering information architecture, content journeys, conversion forms, SEO and editorial operations.",
+      scope: [
+        "Information architecture and responsive page templates",
+        "Services, solutions and case-study pages",
+        "Blog, articles and author pages",
+        "Contact, newsletter and recruitment forms",
+        "Search, accessibility and legal pages",
+        "CMS page and media management",
+        "SEO, localization and redirects",
+        "Web analytics and conversion tracking",
+      ],
+      blockers: [
+        { name: "Content ownership", status: "Source content, languages, approval and publishing roles must be confirmed" },
+        { name: "Conversion routing", status: "Form recipients, CRM handoff and response SLA must be confirmed" },
+      ],
+      infrastructure: [
+        { component: "CMS and hosting", type: "Cloud service", cost: "Architecture estimate required", period: "Monthly" },
+        { component: "Analytics", type: "Third-party service", cost: "Usage policy applies", period: "Monthly" },
+      ],
+    });
+  }
+  if (matchesType("TMS / logistics platform", /\btms\b|transport\s+management|fleet\s+management|shipment|dispatch|логистик|автопарк/u)) {
+    packs.push({
+      key: "tms",
+      industry: "TMS / logistics platform",
+      analog: "Transport management and fleet operations systems",
+      description: "A transport operations platform covering orders, dispatch, routes, fleet, tracking, documents and settlement.",
+      scope: [
+        "Transport order intake and planning",
+        "Shipment and dispatch management",
+        "Route planning, mapping and ETA",
+        "Fleet, driver and maintenance management",
+        "Load, warehouse and dock coordination",
+        "Live tracking and proof of delivery",
+        "Tariffs, invoices and carrier settlement",
+        "Incidents, claims and logistics reporting",
+      ],
+      blockers: [
+        { name: "Transport operating model", status: "Own fleet, carriers, dispatch ownership and SLA rules must be confirmed" },
+        { name: "Telematics integration", status: "GPS providers, update frequency and tracking coverage must be confirmed" },
+      ],
+      infrastructure: [
+        { component: "Maps and routing", type: "Third-party API", cost: "Provider quote required", period: "Usage based" },
+        { component: "GPS / telematics", type: "Third-party API", cost: "Provider quote required", period: "Usage based" },
+      ],
     });
   }
   return packs;

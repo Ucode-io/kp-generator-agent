@@ -2607,7 +2607,9 @@ function durationLabel(months) {
 }
 
 function extractScopeItems(question = "") {
-  const normalized = stripReferenceUrl(question)
+  const scopeQuestion = String(question || "")
+    .replace(/(?:^|[\r\n])\s*(?:сайт\s+компании|company\s+(?:website|site))\s*[:=-]\s*[^\r\n]*/giu, "\n");
+  const normalized = stripReferenceUrl(scopeQuestion)
     .replace(/\s+/g, " ")
     .replace(/\b(?:manga|менга|мне|kp|кп|kpi|premium|pdf|qil|qiber|sdelay|сделай|kere|kerak|bolishi|bo'lishi|budjetim|budgetim)\b/gi, " ")
     .replace(/\b(?:oti|nomi|name|called|named|название)\s+[A-Za-z0-9._-]{2,50}\b/gi, " ")
@@ -2625,7 +2627,9 @@ function extractScopeItems(question = "") {
     .filter((item) => item.length >= 3 && !/\b(kp|кп|kpi|pdf|premium|qil|ber|qiber|budget|duration)\b/i.test(item))
     .slice(0, 24);
   const keywordMap = [
-    ["Marketplace", /marketplace|market|ecommerce|e-commerce|shop|store|магазин|маркет/i],
+    ["E-commerce", /e-?commerce|online\s+store|internet\s+shop|internet\s+magazin|onlayn\s+magazin|(?:internet|onlayn)\s+do['’]?kon|интернет[- ]?магазин|онлайн[- ]?магазин/i],
+    ["Marketplace", /marketplace|seller|vendor|buyer|маркетплейс/i],
+    ["SaaS", /\bsaas\b|software\s+as\s+a\s+service/i],
     ["Admin panel", /admin|админ/i],
     ["Mobile app", /mobile|mobil|mobilka|mobilkasi|ios|android|app|прилож/i],
     ["TMS core", /\btms\b|transport|logistic|shipment|dispatch/i],
@@ -2752,8 +2756,9 @@ function expandScopeWithDomainResearch(question = "", detectedScopeItems = [], o
   const requestedScopeItems = uniqueByLower(options.requestedScopeItems || []);
   const domainScope = packs.flatMap((pack) => pack.scope);
   const essential = [];
-  if (!detectedScopeItems.some((item) => /mobile|app/i.test(item))) essential.push("Mobile app");
-  if (!detectedScopeItems.some((item) => /admin/i.test(item))) essential.push("Admin panel");
+  const requiresMultiSurface = packs.some((pack) => ["food-delivery", "cashback-loyalty"].includes(pack.key));
+  if (requiresMultiSurface && !detectedScopeItems.some((item) => /mobile|\bapp\b/i.test(item))) essential.push("Mobile app");
+  if (requiresMultiSurface && !detectedScopeItems.some((item) => /admin/i.test(item))) essential.push("Admin panel");
   // With a sparse category-only brief, lead with the recommended product
   // journey (catalog -> checkout -> order) rather than UI surfaces. Explicitly
   // requested features still retain first position when they exist.
@@ -2992,11 +2997,19 @@ function buildCustomProjectFromQuestion(question, projects) {
   const title = groundedBrief.projectName.value || groundedBrief.workingTitle.value || extractCustomTitle(question);
   const parsedScopeRows = groundedBrief.scope || [];
   const groundedScopeItems = parsedScopeRows.map((item) => item.value).filter(Boolean);
-  const detectedScopeItems = groundedScopeItems.length ? groundedScopeItems : extractScopeItems(question);
   const requestedScopeItems = parsedScopeRows
     .filter((item) => item.status === "explicit" || item.inclusion === "requested")
     .map((item) => item.value)
     .filter(Boolean);
+  const hasDeclaredProjectType = /(?:^|[\r\n])\s*(?:тип\s+проекта|project\s+type|loyiha\s+turi)\s*[:=-]/iu.test(question);
+  const useDomainScopeOnly = hasDeclaredProjectType
+    && groundedBrief.productCategory.value !== "Custom software product"
+    && !requestedScopeItems.length;
+  const detectedScopeItems = useDomainScopeOnly
+    ? []
+    : groundedScopeItems.length
+      ? groundedScopeItems
+      : extractScopeItems(question);
   const { scopeItems, domainPacks } = expandScopeWithDomainResearch(question, detectedScopeItems, { requestedScopeItems });
   const requestedScopeKeys = new Set(requestedScopeItems.map((item) => String(item).toLowerCase()));
   const primaryDomain = domainPacks[0] || null;
@@ -4584,19 +4597,25 @@ function projectType(project = {}) {
     || "",
   );
   if (/\berp\b|enterprise\s+resource\s+planning/i.test(declaredCategory)) return "ERP / operations platform";
-  if (/e-?commerce|online\s+store|internet\s+shop/i.test(declaredCategory)) return "E-commerce product";
+  if (/\btms\b|transport\s+management|fleet\s+management/i.test(declaredCategory)) return "TMS / logistics platform";
+  if (/\bsaas\b|software\s+as\s+a\s+service/i.test(declaredCategory)) return "SaaS product";
+  if (/e-?commerce|online\s+store|internet\s+shop|internet\s+magazin|onlayn\s+magazin|(?:internet|onlayn)\s+do['’]?kon/i.test(declaredCategory)) return "E-commerce product";
   if (/marketplace/i.test(declaredCategory)) return "Marketplace product";
   if (/\bcrm\b|customer\s+relationship/i.test(declaredCategory)) return "CRM / operations platform";
   if (/fintech|bnpl|finance|bank/i.test(declaredCategory)) return "Fintech product";
+  if (/mobile\s+product|mobile\s+app|ios|android/i.test(declaredCategory)) return "Mobile product";
+  if (/web\s+product|website/i.test(declaredCategory)) return "Web product";
+  if (/custom\s+software|\bother\b/i.test(declaredCategory)) return "Custom software product";
   const text = `${project.title || ""} ${(project.scope || []).map((item) => item.subtask || item.epic || "").join(" ")}`;
   if (/restaurant|restoran|courier|kuryer|food\s*delivery|yandex\s*eats|express24|wolt/i.test(text)) return "Food delivery marketplace";
   if (/cashback|cash back|loyalty|bonus|reward|wallet|merchant|partner|payout|reconciliation/i.test(text)) return "Cashback / loyalty product";
   if (/\berp\b|enterprise\s+resource\s+planning|procurement|inventory|warehouse/i.test(text)) return "ERP / operations platform";
-  if (/e-?commerce|online\s+store|internet\s+shop|интернет[- ]?магазин/i.test(text)) return "E-commerce product";
+  if (/\btms\b|transport\s+management|fleet|shipment|dispatch|logistic/i.test(text)) return "TMS / logistics platform";
+  if (/\bsaas\b|software\s+as\s+a\s+service|subscription\s+platform/i.test(text)) return "SaaS product";
+  if (/e-?commerce|online\s+store|internet\s+shop|internet\s+magazin|onlayn\s+magazin|(?:internet|onlayn)\s+do['’]?kon|интернет[- ]?магазин/i.test(text)) return "E-commerce product";
   if (/marketplace|buyer|vendor|seller/i.test(text)) return "Marketplace product";
   if (/\bcrm\b|sales\s+pipeline|lead\s+management|customer\s+relationship/i.test(text)) return "CRM / operations platform";
-  if (/\btms\b|transport\s+management|fleet|shipment|dispatch|logistic/i.test(text)) return "TMS / logistics platform";
-  if (/mobile|ios|android|app/i.test(text)) return "Mobile product";
+  if (/mobile\s+app|mobile\s+application|ios|android/i.test(text)) return "Mobile product";
   if (/website|site|web/i.test(text)) return "Web product";
   return "Custom software product";
 }
@@ -4664,7 +4683,7 @@ function projectPlatforms(project = {}) {
   const text = `${project.title || ""} ${(project.scope || []).map((item) => `${item.subtask || ""} ${item.epic || ""}`).join(" ")}`;
   const platforms = [];
   if (/admin|cabinet|dashboard|crm|erp/i.test(text)) platforms.push("Admin web");
-  if (/mobile|ios|android|app|patient|courier|student/i.test(text)) platforms.push("Mobile app");
+  if (/mobile|\bios\b|\bandroid\b|\bapp\b|patient|courier|student/i.test(text)) platforms.push("Mobile app");
   if (/website|websitye|websayt|web\s*site|site|сайт/i.test(text)) platforms.push("Website");
   else if (/\b(?:web\s+platform|platform|portal|cabinet)\b/i.test(text)) platforms.push("Web platform");
   if (/telegram|bot/i.test(text)) platforms.push("Telegram bot");
@@ -4808,6 +4827,24 @@ function deliveryDecisionText(project = {}) {
   if (/Marketplace/i.test(type)) {
     return `Build marketplace, admin, mobile and website as one MVP package with a ${durationLabel(project.duration_months)} release plan.`;
   }
+  if (/E-commerce/i.test(type)) {
+    return `Build the storefront, catalog, checkout and store operations as one ${durationLabel(project.duration_months)} MVP package.`;
+  }
+  if (/SaaS/i.test(type)) {
+    return `Build workspaces, core workflows, subscription billing and platform administration as one ${durationLabel(project.duration_months)} MVP package.`;
+  }
+  if (/TMS/i.test(type)) {
+    return `Build transport orders, dispatch, fleet, tracking and settlement workflows as one ${durationLabel(project.duration_months)} MVP package.`;
+  }
+  if (/ERP/i.test(type)) {
+    return `Build procurement, inventory, finance and operational controls as one ${durationLabel(project.duration_months)} MVP package.`;
+  }
+  if (/CRM/i.test(type)) {
+    return `Build leads, pipeline, client operations and sales reporting as one ${durationLabel(project.duration_months)} MVP package.`;
+  }
+  if (/Web product/i.test(type)) {
+    return `Build the responsive website, CMS, conversion forms, SEO and analytics as one ${durationLabel(project.duration_months)} MVP package.`;
+  }
   if (/Mobile/i.test(type)) {
     return `Build mobile product, backend API, admin workspace and release pipeline as one ${durationLabel(project.duration_months)} MVP package.`;
   }
@@ -4817,7 +4854,7 @@ function deliveryDecisionText(project = {}) {
 function platformHint(label = "") {
   if (/admin/i.test(label)) return "management and moderation workspace";
   if (/mobile|app/i.test(label)) return "customer-facing mobile scenarios";
-  if (/website|web/i.test(label)) return "public storefront and product pages";
+  if (/website|web/i.test(label)) return "public content and conversion pages";
   if (/api/i.test(label)) return "backend service and integrations";
   if (/telegram|bot/i.test(label)) return "messaging automation";
   return "project system component";
@@ -4849,8 +4886,8 @@ function goalResultForItem(item = "", epic = "") {
   if (/reconciliation|finance|gmv|export/i.test(text)) return "Finance team can compare transactions, cashback accrual and payouts";
   if (/marketplace/i.test(text)) return "Buyer and seller flow ready for MVP launch";
   if (/admin|analytics|dashboard/i.test(text)) return "Management, moderation and reporting available in admin workspace";
-  if (/mobile|app/i.test(text)) return "Mobile user scenarios available for iOS/Android scope";
-  if (/website|site|web/i.test(text)) return "Public web presence and storefront flow available";
+  if (/mobile|\bapp\b/i.test(text)) return "Mobile user scenarios available for iOS/Android scope";
+  if (/website|\bsite\b|\bweb\b/i.test(text)) return "Public web presence and conversion flow available";
   if (/payment|payme|click/i.test(text)) return "Payment flow integrated and ready for test transactions";
   return "Functional block delivered and accepted in sprint demo";
 }
@@ -5515,6 +5552,7 @@ function expandedTaskRows(project = {}) {
     task: item.task || taskForScopeItem(item.subtask || item.epic || ""),
     subtask: item.subtask || item.task || item.epic || "Implementation task",
   }));
+  const type = projectType(project);
   const templates = [];
   const has = (pattern) => scopeItems.some((item) => pattern.test(`${item.epic} ${item.task} ${item.subtask}`));
   const isCashbackProduct = has(/cashback|loyalty|bonus|reward|wallet|merchant|partner|payout|reconciliation|fraud|duplicate/i);
@@ -5538,30 +5576,37 @@ function expandedTaskRows(project = {}) {
       ["Integrations", "Notifications", "SMS OTP, push alerts and campaign messages"],
     );
   }
-  if (has(/marketplace|core product|shop|store/i)) {
+  if (/Marketplace/i.test(type)) {
     templates.push(
       ["Core product", "Marketplace catalog", "Categories, listings and product cards"],
       ["Core product", "Buyer flow", "Browse, select and request/order flow"],
       ["Core product", "Seller flow", "Seller workspace and item publishing"],
     );
   }
-  if (has(/website|web/i)) {
+  if (/E-commerce/i.test(type)) {
     templates.push(
-      ["Core product", "Public web experience", "Landing, catalog and SEO pages"],
+      ["Storefront", "Store catalog", "Categories, products, variants and availability"],
+      ["Customer journey", "Checkout flow", "Cart, delivery, payment and confirmation"],
+      ["Store operations", "Order management", "Fulfilment, returns and customer support"],
+    );
+  }
+  if (/Web product/i.test(type) || has(/website|public\s+web|\bweb\b/i)) {
+    templates.push(
+      ["Core product", "Public web experience", "Responsive content and conversion pages"],
       ["Core product", "Responsive layout", "Desktop and mobile web states"],
     );
   }
   if (has(/admin|analytics|dashboard/i)) {
     templates.push(
       ["Admin & analytics", "Management workspace", "Admin panel navigation and permissions"],
-      ["Admin & analytics", "Moderation tools", "Users, listings and content control"],
+      ["Admin & analytics", "Access and configuration", "Users, roles, policies and reference data"],
       ["Admin & analytics", "Reporting dashboard", "Operational metrics and exports"],
     );
   }
-  if (has(/mobile|app|ios|android/i)) {
+  if (/Mobile product/i.test(type) || has(/mobile|\bapp\b|\bios\b|\bandroid\b/i)) {
     templates.push(
       ["Mobile", "Mobile onboarding", "Auth, profile and first-run flow"],
-      ["Mobile", "Mobile marketplace", "Browse, search and item details"],
+      ["Mobile", "Core mobile journey", "Home, discovery and primary user actions"],
       ["Mobile", "Mobile notifications", "Push/events and status updates"],
     );
   }

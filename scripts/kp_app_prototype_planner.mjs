@@ -185,6 +185,10 @@ export function buildAppPrototypeSpec({
   let screens;
   if (productFamily === "ecommerce") screens = ecommerceScreens(context);
   else if (productFamily === "erp") screens = erpScreens(context);
+  else if (productFamily === "tms") screens = tmsScreens(context);
+  else if (productFamily === "saas") screens = saasScreens(context);
+  else if (productFamily === "mobile-app") screens = mobileAppScreens(context);
+  else if (productFamily === "website") screens = websiteScreens(context);
   else if (productFamily === "marketplace") screens = marketplaceScreens(context);
   else if (productFamily === "fintech") screens = fintechScreens(context);
   else if (productFamily === "crm") screens = crmScreens(context);
@@ -416,6 +420,215 @@ function erpScreens(context) {
     ["integrations", "settings", "Интеграции", "Банк, бухгалтерия, ЭДО и внешние системы", "admin"],
     ["audit_log", "history", "Журнал аудита", "Документы, проводки и критичные изменения", "admin"],
     ["settings", "settings", t.settings, "Организации, справочники и учётная политика", "admin"],
+  ]);
+}
+
+function tmsScreens(context) {
+  const { t } = context;
+  return catalogScreens(context, [
+    ...sharedScreenDefinitions(t, "operator"),
+    ["dashboard", "dashboard", t.dashboard, "Рейсы, транспорт, SLA и операционные отклонения", "operator"],
+    ["activity_feed", "history", "Операционная лента", "Последние назначения, статусы и исключения", "operator"],
+    ["quick_create", "form", "Быстрое создание", "Заказ, рейс, маршрут или инцидент", "operator"],
+    ["transport_orders", "list", "Транспортные заказы", "Заявки на перевозку и приоритет исполнения", "operator"],
+    ["transport_order_create", "form", "Новый транспортный заказ", "Груз, точки, сроки и требования", "operator"],
+    ["transport_order_details", "details", "Карточка транспортного заказа", "Маршрут, груз, клиент и связанные рейсы", "operator"],
+    ["shipments", "list", "Перевозки", "Плановые, активные и завершённые перевозки", "operator"],
+    ["shipment_create", "form", "Новая перевозка", "Заказ, транспорт, водитель и временные окна", "operator"],
+    ["shipment_details", "details", "Карточка перевозки", "Точки, статусы, документы и расходы", "operator"],
+    ["shipment_status", "stepper", "Статус перевозки", "Подача, погрузка, маршрут и доставка", "operator"],
+    ["shipment_tracking", "tracking", "Мониторинг перевозки", "Положение транспорта и прогноз прибытия", "operator"],
+    ["dispatch_board", "list", "Диспетчерская", "Распределение заказов по рейсам и ресурсам", "operator"],
+    ["dispatch_assignment", "form", "Назначение рейса", "Транспорт, водитель, маршрут и смена", "operator"],
+    ["routes", "list", "Маршруты", "Шаблоны и активные маршруты перевозок", "operator"],
+    ["route_plan", "stepper", "Планирование маршрута", "Точки, ограничения, расстояние и ETA", "operator"],
+    ["route_map", "details", "Карта маршрута", "Текущая позиция, остановки и отклонения", "operator"],
+    ["fleet", "list", "Автопарк", "Доступность, загрузка и техническое состояние", "operator"],
+    ["vehicle_details", "details", "Карточка транспорта", "Параметры, пробег, документы и рейсы", "operator"],
+    ["maintenance_schedule", "history", "График обслуживания", "ТО, ремонты и сроки допуска", "operator"],
+    ["drivers", "list", "Водители", "Доступность, категории и текущие назначения", "operator"],
+    ["driver_details", "details", "Карточка водителя", "Документы, рейтинг, смены и рейсы", "operator"],
+    ["driver_schedule", "history", "График водителей", "Смены, отдых и доступные интервалы", "operator"],
+    ["loads", "list", "Грузы", "Состав, параметры и требования к перевозке", "operator"],
+    ["load_details", "details", "Карточка груза", "Места, вес, температура и ограничения", "operator"],
+    ["warehouses", "list", "Склады и терминалы", "Точки погрузки, разгрузки и контакты", "operator"],
+    ["dock_schedule", "history", "Расписание ворот", "Окна погрузки и занятость терминала", "operator"],
+    ["transport_documents", "list", "Документы перевозки", "Накладные, путевые листы и акты", "operator"],
+    ["waybill", "details", "Транспортная накладная", "Участники, груз, маршрут и подписи", "operator"],
+    ["proof_of_delivery", "form", "Подтверждение доставки", "Фото, подпись, время и замечания", "operator"],
+    ["rate_calculator", "form", "Расчёт тарифа", "Маршрут, транспорт, груз и дополнительные услуги", "operator"],
+    ["invoices", "list", "Счета", "Начисления клиентам и статусы оплаты", "operator"],
+    ["invoice_details", "details", "Карточка счёта", "Рейсы, тарифы, корректировки и оплата", "operator"],
+    ["carrier_settlements", "history", "Расчёты с перевозчиками", "Начисления, удержания и выплаты", "operator"],
+    ["incidents", "list", "Инциденты", "Опоздания, поломки и нарушения условий", "operator"],
+    ["claims", "list", "Претензии", "Ущерб, документы и урегулирование", "operator"],
+    ["clients", "list", t.clients, "Грузоотправители, получатели и договоры", "operator"],
+    ["client_details", "details", "Карточка клиента", "Контакты, тарифы, SLA и история перевозок", "operator"],
+    ["reports", "analytics", t.reports, "Сводные показатели транспортной логистики", "admin"],
+    ["delivery_report", "analytics", "Отчёт по доставкам", "Сроки, SLA и причины отклонений", "admin"],
+    ["fleet_report", "analytics", "Отчёт по автопарку", "Пробег, загрузка, простои и обслуживание", "admin"],
+    ["profitability_report", "analytics", "Рентабельность рейсов", "Выручка, расходы и маржинальность", "admin"],
+    ["integrations", "settings", "Интеграции", "GPS, карты, ЭДО, ERP и бухгалтерия", "admin"],
+    ["roles", "settings", "Роли", "Диспетчеры, логисты, водители и бухгалтерия", "admin"],
+    ["permissions", "settings", "Права доступа", "Матрица действий по филиалам и операциям", "admin"],
+    ["audit_log", "history", "Журнал аудита", "Изменения маршрутов, тарифов и документов", "admin"],
+    ["settings", "settings", t.settings, "Транспорт, статусы, тарифы и правила SLA", "admin"],
+  ]);
+}
+
+function saasScreens(context) {
+  const { t } = context;
+  return catalogScreens(context, [
+    ...sharedScreenDefinitions(t),
+    ["dashboard", "dashboard", t.dashboard, "Активность, задачи, использование и быстрые действия"],
+    ["activity_feed", "history", "Лента активности", "Изменения данных и действия команды"],
+    ["quick_create", "form", "Быстрое создание", "Проект, запись, задача или автоматизация"],
+    ["workspaces", "list", "Рабочие пространства", "Доступные пространства и последние обновления"],
+    ["workspace_create", "form", "Новое пространство", "Название, шаблон и режим доступа"],
+    ["workspace_details", "details", "Настройки пространства", "Участники, модули и параметры"],
+    ["workspace_members", "list", "Участники пространства", "Роли, приглашения и статус доступа"],
+    ["projects", "list", "Проекты", "Активные проекты, владельцы и прогресс"],
+    ["project_create", "form", "Новый проект", "Название, шаблон, сроки и команда"],
+    ["project_details", "details", "Карточка проекта", "Статус, участники и связанные записи"],
+    ["records", "list", "Записи", "Рабочие объекты выбранного проекта"],
+    ["record_filters", "form", "Фильтры записей", "Статус, владелец, период и метки"],
+    ["record_create", "form", "Новая запись", "Основные поля, связи и ответственный"],
+    ["record_details", "details", "Карточка записи", "Данные, обсуждение и связанные задачи"],
+    ["record_history", "history", "История записи", "Изменения полей и действия участников"],
+    ["tasks", "list", t.tasks, "Личные и командные задачи"],
+    ["task_details", "details", "Карточка задачи", "Срок, исполнитель, чек-лист и обсуждение"],
+    ["task_create", "form", "Новая задача", "Проект, приоритет, срок и исполнитель"],
+    ["calendar", "history", "Календарь", "Задачи, события и контрольные даты"],
+    ["automations", "list", "Автоматизации", "Активные правила и состояние запусков"],
+    ["automation_create", "form", "Новая автоматизация", "Триггер, условия и последовательность действий"],
+    ["automation_details", "details", "Сценарий автоматизации", "Логика, версия и связанные объекты"],
+    ["automation_runs", "history", "История запусков", "Результаты, ошибки и время выполнения"],
+    ["templates", "list", "Шаблоны", "Готовые структуры проектов и процессов"],
+    ["template_details", "details", "Карточка шаблона", "Состав, автор и параметры применения"],
+    ["files", "list", "Файлы", "Документы команды, версии и общий доступ"],
+    ["reports", "analytics", t.reports, "Показатели проектов и процессов"],
+    ["report_details", "analytics", "Детали отчёта", "Фильтры, разрезы и динамика"],
+    ["team", "profile", "Команда", "Участники, нагрузка и статус доступа", "admin"],
+    ["invite_member", "form", "Пригласить участника", "Почта, роль и рабочие пространства", "admin"],
+    ["member_details", "profile", "Профиль участника", "Роль, команды, активность и сессии", "admin"],
+    ["roles", "settings", "Роли", "Наборы полномочий для участников", "admin"],
+    ["permissions", "settings", "Права доступа", "Матрица модулей и действий", "admin"],
+    ["billing_overview", "dashboard", "Подписка и оплата", "Тариф, баланс, использование и следующий платёж", "admin"],
+    ["plans", "list", "Тарифные планы", "Лимиты, функции и стоимость подписки", "admin"],
+    ["subscription_checkout", "checkout", "Оформление подписки", "План, период, реквизиты и итог", "admin"],
+    ["payment_methods", "list", "Способы оплаты", "Карты и платёжные реквизиты организации", "admin"],
+    ["invoices", "list", "Счета", "История начислений и статусы оплаты", "admin"],
+    ["invoice_details", "details", "Детали счёта", "Период, позиции, налоги и документы", "admin"],
+    ["usage", "analytics", "Использование", "Пользователи, хранилище, автоматизации и API", "admin"],
+    ["api_keys", "settings", "API-ключи", "Ключи доступа, области и срок действия", "admin"],
+    ["webhooks", "settings", "Вебхуки", "События, адреса и история доставки", "admin"],
+    ["integrations", "settings", "Интеграции", "Подключённые сервисы и каталог приложений", "admin"],
+    ["audit_log", "history", "Журнал аудита", "Входы, права и критичные изменения", "admin"],
+    ["settings", "settings", t.settings, "Организация, локаль, данные и политики", "admin"],
+  ]);
+}
+
+function mobileAppScreens(context) {
+  const { t } = context;
+  return catalogScreens(context, [
+    ...sharedScreenDefinitions(t),
+    ["home", "dashboard", t.home, "Персональная сводка и основные действия"],
+    ["feed", "list", "Лента", "Актуальные материалы и обновления"],
+    ["discover", "product_grid", "Обзор", "Рекомендации и тематические подборки"],
+    ["categories", "product_grid", "Категории", "Навигация по разделам приложения"],
+    ["content_details", "details", "Карточка материала", "Содержание, метаданные и доступные действия"],
+    ["favorites", "list", "Избранное", "Сохранённые материалы и записи"],
+    ["recent", "history", "Недавнее", "Последние просмотры и действия"],
+    ["collections", "list", "Подборки", "Личные и рекомендованные коллекции"],
+    ["collection_details", "details", "Карточка подборки", "Состав, автор и обновления"],
+    ["create_entry", "form", "Новая запись", "Данные, категория и вложения"],
+    ["entry_details", "details", "Карточка записи", "Содержимое, статус и история"],
+    ["edit_entry", "form", "Редактирование записи", "Поля, вложения и видимость"],
+    ["submit_review", "checkout", "Проверка перед отправкой", "Итоговые данные и согласия"],
+    ["submit_success", "success", "Запись отправлена", "Результат сохранён и доступен в истории"],
+    ["inbox", "list", "Сообщения", "Диалоги и непрочитанные сообщения"],
+    ["conversation", "details", "Диалог", "Переписка, вложения и статус доставки"],
+    ["media_library", "product_grid", "Медиатека", "Фото, видео и документы пользователя"],
+    ["media_upload", "form", "Загрузка файла", "Источник, предпросмотр и параметры"],
+    ["scanner", "form", "Сканер", "Камера, распознавание и подтверждение результата"],
+    ["location_picker", "form", "Выбор местоположения", "Адрес, точка на карте и комментарий"],
+    ["map", "details", "Карта", "Объекты рядом, маршрут и выбранная точка"],
+    ["downloads", "list", "Загрузки", "Материалы, доступные без интернета"],
+    ["offline_state", "empty_state", "Нет подключения", "Доступные офлайн-данные и повторная синхронизация"],
+    ["sync_status", "stepper", "Синхронизация", "Очередь изменений и состояние передачи"],
+    ["app_permissions", "settings", "Разрешения приложения", "Камера, геолокация, уведомления и файлы"],
+    ["connected_devices", "list", "Устройства", "Активные сессии и доверенные устройства"],
+    ["appearance", "settings", "Оформление", "Тема, размер текста и отображение"],
+    ["privacy", "settings", "Конфиденциальность", "Видимость данных и персональные согласия"],
+    ["help", "list", "Помощь", "Ответы на вопросы и инструкции"],
+    ["support_ticket", "form", "Обращение в поддержку", "Тема, описание и вложения"],
+    ["feedback", "form", "Обратная связь", "Оценка приложения и комментарий"],
+    ["update_required", "error_state", "Нужно обновление", "Переход к поддерживаемой версии приложения"],
+    ["connection_error", "error_state", "Ошибка соединения", "Повтор запроса и сохранение введённых данных"],
+    ["admin_dashboard", "dashboard", "Управление приложением", "Аудитория, активность и стабильность", "admin"],
+    ["admin_content", "list", "Управление контентом", "Материалы, категории и публикация", "admin"],
+    ["admin_content_create", "form", "Новый материал", "Контент, аудитория и время публикации", "admin"],
+    ["admin_users", "list", "Пользователи", "Статусы, сегменты и ограничения", "admin"],
+    ["admin_user_details", "details", "Карточка пользователя", "Профиль, устройства и активность", "admin"],
+    ["admin_analytics", "analytics", "Аналитика приложения", "Активация, удержание и ключевые действия", "admin"],
+    ["push_campaigns", "list", "Push-кампании", "Аудитории, расписание и результаты", "admin"],
+    ["push_campaign_create", "form", "Новая push-кампания", "Сообщение, сегмент и время отправки", "admin"],
+    ["feature_flags", "settings", "Управление функциями", "Релизы, аудитории и аварийное отключение", "admin"],
+    ["app_versions", "history", "Версии приложения", "Релизы, обязательность и доля установки", "admin"],
+    ["admin_settings", "settings", t.settings, "Контент, версии, интеграции и политики", "admin"],
+  ]);
+}
+
+function websiteScreens(context) {
+  const { t } = context;
+  return catalogScreens(context, [
+    ...sharedScreenDefinitions(t),
+    ["home", "dashboard", t.home, "Главная страница с ключевым предложением и разделами"],
+    ["about", "details", "О компании", "История, компетенции и факты о компании"],
+    ["services", "list", "Услуги", "Каталог направлений и форматов работы"],
+    ["service_details", "details", "Страница услуги", "Результат, процесс и связанные кейсы"],
+    ["solutions", "list", "Решения", "Предложения по задачам и отраслям"],
+    ["solution_details", "details", "Страница решения", "Сценарии, преимущества и состав"],
+    ["case_studies", "product_grid", "Кейсы", "Проекты, отрасли и достигнутые результаты"],
+    ["case_details", "details", "Страница кейса", "Задача, решение, процесс и показатели"],
+    ["pricing", "list", "Тарифы", "Пакеты, состав и условия подключения"],
+    ["faq", "list", "Вопросы и ответы", "Условия, процесс и частые уточнения"],
+    ["blog", "product_grid", "Блог", "Статьи, новости и тематические подборки"],
+    ["article", "details", "Статья", "Материал, автор, дата и связанные публикации"],
+    ["authors", "list", "Авторы", "Эксперты и опубликованные материалы"],
+    ["contacts", "details", "Контакты", "Офисы, реквизиты и каналы связи"],
+    ["contact_form", "form", "Связаться с нами", "Контакты, тема и сообщение"],
+    ["contact_success", "success", "Сообщение отправлено", "Подтверждение и ожидаемый срок ответа"],
+    ["careers", "details", "Карьера", "Команда, культура и процесс найма"],
+    ["jobs", "list", "Вакансии", "Открытые позиции, направления и локации"],
+    ["job_details", "details", "Страница вакансии", "Задачи, требования и условия"],
+    ["job_application", "form", "Отклик на вакансию", "Контакты, резюме и сопроводительное письмо"],
+    ["job_application_success", "success", "Отклик отправлен", "Подтверждение получения заявки"],
+    ["partners", "list", "Партнёры", "Технологические и бизнес-партнёры"],
+    ["events", "list", "События", "Предстоящие вебинары и мероприятия"],
+    ["event_details", "details", "Страница события", "Программа, спикеры и регистрация"],
+    ["newsletter", "form", "Подписка на новости", "Почта, темы и согласие на рассылку"],
+    ["newsletter_success", "success", "Подписка оформлена", "Подтверждение адреса и выбранных тем"],
+    ["privacy_policy", "details", "Политика конфиденциальности", "Обработка данных и права пользователя"],
+    ["terms", "details", "Условия использования", "Правила доступа и ответственность сторон"],
+    ["cookies", "settings", "Настройки cookie", "Обязательные, аналитические и маркетинговые cookie"],
+    ["not_found", "empty_state", "Страница не найдена", "Навигация к основным разделам сайта"],
+    ["maintenance", "error_state", "Технические работы", "Статус обслуживания и время восстановления"],
+    ["cms_dashboard", "dashboard", "Панель сайта", "Публикации, формы, трафик и задачи", "admin"],
+    ["cms_pages", "list", "Страницы", "Структура, статусы и даты публикации", "admin"],
+    ["cms_page_create", "form", "Новая страница", "Шаблон, адрес, заголовок и доступ", "admin"],
+    ["cms_page_editor", "form", "Редактор страницы", "Секции, контент, предпросмотр и публикация", "admin"],
+    ["cms_media", "product_grid", "Медиатека сайта", "Изображения, видео, документы и метаданные", "admin"],
+    ["cms_navigation", "settings", "Навигация", "Меню, вложенность и служебные ссылки", "admin"],
+    ["cms_forms", "list", "Формы", "Поля, маршрутизация и уведомления", "admin"],
+    ["cms_submissions", "list", "Заявки с сайта", "Обращения, отклики и подписки", "admin"],
+    ["cms_seo", "settings", "SEO", "Метаданные, индексация и карта сайта", "admin"],
+    ["cms_redirects", "list", "Перенаправления", "Исходные адреса, назначения и статусы", "admin"],
+    ["cms_localization", "settings", "Локализация", "Языки, переводы и готовность страниц", "admin"],
+    ["cms_users", "list", "Редакторы", "Роли, доступ и последние изменения", "admin"],
+    ["cms_analytics", "analytics", "Аналитика сайта", "Источники, страницы, конверсии и формы", "admin"],
+    ["cms_integrations", "settings", "Интеграции сайта", "CRM, аналитика, рассылки и карты", "admin"],
+    ["cms_settings", "settings", t.settings, "Домен, локали, SEO и публикация", "admin"],
   ]);
 }
 
@@ -1095,10 +1308,15 @@ function resolveRoles(semanticModel, productFamily, t) {
     const admin = roles.find((role) => role.kind === "admin") || { id: "admin", title: t.admin, kind: "admin" };
     return dedupeRoles([buyer, admin]);
   }
-  if (productFamily === "erp") {
+  if (["erp", "tms"].includes(productFamily)) {
     const operator = roles.find((role) => role.kind === "operator") || { id: "operator", title: t.operator, kind: "operator" };
     const admin = roles.find((role) => role.kind === "admin") || { id: "admin", title: t.admin, kind: "admin" };
     return dedupeRoles([operator, admin]);
+  }
+  if (["saas", "mobile-app", "website"].includes(productFamily)) {
+    const user = roles.find((role) => role.kind === "buyer") || { id: "user", title: t.customer, kind: "buyer" };
+    const admin = roles.find((role) => role.kind === "admin") || { id: "admin", title: t.admin, kind: "admin" };
+    return dedupeRoles([user, admin]);
   }
   if (roles.length) return roles;
   if (productFamily === "crm") return [{ id: "operator", title: t.operator, kind: "operator" }, { id: "admin", title: t.admin, kind: "admin" }];
@@ -1124,15 +1342,23 @@ function detectProductFamily(proposalModel, semanticModel) {
     type: proposalModel.brief?.type,
   });
   if (/\berp\b|enterprise\s+resource\s+planning|procurement|inventory|warehouse|планировани[ея]\s+ресурс/i.test(declaredText)) return "erp";
+  if (/\btms\b|transport\s+management|fleet\s+management|управлени[ея]\s+транспорт/i.test(declaredText)) return "tms";
+  if (/\bsaas\b|software\s+as\s+a\s+service|subscription\s+platform/i.test(declaredText)) return "saas";
   if (/e-?commerce|online\s+store|internet\s+shop|интернет.?магазин|онлайн.?магазин/i.test(declaredText)) return "ecommerce";
   if (/marketplace|маркетплейс|маркет плейс/i.test(declaredText)) return "marketplace";
   if (/\bcrm\b|sales crm|crm[- ]?систем|система управления клиент/i.test(declaredText)) return "crm";
+  if (/mobile\s+app|mobile\s+application|ios|android|мобильн\p{L}*\s+приложен/iu.test(declaredText)) return "mobile-app";
+  if (/website|web\s*site|веб[- ]?сайт|вебсайт/i.test(declaredText)) return "website";
   if (/bnpl|fintech|finance|bank|loan|installment|рассроч|кредит|скоринг/i.test(declaredText)) return "fintech";
   const text = searchableText(semanticModel, proposalModel);
   if (/\berp\b|enterprise\s+resource\s+planning|procurement|purchase order|inventory|warehouse|закуп|склад|запас/i.test(text)) return "erp";
+  if (/\btms\b|transport\s+management|fleet|shipment|dispatch|logistic|маршрут|автопарк/i.test(text)) return "tms";
+  if (/\bsaas\b|software\s+as\s+a\s+service|subscription\s+platform|multi[- ]?tenant/i.test(text)) return "saas";
   if (/e-?commerce|online\s+store|internet\s+shop|интернет.?магазин|онлайн.?магазин/i.test(text)) return "ecommerce";
   if (/marketplace|маркетплейс|маркет плейс|seller|merchant|vendor|продавц/i.test(text)) return "marketplace";
   if (/\bcrm\b|lead|pipeline|sales|воронк|лид|сделк|client management/i.test(text)) return "crm";
+  if (/mobile\s+app|mobile\s+application|ios|android|мобильн\p{L}*\s+приложен/iu.test(text)) return "mobile-app";
+  if (/website|web\s*site|веб[- ]?сайт|вебсайт/i.test(text)) return "website";
   if (/bnpl|fintech|finance|bank|loan|installment|рассроч|кредит|оплат|скоринг|limit/i.test(text)) return "fintech";
   return "business-app";
 }
@@ -1144,11 +1370,16 @@ function extractDeclaredProductType(proposalModel = {}) {
 }
 
 function productFamilyForDeclaredType(value = "") {
-  const normalized = String(value).toLowerCase();
+  const normalized = String(value).trim().toLowerCase();
   if (/\berp\b|enterprise\s+resource\s+planning|планировани[ея]\s+ресурс/.test(normalized)) return "erp";
+  if (/\btms\b|transport\s+management|fleet\s+management|управлени[ея]\s+транспорт/.test(normalized)) return "tms";
   if (/\bcrm\b|customer\s+relationship|управлени[ея]\s+клиент/.test(normalized)) return "crm";
+  if (/\bsaas\b|software\s+as\s+a\s+service/.test(normalized)) return "saas";
   if (/marketplace|маркетплейс|маркет\s+плейс/.test(normalized)) return "marketplace";
   if (/e-?commerce|online\s+store|internet\s+shop|интернет.?магазин|онлайн.?магазин/.test(normalized)) return "ecommerce";
+  if (/mobile\s+product|mobile\s+app|mobile\s+application|ios|android|мобильн\p{L}*\s+приложен/u.test(normalized)) return "mobile-app";
+  if (/^web\s+product$|^website$|^web\s*site$|веб[- ]?сайт|вебсайт/.test(normalized)) return "website";
+  if (/custom\s+software\s+product|^other$|^другое$|^бошқа$|^boshqa$/.test(normalized)) return "business-app";
   if (/bnpl|fintech|finance|bank|loan|installment|рассроч|кредит|скоринг/.test(normalized)) return "fintech";
   return "";
 }

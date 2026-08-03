@@ -904,6 +904,58 @@ assert.ok(erpPrototypeSpec.screens.some((screen) => screen.id === "inventory"));
 assert.ok(erpPrototypeSpec.screens.some((screen) => screen.id === "finance_dashboard"));
 assert.equal(erpPrototypeSpec.screens.some((screen) => screen.id === "pipeline"), false);
 
+const explicitProjectTypeCases = [
+  { declaredType: "CRM", category: "CRM / operations platform", family: "crm", pack: "crm", screen: "pipeline", forbidden: "purchase_orders" },
+  { declaredType: "ERP", category: "ERP / operations platform", family: "erp", pack: "erp", screen: "purchase_orders", forbidden: "pipeline" },
+  { declaredType: "Marketplace", category: "Marketplace product", family: "marketplace", pack: "marketplace", screen: "seller_workspace", forbidden: "admin_catalog" },
+  { declaredType: "SaaS", category: "SaaS product", family: "saas", pack: "saas", screen: "subscription_checkout", forbidden: "pipeline" },
+  { declaredType: "E-commerce", category: "E-commerce product", family: "ecommerce", pack: "ecommerce", screen: "admin_catalog", forbidden: "seller_workspace" },
+  { declaredType: "Mobile App", category: "Mobile product", family: "mobile-app", pack: "mobile-app", screen: "app_permissions", forbidden: "pipeline" },
+  { declaredType: "Website", category: "Web product", family: "website", pack: "website", screen: "cms_pages", forbidden: "pipeline" },
+  { declaredType: "Other", category: "Custom software product", family: "business-app", pack: null, screen: "workspace", forbidden: "pipeline" },
+  { declaredType: "TMS", category: "TMS / logistics platform", family: "tms", pack: "tms", screen: "dispatch_board", forbidden: "pipeline" },
+];
+
+for (const [index, projectTypeCase] of explicitProjectTypeCases.entries()) {
+  const prompt = `Составь коммерческое предложение (КП) для клиента на основе данных сделки.
+Сделка: Сайфулло
+Компания: Udevs
+Сайт компании: https://udevs.io/
+Бюджет: 123 USD
+Тип проекта: ${projectTypeCase.declaredType}`;
+  const brief = parseKpBrief(prompt);
+  assert.equal(brief.productCategory.value, projectTypeCase.category, projectTypeCase.declaredType);
+  assert.deepEqual(
+    getDomainResearchPacks(prompt).map((pack) => pack.key),
+    projectTypeCase.pack ? [projectTypeCase.pack] : [],
+    projectTypeCase.declaredType,
+  );
+  const spec = await buildAndValidateAppPrototypeSpec({
+    requestId: `KP-TYPE-MATRIX-${index + 1}`,
+    publicId: `TypeMatrix${index + 1}X`,
+    locale: "ru-RU",
+    proposalModel: {
+      title: "Сайфулло",
+      brief: { projectName: "Сайфулло", type: projectTypeCase.category, prompt: prompt.replace(/\s+/g, " ") },
+    },
+    semanticModel: {
+      project: { name: "Сайфулло", category: "CRM / operations platform" },
+      scopeItems: [{ id: `TYPE-${index + 1}`, feature: "Сделки и клиенты", detail: "Управление процессом" }],
+      actors: [],
+    },
+  });
+  assert.equal(spec.project.type, projectTypeCase.family, projectTypeCase.declaredType);
+  assert.ok(spec.screens.length >= 48 && spec.screens.length <= 60, projectTypeCase.declaredType);
+  assert.ok(spec.screens.some((screen) => screen.id === projectTypeCase.screen), projectTypeCase.declaredType);
+  assert.equal(spec.screens.some((screen) => screen.id === projectTypeCase.forbidden), false, projectTypeCase.declaredType);
+  assert.equal(
+    new Set(spec.navigation.flatMap((group) => group.screenIds)).size,
+    spec.screens.length,
+    projectTypeCase.declaredType,
+  );
+  assert.ok(renderAppPrototypeHtml(spec).includes(`data-screen="${projectTypeCase.screen}"`), projectTypeCase.declaredType);
+}
+
 const crmPrototypeSpec = await buildAndValidateAppPrototypeSpec({
   requestId: "KP-CRM-PAYMENT-TERMS",
   publicId: "CrmType1234",
