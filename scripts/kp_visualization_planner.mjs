@@ -655,7 +655,14 @@ function buildPendingArchitectureSpec(requestId, reason, components = []) {
 
 export function buildRoadmapWorkstreamSegments(semanticModel = {}, { maxRows = ROADMAP_WORKSTREAM_PAGE_LIMIT } = {}) {
   const pageSize = Math.max(1, Math.floor(Number(maxRows) || ROADMAP_WORKSTREAM_PAGE_LIMIT));
-  const inventory = normalizeDeliveryInventory(buildProductDeliveryInventory(semanticModel));
+  const normalizedInventory = normalizeDeliveryInventory(buildProductDeliveryInventory(semanticModel));
+  // Keep scheduling coordinates global. Continuation pages must not restart
+  // the heuristic at their first row and place later tasks back at the start.
+  const inventory = normalizedInventory.map((row, index) => ({
+    ...row,
+    scheduleIndex: index,
+    scheduleCount: normalizedInventory.length,
+  }));
   if (!inventory.length) return [];
   const segmentCount = Math.max(1, Math.ceil(inventory.length / pageSize));
   const balancedSize = Math.ceil(inventory.length / segmentCount);
@@ -768,7 +775,11 @@ function roadmapWorkstreamTime(row, index, scale) {
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
-  const span = roadmapWorkstreamSpan(text, index);
+  const explicitTime = roadmapWorkstreamExplicitTime(row.deadline || row.phase, scale);
+  if (explicitTime) return explicitTime;
+  const scheduleIndex = Number.isInteger(row.scheduleIndex) ? row.scheduleIndex : index;
+  const scheduleCount = Math.max(1, Number(row.scheduleCount) || 1);
+  const span = roadmapWorkstreamSpan(text, scheduleIndex, scheduleCount);
   const total = scale.end - scale.start + 1;
   const requestedUnits = roadmapWorkstreamEffortUnits(row.deadline || row.phase, scale.unit);
   const requestedDuration = requestedUnits === null ? null : Math.max(1, Math.min(total, requestedUnits));
@@ -784,6 +795,54 @@ function roadmapWorkstreamTime(row, index, scale) {
   return { unit: scale.unit, start, end, derived: true };
 }
 
+function roadmapWorkstreamExplicitTime(value, scale) {
+  const text = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[–—]/gu, "-");
+  if (!text) return null;
+
+  const unitPattern = {
+    month: "months?|mos?|month|mo|месяц(?:ы|а|ев)?|oy",
+    week: "weeks?|wks?|week|wk|нед(?:еля|ели|ель|ели|елях|елю|еле)?|hafta",
+  };
+  let sourceUnit = null;
+  let start = null;
+  let end = null;
+
+  for (const [unit, pattern] of Object.entries(unitPattern)) {
+    const prefix = text.match(new RegExp(`(?:${pattern})\\s*(\\d+)(?:\\s*-\\s*(?:${pattern})?\\s*(\\d+))?`, "iu"));
+    const postfixRange = text.match(new RegExp(`(\\d+)\\s*-\\s*(\\d+)\\s*(?:${pattern})`, "iu"));
+    const compact = text.match(new RegExp(`\\b${unit === "month" ? "m" : "w"}\\s*(\\d+)(?:\\s*-\\s*(?:${unit === "month" ? "m" : "w"}\\s*)?(\\d+))?\\b`, "iu"));
+    const ordinal = text.match(new RegExp(`(\\d+)\\s*-(?:й|я|е|го|ю|ой)\\s*(?:${pattern})`, "iu"));
+    const localizedCompact = unit === "month" ? text.match(/\b(\d+)\s*-\s*oy\b/iu) : null;
+    const match = prefix || postfixRange || compact || ordinal || localizedCompact;
+    if (!match) continue;
+    sourceUnit = unit;
+    start = Number(match[1]);
+    end = Number(match[2] || match[1]);
+    break;
+  }
+  if (!sourceUnit || !Number.isFinite(start) || !Number.isFinite(end) || start < 1 || end < start) return null;
+
+  let scaledStart = start;
+  let scaledEnd = end;
+  if (sourceUnit === "month" && scale.unit === "week") {
+    scaledStart = ((start - 1) * 4) + 1;
+    scaledEnd = end * 4;
+  } else if (sourceUnit === "week" && scale.unit === "month") {
+    scaledStart = Math.ceil(start / 4);
+    scaledEnd = Math.ceil(end / 4);
+  }
+  if (scaledEnd < scale.start || scaledStart > scale.end) return null;
+  return {
+    unit: scale.unit,
+    start: Math.max(scale.start, scaledStart),
+    end: Math.min(scale.end, scaledEnd),
+    derived: sourceUnit !== scale.unit,
+  };
+}
+
 function roadmapWorkstreamEffortUnits(value, scaleUnit) {
   const text = String(value || "").trim().toLowerCase();
   const match = text.match(/(\d+(?:[.,]\d+)?)\s*(weeks?|wks?|wk|нед(?:ел\p{L}*)?\.?|hafta|months?|mos?|mo|месяц\p{L}*|oy)/iu);
@@ -795,17 +854,27 @@ function roadmapWorkstreamEffortUnits(value, scaleUnit) {
   return scaleUnit === "week" ? Math.ceil(amount * 4) : Math.max(1, Math.ceil(amount / 4));
 }
 
-function roadmapWorkstreamSpan(text, index) {
+function roadmapWorkstreamSpan(text, index, count) {
+  const progress = count <= 1 ? .5 : index / (count - 1);
   if (/(?:discovery|research|analysis|requirements?|scope|backlog|исследован|анализ|требован|состав|tahlil|talab)/iu.test(text)) return [0, .25];
   if (/(?:\bux\b|\bui\b|design|prototype|wireframe|дизайн|прототип|интерфейс|dizayn)/iu.test(text)) return [0, .5];
   if (/(?:architect|environment|infrastructure|database|архитект|сред[аы]|инфраструктур|баз[аы]\s+данн|arxitektur|muhit)/iu.test(text)) return [0, .25];
-  if (/(?:integration|api|webhook|callback|notification|report|analytics|admin|operation|интеграц|уведом|отч[её]т|аналит|админ|операц|integrats|bildirish|hisobot|boshqaruv)/iu.test(text)) return [.25, .75];
-  if (/(?:\bqa\b|test|security|stabili|regression|bug|тест|безопас|стабилиз|регресс|исправлен|sinov|xavfsiz|mustahkam)/iu.test(text)) return [.5, .9375];
-  if (/(?:\buat\b|launch|release|deploy|production|handover|training|при[её]м|запуск|релиз|передач|обуч|ishga\s+tush|topshirish)/iu.test(text)) return [.75, 1];
-  // Unclassified product functions belong to the core implementation wave.
-  // A tiny deterministic offset prevents every bar from looking identical
-  // while preserving the same bounded implementation window.
-  return index % 2 ? [.125, .75] : [.125, .6875];
+  if (/(?:integration|api|webhook|callback|notification|report|analytics|admin|operation|интеграц|уведом|отч[её]т|аналит|админ|операц|integrats|bildirish|hisobot|boshqaruv)/iu.test(text)) {
+    const start = .25 + (.25 * progress);
+    return [start, Math.min(.85, start + .5)];
+  }
+  if (/(?:\bqa\b|test|security|stabili|regression|bug|тест|безопас|стабилиз|регресс|исправлен|sinov|xavfsiz|mustahkam)/iu.test(text)) {
+    const start = .5 + (.15 * progress);
+    return [start, .9375];
+  }
+  if (/(?:\buat\b|launch|release|deploy|production|handover|training|при[её]м|запуск|релиз|передач|обуч|ishga\s+tush|topshirish)/iu.test(text)) {
+    const start = .72 + (.16 * progress);
+    return [start, 1];
+  }
+  // Core product functions are implemented in deterministic waves instead
+  // of all starting in the same calendar cell.
+  const start = .1 + (.45 * progress);
+  return [start, Math.min(.85, start + .5)];
 }
 
 function buildMilestoneRoadmapSpec({ requestId, phases, converted, dependencies, scale, pageNumber = 18, segmentIndex = 1, segmentCount = 1 }) {

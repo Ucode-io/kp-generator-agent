@@ -750,6 +750,9 @@ assert.deepEqual(
 );
 assert.ok(roadmapSpecs.every((spec) => spec.nodes.filter((node) => node.type === "phase").length === 3));
 assert.ok(roadmapSpecs.every((spec) => spec.nodes.filter((node) => node.type === "task").length <= ROADMAP_WORKSTREAM_PAGE_LIMIT));
+const detailedTaskStarts = roadmapSpecs.flatMap((spec) => spec.nodes.filter((node) => node.type === "task").map((node) => node.time.start));
+assert.ok(new Set(detailedTaskStarts).size >= 3, "Roadmap tasks should be staggered across implementation waves");
+assert.ok(Math.max(...detailedTaskStarts) > Math.min(...detailedTaskStarts));
 const roadmapSpecValidation = await validateVisualizationSpecs({
   specs: roadmapSpecs,
   semanticModel: detailedDeliverySemanticModel,
@@ -762,6 +765,29 @@ const roadmapSpecValidation = await validateVisualizationSpecs({
   },
 });
 assert.equal(roadmapSpecValidation.ok, true, JSON.stringify(roadmapSpecValidation.findings, null, 2));
+
+const explicitlyScheduledRoadmap = {
+  project: { name: "Scheduled product" },
+  scopeItems: [
+    { id: "SCOPE-M1", epic: "Foundation", feature: "Discovery", phase: "Month 1", truthStatus: "recommended" },
+    { id: "SCOPE-M23", epic: "Core", feature: "Implementation", phase: "2–3 месяца", truthStatus: "recommended" },
+    { id: "SCOPE-M3", epic: "Delivery", feature: "Release", phase: "3-й месяц", truthStatus: "recommended" },
+  ],
+  roadmap: detailedDeliverySemanticModel.roadmap,
+};
+const explicitlyScheduledSpec = buildRoadmapSpec({
+  semanticModel: explicitlyScheduledRoadmap,
+  requestId: "UNIT-ROADMAP-EXPLICIT",
+  pageNumber: 30,
+});
+assert.deepEqual(
+  explicitlyScheduledSpec.nodes.filter((node) => node.type === "task").map((node) => node.time),
+  [
+    { unit: "week", start: 1, end: 4, derived: true },
+    { unit: "week", start: 5, end: 12, derived: true },
+    { unit: "week", start: 9, end: 12, derived: true },
+  ],
+);
 
 const detailedMarketplaceProposal = {
   requestId: "KP-BPMN-DENSE",
