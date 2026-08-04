@@ -178,6 +178,7 @@ If `KP_AGENT_API_KEY` is set, send `Authorization: Bearer <key>`.
   "ok": true,
   "requestId": "KP-...",
   "documentPath": "/.../proposal.pdf",
+  "downloadUrl": "/v1/proposals/KP-.../pdf",
   "prototype": {
     "url": "https://kp.udevs.io/p/7QmJv8Kx2A/",
     "path": "/.../final/prototype/index.html",
@@ -190,6 +191,10 @@ If `KP_AGENT_API_KEY` is set, send `Authorization: Bearer <key>`.
   "referenceMode": "explicit_full"
 }
 ```
+
+Use `downloadUrl` for browser downloads. The `html` field is only a preview
+surface; printing the host page around that preview can collapse the deck into
+one page and include UI controls.
 
 Requests are intentionally processed one at a time because Chromium PDF QA is
 CPU/memory intensive and the vendored renderer uses a process-level workspace.

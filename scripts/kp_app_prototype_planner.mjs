@@ -1,9 +1,9 @@
 import { validateKpContract } from "./kp_reference_contracts.mjs";
 
-export const APP_PROTOTYPE_PLANNER_VERSION = "app-prototype-planner-v1";
+export const APP_PROTOTYPE_PLANNER_VERSION = "app-prototype-planner-v2";
 
-const SCREEN_LIMIT = 60;
-const MIN_SCREEN_COUNT = 48;
+const SCREEN_LIMIT = 24;
+const TARGET_SCREEN_RANGE = Object.freeze({ min: 6, preferred: 12, max: 16 });
 const SUPPORTED_LOCALES = new Set(["uz-Latn", "ru-RU", "en"]);
 const SYSTEM_ACTOR_TYPES = new Set(["system_actor", "unknown"]);
 const TECHNICAL_TERMS = /\b(api|database|db|cache|infrastructure|server|backend|devops|ci\/cd|kubernetes)\b/i;
@@ -173,10 +173,12 @@ export function buildAppPrototypeSpec({
   const productFamily = detectProductFamily(packageProposal, packageSemantic);
   const roles = resolveRoles(packageSemantic, productFamily, t);
   const sourceRefs = sourceRefsFor(packageSemantic, packageProposal);
+  const domainModel = buildPrototypeDomainModel(packageSemantic, packageProposal, roles, productFamily, t, sourceRefs);
   const context = {
     t,
     roles,
     productFamily,
+    domainModel,
     semanticModel: packageSemantic,
     proposalModel: packageProposal,
     sourceRefs,
@@ -194,11 +196,11 @@ export function buildAppPrototypeSpec({
   else if (productFamily === "crm") screens = crmScreens(context);
   else screens = businessScreens(context);
 
-  screens = enforceScreenCount(dedupeScreens(screens), context).slice(0, SCREEN_LIMIT);
-  screens = connectScreenActions(screens, context);
+  screens = selectScreensForPrototype(dedupeScreens(screens), context).slice(0, SCREEN_LIMIT);
+  screens = wireScreenActions(screens, context);
 
   return {
-    schemaVersion: "1.0",
+    schemaVersion: "2.0",
     requestId: requestId || packageSemantic.requestId || packageProposal.requestId || "KP-LOCAL",
     publicId,
     locale: safeLocale,
@@ -209,12 +211,13 @@ export function buildAppPrototypeSpec({
     },
     theme: normalizeTheme(visualStyleProfile, themeTokens),
     navigation: buildNavigation(screens, roles, productFamily, t),
+    flows: buildSpecFlows(domainModel, screens),
     screens,
   };
 }
 
 export async function validateAppPrototypeSpec(spec) {
-  const validation = await validateKpContract("appPrototypeSpec", spec, { throwOnError: false });
+  const validation = await validateKpContract(spec?.schemaVersion === "1.0" ? "appPrototypeSpecV1" : "appPrototypeSpec", spec, { throwOnError: false });
   const findings = [...validation.errors.map((error) => ({
     code: "APP_PROTOTYPE_SCHEMA_INVALID",
     severity: "BLOCKER",
@@ -237,14 +240,39 @@ export async function validateAppPrototypeSpec(spec) {
     findings.push({ code: "APP_PROTOTYPE_NAVIGATION_NOT_EXACT", severity: "BLOCKER", message: "Navigation must include each screen exactly once." });
   }
   for (const screen of spec?.screens || []) {
+    if (!screen.intent && spec?.schemaVersion !== "1.0") {
+      findings.push({ code: "APP_PROTOTYPE_SCREEN_WITHOUT_INTENT", severity: "BLOCKER", message: `Screen is missing intent: ${screen.id}` });
+    }
+    if (!(screen.sourceRefs || []).length) {
+      findings.push({ code: "APP_PROTOTYPE_SCREEN_WITHOUT_SOURCE_REF", severity: "BLOCKER", message: `Screen is missing sourceRefs: ${screen.id}` });
+    }
     for (const action of screen.actions || []) {
-      if (!screenSet.has(action.targetScreenId)) {
+      for (const targetScreenId of actionTargetIds(action)) {
+        if (!screenSet.has(targetScreenId)) {
+          findings.push({ code: "APP_PROTOTYPE_ACTION_TARGET_INVALID", severity: "BLOCKER", message: `Action ${screen.id}/${action.id} references unknown screen: ${targetScreenId}` });
+        }
+      }
+      if (!action.type && spec?.schemaVersion !== "1.0") {
+        findings.push({ code: "APP_PROTOTYPE_ACTION_TYPE_MISSING", severity: "BLOCKER", message: `Action ${screen.id}/${action.id} is missing type.` });
+      }
+      if (action.type === "navigate" && !screenSet.has(action.targetScreenId)) {
         findings.push({ code: "APP_PROTOTYPE_ACTION_TARGET_INVALID", severity: "BLOCKER", message: `Action ${screen.id}/${action.id} references unknown screen: ${action.targetScreenId}` });
       }
     }
+    const genericPrimary = hasGenericPrimaryContent(screen);
+    if (genericPrimary) {
+      findings.push({ code: "APP_PROTOTYPE_GENERIC_PRIMARY_CONTENT", severity: "BLOCKER", message: `Screen uses generic primary content: ${screen.id}` });
+    }
+    if ((screen.content?.fields || []).some((field) => field.readonly === true && ["form", "login"].includes(screen.type))) {
+      findings.push({ code: "APP_PROTOTYPE_FORM_NOT_EDITABLE", severity: "BLOCKER", message: `Editable screen contains readonly fields: ${screen.id}` });
+    }
+  }
+  const linearRatio = linearActionRatio(spec?.screens || []);
+  if ((spec?.screens || []).length > 8 && linearRatio > 0.7) {
+    findings.push({ code: "APP_PROTOTYPE_ACTION_GRAPH_LINEARIZED", severity: "BLOCKER", message: `Primary navigate actions follow screen order in ${Math.round(linearRatio * 100)}% of screens.` });
   }
   const contentSignatures = (spec?.screens || []).map((screen) => JSON.stringify({
-    layout: screen.content?.layout,
+    layout: screen.layout || screen.content?.layout,
     metrics: screen.content?.metrics,
     items: screen.content?.items,
     fields: screen.content?.fields,
@@ -273,6 +301,223 @@ export async function validateAppPrototypeSpec(spec) {
     throw error;
   }
   return qa;
+}
+
+function buildPrototypeDomainModel(semanticModel = {}, proposalModel = {}, roles = [], productFamily = "business-app", t = DICTIONARY.en, sourceRefs = []) {
+  const scopeItems = relevantScopeItems(semanticModel, proposalModel);
+  const tasks = (semanticModel.tasks || []).filter((task) => !TECHNICAL_TERMS.test(textOf(task)));
+  const capabilities = (semanticModel.capabilities || []).filter((capability) => !TECHNICAL_TERMS.test(textOf(capability)));
+  const states = (semanticModel.states || []).map((state, index) => ({
+    id: safeId(state.id || state.label || `state_${index + 1}`, `state_${index + 1}`),
+    title: cleanText(state.label || state.id || `${t.status} ${index + 1}`, 80),
+    sourceRefs: uniqueStrings([state.id, ...(state.sourceRefs || [])]).slice(0, 4),
+  }));
+  const integrations = (semanticModel.integrations || []).map((integration, index) => ({
+    id: safeId(integration.id || integration.type || `integration_${index + 1}`, `integration_${index + 1}`),
+    title: cleanText(integration.label || integration.name || integration.type || `Integration ${index + 1}`, 80),
+    type: cleanText(integration.type || "", 48),
+    sourceRefs: uniqueStrings([integration.id, ...(integration.sourceRefs || [])]).slice(0, 4),
+  }));
+  const entities = deriveDomainEntities(scopeItems, tasks, capabilities, productFamily, t);
+  const searchable = searchableText(semanticModel, proposalModel);
+  const hasAuth = /auth|login|profile|role|access|permission|identity|user|пользоват|роль|доступ|парол|kiritish|foydalanuv/i.test(searchable)
+    || roles.length > 1;
+  const hasAdminScope = roles.some((role) => role.kind === "admin")
+    || /admin|administrator|owner|control panel|permissions|roles|audit|админ|администратор|права|роли|аудит|sozlama/i.test(searchable);
+  const hasSellerScope = roles.some((role) => role.kind === "seller")
+    || productFamily === "marketplace"
+    || /seller|merchant|vendor|продав|sotuvchi/i.test(searchable);
+  const hasOperatorScope = roles.some((role) => role.kind === "operator")
+    || ["crm", "erp", "tms"].includes(productFamily)
+    || /operator|support|manager|agent|оператор|менеджер|поддерж/i.test(searchable);
+  const flows = derivePrototypeFlows(semanticModel, scopeItems, tasks, entities, roles, productFamily, sourceRefs, t);
+  return {
+    roles,
+    entities,
+    capabilities: capabilities.map((row, index) => ({
+      id: safeId(row.id || row.feature || row.label || `capability_${index + 1}`, `capability_${index + 1}`),
+      title: cleanText(row.feature || row.label || row.title || row.id || `${t.demo} ${index + 1}`, 80),
+      detail: cleanText(row.detail || row.description || row.epic || row.truthStatus || t.projectDescription, 160),
+      sourceRefs: uniqueStrings([row.id, ...(row.sourceRefs || [])]).slice(0, 4),
+    })),
+    flows,
+    states,
+    integrations,
+    navigationCandidates: [],
+    sourceRefs: uniqueStrings(sourceRefs.length ? sourceRefs : ["DERIVED-APP-PROTOTYPE"]),
+    hasAuth,
+    hasAdminScope,
+    hasSellerScope,
+    hasOperatorScope,
+  };
+}
+
+function deriveDomainEntities(scopeItems = [], tasks = [], capabilities = [], productFamily = "business-app", t = DICTIONARY.en) {
+  const rows = [...scopeItems, ...capabilities, ...tasks].filter((row) => !TECHNICAL_TERMS.test(textOf(row)));
+  const familyFallbacks = {
+    marketplace: [["product", t.product, t.catalog], ["order", t.tracking, t.checkout], ["seller", t.seller, t.workspace]],
+    ecommerce: [["product", t.product, t.catalog], ["order", t.tracking, t.checkout], ["customer", t.customer, t.profile]],
+    crm: [["lead", t.leads, t.pipeline], ["deal", t.pipeline, t.reports], ["client", t.clients, t.history]],
+    erp: [["procurement", "Закупка", "Заявки, заказы и поставщики"], ["inventory", "Запасы", "Склады, остатки и движения"], ["finance", "Финансы", "Счета, платежи и бюджет"]],
+    tms: [["shipment", "Перевозка", "Заказы, рейсы и маршруты"], ["fleet", "Автопарк", "Транспорт, водители и ТО"], ["client", t.clients, "SLA и договоры"]],
+    saas: [["workspace", t.workspace, "Команды, проекты и записи"], ["record", "Запись", "Данные, статусы и история"], ["automation", "Автоматизация", "Триггеры и действия"]],
+    "mobile-app": [["entry", "Запись", "Создание и просмотр данных"], ["content", "Контент", "Лента, подборки и избранное"], ["device", "Устройство", "Разрешения и синхронизация"]],
+    website: [["page", "Страница", "Контент, SEO и публикация"], ["lead", "Заявка", "Форма и обработка обращения"], ["content", "Материал", "Кейсы, блог и события"]],
+    "business-app": [["record", t.workspace, t.projectDescription], ["task", t.tasks, t.history], ["report", t.reports, t.analytics]],
+  };
+  const entityMap = new Map();
+  for (const [index, row] of rows.entries()) {
+    const text = textOf(row);
+    const kind = entityKindFromText(text, productFamily);
+    const title = cleanText(row.feature || row.label || row.task || row.epic || row.id || `${t.demo} ${index + 1}`, 80);
+    const id = safeId(kind || title, `entity_${index + 1}`);
+    const existing = entityMap.get(id);
+    const value = {
+      id,
+      kind: kind || id,
+      title,
+      detail: cleanText(row.detail || row.subtask || row.epic || row.truthStatus || t.projectDescription, 160),
+      sourceRefs: uniqueStrings([row.id, ...(row.sourceRefs || [])]).slice(0, 4),
+    };
+    if (existing) {
+      existing.detail = existing.detail || value.detail;
+      existing.sourceRefs = uniqueStrings([...existing.sourceRefs, ...value.sourceRefs]).slice(0, 4);
+    } else {
+      entityMap.set(id, value);
+    }
+  }
+  if (!entityMap.size) {
+    for (const [id, title, detail] of familyFallbacks[productFamily] || familyFallbacks["business-app"]) {
+      entityMap.set(id, { id, kind: id, title, detail, sourceRefs: ["DERIVED-APP-PROTOTYPE"] });
+    }
+  }
+  return [...entityMap.values()].slice(0, 6);
+}
+
+function derivePrototypeFlows(semanticModel = {}, scopeItems = [], tasks = [], entities = [], roles = [], productFamily = "business-app", sourceRefs = [], t = DICTIONARY.en) {
+  const processes = semanticModel.processes || [];
+  const actorRoleId = roles[0]?.id || "user";
+  const rows = processes.length ? processes : scopeItems.length ? scopeItems.slice(0, 3) : tasks.slice(0, 3);
+  if (!rows.length) {
+    return [{
+      id: "primary-flow",
+      title: primaryFlowTitle(productFamily, t),
+      actorRoleId,
+      entryIntent: "overview",
+      successIntent: "success",
+      steps: [
+        { id: "overview", intent: "Открыть рабочий обзор", entityId: entities[0]?.id || "record" },
+        { id: "details", intent: "Проверить детали", entityId: entities[0]?.id || "record" },
+        { id: "submit", intent: "Сохранить результат", entityId: entities[0]?.id || "record" },
+      ],
+      sourceRefs: uniqueStrings(sourceRefs.length ? sourceRefs : ["DERIVED-APP-PROTOTYPE"]),
+    }];
+  }
+  return rows.slice(0, 3).map((row, index) => {
+    const title = cleanText(row.label || row.feature || row.task || row.epic || row.id || primaryFlowTitle(productFamily, t), 100);
+    const refs = uniqueStrings([row.id, ...(row.sourceRefs || []), ...sourceRefs.slice(0, 1)]).slice(0, 4);
+    const nodeRefs = row.nodeRefs || [];
+    const steps = nodeRefs.length
+      ? nodeRefs.slice(0, 6).map((ref, stepIndex) => ({
+          id: safeId(ref, `step_${stepIndex + 1}`),
+          intent: cleanText(labelForRef(semanticModel, ref) || `${title} · ${stepIndex + 1}`, 120),
+          entityId: entities[stepIndex % Math.max(1, entities.length)]?.id || "record",
+        }))
+      : [
+          { id: "entry", intent: cleanText(title, 120), entityId: entities[0]?.id || "record" },
+          { id: "review", intent: cleanText(row.detail || row.subtask || t.details, 120), entityId: entities[0]?.id || "record" },
+          { id: "outcome", intent: t.success, entityId: entities[0]?.id || "record" },
+        ];
+    return {
+      id: safeId(row.id || title || `flow_${index + 1}`, `flow_${index + 1}`),
+      title,
+      actorRoleId,
+      entryIntent: "overview",
+      successIntent: "success",
+      steps,
+      sourceRefs: refs.length ? refs : ["DERIVED-APP-PROTOTYPE"],
+    };
+  });
+}
+
+function buildSpecFlows(domainModel, screens) {
+  const screenSet = new Set(screens.map((screen) => screen.id));
+  return (domainModel.flows || []).slice(0, 4).map((flow) => {
+    const entryScreenId = firstExistingScreenId(screenSet, familyEntryScreenIds(flow.id), screens[0]?.id);
+    const successScreenIds = screens.filter((screen) => screen.type === "success").map((screen) => screen.id);
+    const specFlow = {
+      id: flow.id,
+      title: flow.title,
+      actorRoleId: flow.actorRoleId,
+      entryScreenId,
+      steps: flow.steps,
+      sourceRefs: flow.sourceRefs,
+    };
+    if (successScreenIds.length) specFlow.successScreenIds = successScreenIds.slice(0, 3);
+    const errorScreenIds = screens.filter((screen) => screen.type === "error_state").map((screen) => screen.id).slice(0, 3);
+    if (errorScreenIds.length) specFlow.errorScreenIds = errorScreenIds;
+    return specFlow;
+  }).filter((flow) => flow.entryScreenId);
+}
+
+function familyEntryScreenIds() {
+  return ["home", "dashboard", "workspace", "catalog", "leads", "records"];
+}
+
+function primaryFlowTitle(productFamily, t) {
+  if (["marketplace", "ecommerce"].includes(productFamily)) return t.checkout;
+  if (productFamily === "crm") return t.pipeline;
+  if (productFamily === "fintech") return t.payment;
+  if (productFamily === "website") return "Заявка с сайта";
+  return t.workspace;
+}
+
+function entityKindFromText(value, productFamily) {
+  const text = String(value || "").toLowerCase();
+  if (/лид|lead/.test(text)) return "lead";
+  if (/сделк|deal|pipeline/.test(text)) return "deal";
+  if (/клиент|client|customer/.test(text)) return "client";
+  if (/товар|product|catalog|каталог|assort/.test(text)) return "product";
+  if (/заказ|order|checkout|delivery|достав/.test(text)) return "order";
+  if (/оплат|payment|invoice|счет|сч[её]т|billing/.test(text)) return "payment";
+  if (/документ|document|file|файл/.test(text)) return "document";
+  if (/заявк|request|application/.test(text)) return "request";
+  if (/склад|inventory|stock|warehouse|запас/.test(text)) return "inventory";
+  if (/закуп|procurement|purchase|supplier/.test(text)) return "procurement";
+  if (/рейс|перевоз|shipment|route|dispatch|fleet|transport/.test(text)) return "shipment";
+  if (/задач|task|calendar/.test(text)) return "task";
+  if (/отчет|report|analytics|аналит/.test(text)) return "report";
+  if (productFamily === "crm") return "lead";
+  if (["marketplace", "ecommerce"].includes(productFamily)) return "product";
+  if (productFamily === "erp") return "procurement";
+  if (productFamily === "tms") return "shipment";
+  return "record";
+}
+
+function actionTargetIds(action = {}) {
+  return uniqueStrings([
+    action.targetScreenId,
+    ...(action.outcomes || []).map((outcome) => outcome.targetScreenId),
+  ]);
+}
+
+function hasGenericPrimaryContent(screen = {}) {
+  const itemTitles = (screen.content?.items || []).slice(0, 3).map((item) => cleanText(item.title, 80).toLowerCase());
+  const fieldLabels = (screen.content?.fields || []).slice(0, 3).map((field) => cleanText(field.label, 80).toLowerCase());
+  const genericItemSet = new Set(["название", "статус", "далее", "title", "status", "next"]);
+  const genericFieldSet = new Set(["описание", "статус", "id", "description", "status"]);
+  return itemTitles.length >= 3 && itemTitles.every((title) => genericItemSet.has(title))
+    || fieldLabels.length >= 3 && fieldLabels.every((label) => genericFieldSet.has(label));
+}
+
+function linearActionRatio(screens = []) {
+  const checked = [];
+  for (const [index, screen] of screens.entries()) {
+    const action = (screen.actions || []).find((row) => ["navigate", undefined].includes(row.type) && row.targetScreenId);
+    if (!action) continue;
+    checked.push(action.targetScreenId === (screens[index + 1]?.id || screens[0]?.id));
+  }
+  return checked.length ? checked.filter(Boolean).length / checked.length : 0;
 }
 
 function marketplaceScreens(context) {
@@ -729,51 +974,29 @@ function crmScreens(context) {
 }
 
 function businessScreens(context) {
-  const { t } = context;
-  return catalogScreens(context, [
-    ...sharedScreenDefinitions(t),
-    ["dashboard", "dashboard", t.dashboard, "Главные показатели и действия"],
-    ["activity_feed", "history", "Лента активности", "Последние события и изменения"],
-    ["quick_create", "form", "Быстрое создание", "Новая запись или задача"],
-    ["workspace", "list", t.workspace, "Ежедневный рабочий список"],
-    ["workspace_filters", "form", "Фильтры", "Статус, ответственный и период"],
-    ["workspace_empty", "empty_state", "Нет записей", "Пустое состояние рабочего списка"],
-    ["details", "details", t.details, "Карточка объекта и связанные данные"],
-    ["details_history", "history", "История изменений", "События по выбранному объекту"],
-    ["details_documents", "list", "Связанные документы", "Файлы и версии по объекту"],
-    ["form", "form", t.form, "Создание или обновление записи"],
-    ["form_review", "checkout", "Проверка данных", "Итог перед отправкой"],
-    ["workflow", "stepper", "Процесс", "Основной сценарий от заявки до результата"],
-    ["workflow_queue", "list", "Очередь процесса", "Объекты, ожидающие обработки"],
-    ["workflow_details", "details", "Этап процесса", "Контекст и доступные действия"],
-    ["workflow_approval", "stepper", "Согласование", "Маршрут проверки и решения"],
-    ["workflow_rejected", "error_state", "Нужны исправления", "Причина возврата и повторная отправка"],
-    ["workflow_success", "success", "Процесс завершен", "Результат сохранен и доступен участникам"],
-    ["tasks", "list", t.tasks, "Задачи пользователя и команды"],
-    ["task_details", "details", "Карточка задачи", "Срок, приоритет и связанный объект"],
-    ["task_create", "form", "Новая задача", "Исполнитель, срок и напоминание"],
-    ["calendar", "history", "Календарь", "События, встречи и сроки"],
-    ["clients", "list", t.clients, "Список клиентов и партнеров"],
-    ["client_details", "details", "Карточка клиента", "Контакты, объекты и активность"],
-    ["client_create", "form", "Новый клиент", "Основные данные и контакты"],
-    ["client_history", "history", "История клиента", "Взаимодействия и изменения"],
-    ["documents", "list", "Документы", "Файлы, статусы и версии"],
-    ["document_details", "details", "Просмотр документа", "Реквизиты и действия"],
-    ["history", "history", t.history, "Общий журнал изменений"],
-    ["analytics", "analytics", t.analytics, "Операционные показатели", "admin"],
-    ["reports", "analytics", t.reports, "Сводные отчеты по процессам", "admin"],
-    ["report_details", "analytics", "Детали отчета", "Разрезы и динамика показателей", "admin"],
-    ["team", "profile", "Команда", "Сотрудники и ответственность", "admin"],
-    ["user_details", "profile", "Профиль сотрудника", "Роль, доступ и активность", "admin"],
-    ["roles", "settings", "Роли", "Наборы прав пользователей", "admin"],
-    ["permissions", "settings", "Права доступа", "Матрица действий и ограничений", "admin"],
-    ["integrations", "settings", "Интеграции", "Подключенные внешние сервисы", "admin"],
-    ["integration_details", "details", "Настройка интеграции", "Параметры и состояние подключения", "admin"],
-    ["admin_workspace", "dashboard", `${t.admin} ${t.workspace}`, "Контроль процессов и исключений", "admin"],
-    ["audit_log", "history", "Журнал аудита", "Критичные действия и изменения", "admin"],
-    ["settings", "settings", t.settings, "Параметры, роли и справочники", "admin"],
-    ["help", "list", "Помощь", "Инструкции и обращения"],
-  ]);
+  const { t, domainModel } = context;
+  const primaryEntity = domainModel.entities[0] || { id: "record", title: t.workspace, detail: t.projectDescription };
+  const secondaryEntity = domainModel.entities[1] || { id: "task", title: t.tasks, detail: t.history };
+  const flowTitle = domainModel.flows[0]?.title || primaryEntity.title;
+  const definitions = [
+    ["onboarding", "onboarding", t.onboarding, productValueDescription(context), "buyer"],
+    ["dashboard", "dashboard", t.dashboard, `${flowTitle}: ключевые показатели и действия`, "buyer"],
+    ["workspace", "list", t.workspace, `${primaryEntity.title}: рабочий список и статусы`, "buyer"],
+    [`${primaryEntity.id}_details`, "details", cleanText(primaryEntity.title, 72), primaryEntity.detail, "buyer"],
+    [`${primaryEntity.id}_form`, "form", `${t.form}: ${cleanText(primaryEntity.title, 48)}`, `Создание или обновление: ${primaryEntity.detail}`, "buyer"],
+    ["workflow", "stepper", flowTitle, "Шаги основного процесса и текущий результат", "buyer"],
+    ["workflow_success", "success", t.success, `${flowTitle}: результат сохранён`, "buyer"],
+    ["tasks", "list", t.tasks, `${secondaryEntity.title}: ближайшие действия и ответственность`, "buyer"],
+  ];
+  if (domainModel.integrations.length) definitions.push(["integrations", "settings", "Интеграции", "Подключения, влияющие на пользовательский сценарий", "admin"]);
+  if (domainModel.hasAdminScope) {
+    definitions.push(
+      ["admin_workspace", "dashboard", `${t.admin} ${t.workspace}`, "Контроль процессов, ролей и исключений", "admin"],
+      ["permissions", "settings", "Права доступа", "Матрица ролей и допустимых действий", "admin"],
+      ["audit_log", "history", "Журнал аудита", "Критичные действия и изменения", "admin"],
+    );
+  }
+  return catalogScreens(context, definitions);
 }
 
 function sharedScreenDefinitions(t, primaryRole = "buyer") {
@@ -809,55 +1032,268 @@ function catalogScreens(context, definitions) {
 
 function applyConditionalScreens(screens, context) {
   const text = searchableText(context.semanticModel, context.proposalModel);
-  const hasAuth = /auth|login|profile|role|access|permission|identity|user|пользоват|роль|доступ|kiritish|foydalanuv/i.test(text)
-    || context.roles.length > 1;
+  const hasAuth = context.domainModel.hasAuth;
   const hasPayment = hasSemanticIntegration(context.semanticModel, "payment") || /payment|pay|checkout|оплат|to'lov|платеж/i.test(text);
   const hasDelivery = hasSemanticIntegration(context.semanticModel, "delivery") || /delivery|shipping|достав|yetkaz/i.test(text);
-  const hasSeller = context.roles.some((role) => role.kind === "seller") || /seller|merchant|vendor|продав|sotuvchi/i.test(text);
-  const hasOperator = context.roles.some((role) => role.kind === "operator") || /operator|support|moderator|оператор|поддерж/i.test(text);
-  const hasAdmin = context.roles.some((role) => role.kind === "admin") || /admin|control|settings|админ|настрой|созлам/i.test(text);
-  const ids = new Set(screens.map((screen) => screen.id));
+  const hasSeller = context.domainModel.hasSellerScope;
+  const hasOperator = context.domainModel.hasOperatorScope;
+  const hasAdmin = context.domainModel.hasAdminScope;
   return screens.filter((row) => {
-    if (row.id === "login" && !hasAuth && context.productFamily !== "crm") return false;
+    if (/^(language|login|login_otp|password_reset|password_reset_done|profile|profile_edit|security|connected_devices)$/.test(row.id) && !hasAuth) return false;
     if (row.id === "payment" && !hasPayment && !["marketplace", "fintech"].includes(context.productFamily)) return false;
     if (row.id === "tracking" && !hasDelivery && context.productFamily !== "marketplace") return false;
-    if (row.id === "seller_workspace" && !hasSeller) return false;
-    if (row.id === "operator_workspace" && !hasOperator) return false;
-    if (row.id === "admin_workspace" && !hasAdmin && !ids.has("seller_workspace")) return false;
+    if (/^seller_/.test(row.id) && !hasSeller) return false;
+    if (/^operator_/.test(row.id) && !hasOperator) return false;
+    if (/^(admin_|cms_|roles$|permissions$|audit_log$|team$|user_details$|member_details$|invite_member$|billing_|plans$|subscription_|api_keys$|webhooks$|usage$|feature_flags$|app_versions$)/.test(row.id) && !hasAdmin) return false;
     return true;
   });
 }
 
-function enforceScreenCount(screens, context) {
-  const result = [...screens];
-  const fallback = businessScreens(context);
-  for (const candidate of fallback) {
-    if (result.length >= MIN_SCREEN_COUNT) break;
-    if (!result.some((screen) => screen.id === candidate.id)) result.push(candidate);
+function selectScreensForPrototype(screens, context) {
+  const candidates = applyConditionalScreens(screens, context)
+    .filter((screen) => screen.id !== "design_system" && screenAllowedByDomain(screen, context));
+  const byId = new Map(candidates.map((screen) => [screen.id, screen]));
+  const selected = [];
+  const addId = (id) => {
+    const candidate = byId.get(id);
+    if (candidate && !selected.some((screen) => screen.id === candidate.id)) selected.push(candidate);
+  };
+  const addIds = (ids) => ids.forEach(addId);
+  const coreIds = coreScreenIdsFor(context);
+  addIds(coreIds);
+  const scored = candidates
+    .filter((screen) => !selected.some((row) => row.id === screen.id))
+    .map((screen) => ({ screen, score: screenRelevanceScore(screen, context) }))
+    .sort((a, b) => b.score - a.score || a.screen.id.localeCompare(b.screen.id));
+  const targetMax = targetScreenMax(context);
+  for (const row of scored) {
+    if (selected.length >= targetMax) break;
+    if (row.score > 0 || selected.length < TARGET_SCREEN_RANGE.min) selected.push(row.screen);
   }
-  if (result.length < MIN_SCREEN_COUNT) {
-    const { t } = context;
-    result.push(screen("empty_state", "empty_state", "Пустое состояние", "Сценарий отсутствия данных", [firstRoleId(context.roles, "buyer")], context));
-    result.push(screen("error_state", "error_state", "Ошибка", "Сценарий восстановления после сбоя", [firstRoleId(context.roles, "buyer")], context));
-    result.push(screen("success", "success", t.success, "Успешное завершение процесса", [firstRoleId(context.roles, "buyer")], context));
+  if (selected.length < TARGET_SCREEN_RANGE.min) {
+    for (const candidate of candidates) {
+      if (selected.length >= TARGET_SCREEN_RANGE.min) break;
+      if (!selected.some((screen) => screen.id === candidate.id)) selected.push(candidate);
+    }
+  }
+  return trimScreensForTarget(ensureOutcomeScreens(selected, candidates, context), targetMax);
+}
+
+function screenAllowedByDomain(screen, context) {
+  const id = screen.id;
+  if (/^(admin_|cms_|roles$|permissions$|audit_log$|team$|user_details$|member_details$|invite_member$|billing_|plans$|subscription_|api_keys$|webhooks$|usage$|feature_flags$|app_versions$)/.test(id) && !context.domainModel.hasAdminScope) return false;
+  if (/^seller_/.test(id) && !context.domainModel.hasSellerScope) return false;
+  if (/^operator_/.test(id) && !context.domainModel.hasOperatorScope) return false;
+  return true;
+}
+
+function coreScreenIdsFor(context) {
+  const auth = context.domainModel.hasAuth ? ["login", "login_otp"] : [];
+  const admin = context.domainModel.hasAdminScope;
+  const map = {
+    marketplace: ["onboarding", ...auth, "home", "catalog", "product", "cart", "checkout", "payment", "confirmation", "orders", "order_details", "tracking", "seller_workspace", "seller_products", "support", "profile"],
+    ecommerce: ["onboarding", ...auth, "home", "catalog", "product", "cart", "checkout", "payment_methods", "payment", "confirmation", "orders", "order_details", "support", "profile"],
+    fintech: ["onboarding", ...auth, "home", "limit_request", "verification", "offers", "contract_review", "contract_sign", "contract_success", "installments", "payment", "payment_success", "documents", "profile"],
+    crm: ["onboarding", ...auth, "dashboard", "leads", "lead_details", "lead_create", "lead_qualify", "lead_convert", "pipeline", "tasks", "task_create", "calendar", "clients", "profile"],
+    erp: ["onboarding", ...auth, "dashboard", "procurement_requests", "procurement_request_details", "procurement_approval", "purchase_orders", "inventory", "inventory_item", "finance_dashboard", "invoices", "reports"],
+    tms: ["onboarding", ...auth, "dashboard", "transport_orders", "transport_order_details", "shipment_status", "shipment_tracking", "dispatch_board", "shipments", "fleet", "vehicle_details", "reports"],
+    saas: ["onboarding", ...auth, "dashboard", "workspaces", "workspace_details", "projects", "project_create", "records", "record_details", "tasks", "automations", "reports"],
+    "mobile-app": ["onboarding", ...auth, "home", "feed", "discover", "content_details", "create_entry", "submit_review", "submit_success", "inbox", "media_library", "app_permissions"],
+    website: ["onboarding", "home", "services", "service_details", "case_studies", "contacts", "contact_form", "contact_success", "faq", "blog", "article"],
+    "business-app": ["onboarding", ...auth, "dashboard", "workspace", `${context.domainModel.entities[0]?.id || "record"}_details`, `${context.domainModel.entities[0]?.id || "record"}_form`, "workflow", "workflow_success", "tasks"],
+  };
+  const ids = map[context.productFamily] || map["business-app"];
+  const sellerIds = {
+    marketplace: ["seller_workspace", "seller_products", "seller_orders", "seller_analytics"],
+  };
+  const adminIds = {
+    marketplace: ["admin_workspace", "reports", "settings"],
+    ecommerce: ["admin_dashboard", "admin_catalog", "admin_orders", "admin_analytics", "admin_settings"],
+    crm: ["reports", "team", "roles", "permissions", "integrations", "settings"],
+    erp: ["reports", "roles", "permissions", "integrations", "settings"],
+    tms: ["reports", "integrations", "roles", "permissions", "settings"],
+    saas: ["team", "billing_overview", "plans", "subscription_checkout", "integrations", "settings"],
+    "mobile-app": ["admin_dashboard", "admin_content", "admin_users", "admin_analytics", "feature_flags"],
+    website: ["cms_dashboard", "cms_pages", "cms_submissions", "cms_analytics", "cms_settings"],
+    "business-app": ["admin_workspace", "permissions", "integrations", "audit_log"],
+  };
+  return uniqueStrings([
+    ...ids,
+    ...(context.domainModel.hasSellerScope ? (sellerIds[context.productFamily] || []) : []),
+    ...(admin ? (adminIds[context.productFamily] || []) : []),
+  ]);
+}
+
+function targetScreenMax(context) {
+  const complexity = (context.domainModel.flows || []).length
+    + Math.ceil((context.domainModel.entities || []).length / 2)
+    + (context.roles.length > 1 ? 2 : 0)
+    + (context.domainModel.hasAdminScope ? 2 : 0);
+  if (context.productFamily === "marketplace" && context.domainModel.hasSellerScope) return TARGET_SCREEN_RANGE.max;
+  return Math.min(TARGET_SCREEN_RANGE.max, Math.max(TARGET_SCREEN_RANGE.min, TARGET_SCREEN_RANGE.preferred + complexity - 2));
+}
+
+function screenRelevanceScore(screen, context) {
+  let score = 0;
+  const text = `${screen.id} ${screen.title} ${screen.description}`.toLowerCase();
+  for (const entity of context.domainModel.entities || []) {
+    const entityText = `${entity.id} ${entity.kind} ${entity.title}`.toLowerCase();
+    if (entityText.split(/\s+/).some((token) => token.length > 3 && text.includes(token))) score += 3;
+  }
+  for (const capability of context.domainModel.capabilities || []) {
+    const capabilityText = `${capability.title} ${capability.detail}`.toLowerCase();
+    if (capabilityText.split(/\s+/).some((token) => token.length > 5 && text.includes(token))) score += 2;
+  }
+  if ((screen.sourceRefs || []).some((ref) => !String(ref).startsWith("DERIVED-"))) score += 2;
+  if (["dashboard", "list", "details", "form", "stepper", "success"].includes(screen.type)) score += 1;
+  if (/empty|error|password|language|design/.test(screen.id)) score -= 2;
+  return score;
+}
+
+function ensureOutcomeScreens(selected, candidates, context) {
+  const result = [...selected];
+  if (!result.some((screen) => screen.type === "success")) {
+    const success = candidates.find((screen) => screen.type === "success") || screen("success", "success", context.t.success, "Успешное завершение основного сценария", [firstRoleId(context.roles, "buyer")], context);
+    if (!result.some((screen) => screen.id === success.id)) result.push(success);
   }
   return result;
 }
 
-function connectScreenActions(screens, context) {
-  return screens.map((screen, index) => {
-    if (!screen.actions.length) return screen;
-    const next = screens[index + 1] || screens[0];
-    const targetAction = screen.actions[0];
+function trimScreensForTarget(screens, targetMax) {
+  if (screens.length <= targetMax) return screens;
+  const protectedIndexes = new Set();
+  screens.forEach((screen, index) => {
+    if (index === 0 || screen.type === "success" || ["home", "dashboard", "workspace", "catalog", "leads"].includes(screen.id)) protectedIndexes.add(index);
+  });
+  const result = [];
+  for (const [index, screen] of screens.entries()) {
+    if (result.length < targetMax || protectedIndexes.has(index)) result.push(screen);
+  }
+  while (result.length > targetMax) {
+    const removableIndex = result.findLastIndex((screen, index) => index > 0 && screen.type !== "success" && !["home", "dashboard", "workspace", "catalog", "leads"].includes(screen.id));
+    if (removableIndex < 0) break;
+    result.splice(removableIndex, 1);
+  }
+  return result.slice(0, targetMax);
+}
+
+function wireScreenActions(screens, context) {
+  const ids = new Set(screens.map((screen) => screen.id));
+  const first = screens[0]?.id || "";
+  const find = (...candidates) => firstExistingScreenId(ids, candidates, first);
+  return screens.map((screen) => {
+    const actions = actionsForScreen(screen, ids, find, context);
     return {
       ...screen,
-      actions: [{ ...targetAction, targetScreenId: next.id }],
+      content: normalizeItemActionTargets(screen.content, ids),
+      actions: actions.length ? actions : [],
     };
   });
 }
 
+function normalizeItemActionTargets(content = {}, screenIds = new Set()) {
+  if (!Array.isArray(content.items)) return content;
+  return {
+    ...content,
+    items: content.items.map((item) => {
+      if (!item.action?.targetScreenId || screenIds.has(item.action.targetScreenId)) return item;
+      return {
+        ...item,
+        action: { id: item.action.id || `select-${item.id}`, type: "select", label: item.action.label || "Select", stateKey: "selectedItemId", value: item.id },
+      };
+    }),
+  };
+}
+
+function actionsForScreen(screen, ids, find, context) {
+  const t = context.t;
+  const id = screen.id;
+  if (screen.type === "success") return [{ id: "go-home", type: "navigate", label: t.done, targetScreenId: find("home", "dashboard", "workspace", "catalog", "leads") }];
+  if (screen.type === "empty_state") return [{ id: "reset-view", type: "reset", label: "Сбросить фильтр", stateKey: `${id}.filter` }];
+  if (screen.type === "error_state") return [{ id: "retry", type: "back", label: "Повторить" }];
+  if (id === "onboarding") return [{ id: "start-flow", type: "navigate", label: context.domainModel.hasAuth ? t.login : t.open, targetScreenId: context.domainModel.hasAuth ? find("login") : find("home", "dashboard", "workspace", "catalog", "leads") }];
+  if (id === "login") return [{ id: "submit-login", type: "submit", label: t.login, formId: "login-form", outcomes: [{ when: "demo-success", targetScreenId: find("login_otp", "home", "dashboard", "workspace") }] }];
+  if (id === "login_otp") return [{ id: "verify-code", type: "submit", label: t.submit, formId: "otp-form", outcomes: [{ when: "demo-success", targetScreenId: find("home", "dashboard", "workspace", "catalog", "leads") }] }];
+  if (/global_search|search/.test(id) && ids.has("search_results")) return [{ id: "run-search", type: "set_value", label: t.search, stateKey: `${id}.query`, value: screen.content?.fields?.[0]?.value || screen.title }];
+  if (/filter/.test(id)) return [{ id: "apply-filter", type: "submit", label: "Применить", formId: `${id}-form`, outcomes: [{ when: "demo-success", targetScreenId: find(id.replace(/_?filters?$/, ""), "workspace", "leads", "catalog") }] }];
+  if (/settings|security|permissions|roles|app_permissions/.test(id) || screen.layout === "settings-list") return [{ id: "save-settings", type: "copy_demo", label: t.done, value: "Настройки сохранены в demo state" }];
+  if (/document/.test(id) && screen.type === "list") {
+    return [{ id: "open-document-preview", type: "open_sheet", label: t.open, overlay: overlayForScreen(screen, "sheet") }];
+  }
+  if (screen.type === "form") {
+    return [{ id: "submit-form", type: "submit", label: t.submit, formId: `${id}-form`, outcomes: [{ when: "demo-success", targetScreenId: find(successTargetFor(id), "workflow_success", "lead_convert", "contract_success", "submit_success", "contact_success", "confirmation", "dashboard", "workspace") }] }];
+  }
+  if (["checkout", "payment", "confirmation"].includes(screen.type)) {
+    return [{ id: "confirm", type: "submit", label: screen.type === "payment" ? t.pay : t.submit, formId: `${id}-form`, outcomes: [{ when: "demo-success", targetScreenId: find("payment_success", "contract_success", "submit_success", "contact_success", "confirmation", "workflow_success") }] }];
+  }
+  if (screen.layout === "kanban") {
+    return [{ id: "open-stage", type: "navigate", label: t.open, targetScreenId: find("pipeline_stage", "workflow_details", "deal_details", "lead_details", "workspace", "dashboard") }];
+  }
+  if (screen.type === "stepper" || screen.type === "tracking") {
+    return [
+      { id: "advance-step", type: "select", label: t.next, stateKey: `${id}.currentStep`, value: "next" },
+      ...(ids.has(successTargetFor(id)) ? [{ id: "finish-flow", type: "navigate", label: t.done, targetScreenId: successTargetFor(id) }] : []),
+    ];
+  }
+  if (["list", "product_grid", "dashboard", "analytics", "history"].includes(screen.type)) {
+    return [{ id: "open-primary-record", type: "navigate", label: t.open, targetScreenId: find(detailsTargetFor(id, context), "product", "lead_details", "record_details", "order_details", "details", "workspace") }];
+  }
+  if (screen.type === "details" || screen.type === "profile") {
+    const formTarget = formTargetFor(id, context);
+    return [
+      ...(ids.has(formTarget) ? [{ id: "edit-record", type: "navigate", label: t.configure, targetScreenId: formTarget }] : []),
+      { id: "open-context", type: "open_sheet", label: t.open, overlay: overlayForScreen(screen, "sheet") },
+    ];
+  }
+  return [];
+}
+
+function detailsTargetFor(id, context) {
+  if (/catalog|product|favorite|merchant/.test(id)) return "product";
+  if (/cart|checkout|order|payment/.test(id)) return "order_details";
+  if (/lead|dashboard|activity/.test(id) && context.productFamily === "crm") return "lead_details";
+  if (/task/.test(id)) return "task_details";
+  if (/client/.test(id)) return "client_details";
+  if (/procurement/.test(id)) return "procurement_request_details";
+  if (/inventory/.test(id)) return "inventory_item";
+  if (/transport/.test(id)) return "transport_order_details";
+  if (/shipment/.test(id)) return "shipment_details";
+  if (/workspace|record/.test(id)) return `${context.domainModel.entities[0]?.id || "record"}_details`;
+  return "details";
+}
+
+function formTargetFor(id, context) {
+  if (/lead/.test(id)) return "lead_create";
+  if (/task/.test(id)) return "task_create";
+  if (/product/.test(id)) return "admin_product_edit";
+  if (/record|workspace/.test(id)) return `${context.domainModel.entities[0]?.id || "record"}_form`;
+  return id.replace(/_details$/, "_form");
+}
+
+function successTargetFor(id) {
+  if (/lead_qualify|lead_create|lead_assign/.test(id)) return "lead_convert";
+  if (/contract|verification|limit|offer/.test(id)) return "contract_success";
+  if (/payment/.test(id)) return "payment_success";
+  if (/submit|entry|contact|newsletter|application/.test(id)) return id.includes("contact") ? "contact_success" : "submit_success";
+  if (/checkout|order|cart/.test(id)) return "confirmation";
+  return "workflow_success";
+}
+
+function overlayForScreen(screen, kind = "sheet") {
+  return {
+    id: safeId(`${screen.id}_${kind}`, "screen_overlay"),
+    kind,
+    title: cleanText(screen.title, 80),
+    description: cleanText(screen.description, 160),
+    items: (screen.content?.items || []).slice(0, 3),
+    actions: [{ id: "close-overlay", type: "close_overlay", label: "Закрыть" }],
+  };
+}
+
 function screen(id, type, title, description, roleIds, context, options = {}) {
   const sourceRefs = pickSourceRefs(context, id);
+  const content = contentFor(id, type, title, description, context);
+  const layout = content.layout || layoutForScreen(id, type);
   return {
     id,
     type,
@@ -865,8 +1301,15 @@ function screen(id, type, title, description, roleIds, context, options = {}) {
     description: cleanText(localizeDescription(description, context.t), 180),
     roleIds: roleIds.filter(Boolean).length ? roleIds.filter(Boolean) : [firstRoleId(context.roles, "buyer")],
     sourceRefs,
-    actions: options.action === false ? [] : [{ id: "continue", label: options.action || actionLabel(type, context.t), targetScreenId: id }],
-    content: contentFor(id, type, title, description, context),
+    intent: intentForScreen(id, type, title, description),
+    entityRef: entityRefForScreen(id, context),
+    variant: defaultVariantFor(type),
+    layout,
+    flowRefs: flowRefsForScreen(id, context),
+    localState: localStateForScreen(id, layout, content),
+    variants: variantsForScreen(type),
+    actions: options.action === false ? [] : [{ id: "continue", type: "navigate", label: options.action || actionLabel(type, context.t), targetScreenId: id }],
+    content,
   };
 }
 
@@ -875,30 +1318,30 @@ function contentFor(id, type, title, description, context) {
   const taskRows = (context.semanticModel.tasks || []).filter((task) => !TECHNICAL_TERMS.test(textOf(task))).slice(0, 6);
   const states = (context.semanticModel.states || []).slice(0, 4);
   const semanticItems = (scopeItems.length ? scopeItems : taskRows).slice(0, 6).map((row, index) => ({
-    title: cleanText(row.feature || row.label || row.epic || row.id || `${context.t.demo} ${index + 1}`, 60),
-    detail: cleanText(row.detail || row.label || row.phase || row.truthStatus || "Demo state", 120),
+    id: safeId(row.id || row.feature || row.label || `item_${index + 1}`, `item_${index + 1}`),
+    title: cleanText(row.feature || row.label || row.epic || row.task || `${context.t.demo} ${index + 1}`, 60),
+    detail: cleanText(row.detail || row.subtask || row.phase || row.truthStatus || context.t.projectDescription, 120),
     status: statusFor(index),
+    sourceRefs: uniqueStrings([row.id, ...(row.sourceRefs || [])]).slice(0, 4),
   }));
   const preset = screenContentPreset(id, type, title, description, context);
-  const metrics = preset.metrics || [
-    { label: context.t.tasks, value: String(Math.max(3, taskRows.length || semanticItems.length)), tone: "primary" },
-    { label: "Flow", value: String(Math.max(1, (context.semanticModel.processes || []).length || 1)), tone: "success" },
-    { label: context.t.roles, value: String(Math.max(1, context.roles.length)), tone: "warning" },
-  ];
+  const metrics = normalizeMetrics(preset.metrics || metricSetFor(id, type, context.t, context), context);
   const semanticSteps = (context.semanticModel.processes || []).flatMap((process) => process.nodeRefs || []).slice(0, 5).map((ref, index) => ({
+    id: safeId(ref, `step_${index + 1}`),
     title: cleanText(labelForRef(context.semanticModel, ref) || `${context.t.demo} ${index + 1}`, 54),
     state: index === 0 ? "active" : index < 3 ? "pending" : "done",
   }));
+  const layout = preset.layout || layoutForScreen(id, type);
   return {
     title: cleanText(title, 80),
-    layout: preset.layout || layoutForScreen(id, type),
+    layout,
     metrics,
-    items: preset.items || (id === "onboarding" && semanticItems.length ? semanticItems : contextualItems(title, description, context.t)),
-    fields: preset.fields || contextualFields(id, title, description, context.t),
-    steps: preset.steps || (type === "stepper" && semanticSteps.length ? semanticSteps : contextualSteps(title, context.t)),
+    items: withItemActions(preset.items || domainItemsForScreen(id, type, title, description, context, semanticItems), id, type, context),
+    fields: normalizeFields(preset.fields || contextualFields(id, title, description, context.t, context), id),
+    steps: preset.steps || (type === "stepper" && semanticSteps.length ? semanticSteps : contextualSteps(title, context.t, context)),
     tabs: preset.tabs || tabsForScreen(id, context.t),
     states: states.map((state) => cleanText(state.label || state.id, 42)),
-    chart: preset.chart || chartForScreen(id, title),
+    chart: preset.chart || chartForScreen(id, title, context),
     note: preset.note || cleanText(description, 120),
   };
 }
@@ -1221,37 +1664,117 @@ function layoutForScreen(id, type) {
   return type;
 }
 
-function metricSetFor(id, type, t) {
-  const seed = [...String(id)].reduce((sum, character) => sum + character.charCodeAt(0), 0);
+function metricSetFor(id, type, t, context = {}) {
   if (["form", "login", "settings", "success", "empty_state", "error_state"].includes(type)) return [];
+  const scopeCount = relevantScopeItems(context.semanticModel || {}, context.proposalModel || {}).length;
+  const processCount = (context.semanticModel?.processes || []).length;
+  const roleCount = context.roles?.length || 1;
+  const activeItems = Math.max(1, scopeCount || (context.domainModel?.capabilities || []).length || (context.domainModel?.entities || []).length || 1);
   return [
-    { label: t.overview, value: String(12 + (seed % 37)), tone: "primary" },
-    { label: t.done, value: `${54 + (seed % 39)}%`, tone: "success" },
-    { label: t.tasks, value: String(2 + (seed % 11)), tone: "warning" },
+    { label: t.tasks, value: String(activeItems), unit: "items", period: "scope", tone: "primary", derivation: "non-technical scope item count", sourceRefs: context.sourceRefs?.slice(0, 3) || [] },
+    { label: "Flows", value: String(Math.max(1, processCount || 1)), unit: "flows", period: "prototype", tone: "success", derivation: "semantic process count", sourceRefs: context.sourceRefs?.slice(0, 3) || [] },
+    { label: t.roles, value: String(Math.max(1, roleCount)), unit: "roles", period: "prototype", tone: "warning", derivation: "user role count", sourceRefs: context.sourceRefs?.slice(0, 3) || [] },
   ];
 }
 
-function contextualItems(title, description, t) {
+function domainItemsForScreen(id, type, title, description, context, semanticItems = []) {
+  const related = relatedDomainItems(id, title, context, semanticItems);
+  if (related.length) return screenContextItems(id, title, description, context, related);
+  const entity = entityRefForScreen(id, context);
+  const domainEntity = context.domainModel.entities.find((row) => row.id === entity) || context.domainModel.entities[0];
+  const fallbackTitle = cleanText(domainEntity?.title || title, 58);
+  const fallbackDetail = cleanText(domainEntity?.detail || description, 120);
+  if (type === "success") return [{ id: "result", title: fallbackTitle, detail: "Результат доступен участникам процесса", status: "done" }];
+  if (type === "empty_state") return [{ id: "empty-reason", title: "Нет подходящих записей", detail: "Фильтр можно сбросить или изменить условия", status: "pending" }];
+  if (type === "error_state") return [{ id: "retry-context", title: "Запрос не завершён", detail: "Введённые demo-данные сохранены для повторной попытки", status: "warning" }];
   return [
-    { title: cleanText(title, 58), detail: cleanText(description, 110), status: "active" },
-    { title: t.status, detail: `${cleanText(title, 48)} · ${t.active}`, status: "done" },
-    { title: t.next, detail: `${t.open}: ${cleanText(title, 48)}`, status: "pending" },
+    { id: "primary-context", title: fallbackTitle, detail: fallbackDetail, status: "active" },
+    { id: "process-context", title: context.domainModel.flows[0]?.title || context.t.workspace, detail: "Связано с основным пользовательским процессом", status: "pending" },
+    { id: "owner-context", title: context.roles[0]?.title || context.t.customer, detail: "Роль видит только доступные действия", status: "done" },
   ];
 }
 
-function contextualFields(id, title, description, t) {
+function screenContextItems(id, title, description, context, related = []) {
+  const sourceRefs = uniqueStrings(related.flatMap((item) => item.sourceRefs || []).length
+    ? related.flatMap((item) => item.sourceRefs || [])
+    : context.sourceRefs.slice(0, 2));
+  const contextRows = [
+    {
+      id: safeId(`${id}_intent`, "screen_intent"),
+      title: cleanText(title, 72),
+      detail: cleanText(description, 140),
+      status: "active",
+      sourceRefs,
+    },
+    {
+      id: safeId(`${id}_role`, "screen_role"),
+      title: cleanText(context.roles[0]?.title || context.t.customer, 72),
+      detail: "Доступные действия соответствуют роли в demo flow",
+      status: "done",
+      sourceRefs,
+    },
+  ];
+  return [...related.slice(0, 4), ...contextRows].slice(0, 6);
+}
+
+function relatedDomainItems(id, title, context, semanticItems = []) {
+  const haystack = `${id} ${title}`.toLowerCase();
+  const matched = semanticItems.filter((item) => {
+    const text = `${item.title} ${item.detail}`.toLowerCase();
+    return text.split(/\s+/).some((token) => token.length > 4 && haystack.includes(token))
+      || haystack.split(/[_\s-]+/).some((token) => token.length > 4 && text.includes(token));
+  });
+  const source = matched.length ? matched : semanticItems;
+  if (source.length) return source.slice(0, 6);
+  return (context.domainModel.capabilities || []).slice(0, 6).map((capability, index) => ({
+    id: capability.id || `capability_${index + 1}`,
+    title: capability.title,
+    detail: capability.detail,
+    status: statusFor(index),
+    sourceRefs: capability.sourceRefs,
+  }));
+}
+
+function contextualFields(id, title, description, t, context = {}) {
+  if (/login/.test(id)) {
+    return [
+      { id: "email", label: "Рабочая почта", value: "demo@company.uz", type: "email", required: true },
+      { id: "password", label: "Пароль", value: "Demo2026!", type: "password", required: true },
+    ];
+  }
+  if (/otp|verification_code/.test(id)) {
+    return [{ id: "otp", label: "Код подтверждения", value: "4821", type: "otp", required: true, pattern: "^[0-9]{4,6}$" }];
+  }
+  if (/search/.test(id)) return [{ id: "query", label: t.search, value: cleanText(context.domainModel?.entities?.[0]?.title || title, 48), type: "search" }];
+  if (/filter/.test(id)) {
+    return [
+      { id: "status", label: t.status, value: t.active, type: "select", options: [t.active, t.done, t.warning] },
+      { id: "owner", label: context.roles?.[0]?.title || t.customer, value: context.roles?.[0]?.title || t.customer, type: "text" },
+      { id: "period", label: "Период", value: "Последние 30 дней", type: "select", options: ["Сегодня", "Последние 7 дней", "Последние 30 дней"] },
+    ];
+  }
+  const entity = context.domainModel?.entities?.find((row) => row.id === entityRefForScreen(id, context)) || context.domainModel?.entities?.[0];
+  const entityTitle = cleanText(entity?.title || title, 48);
   return [
-    { label: cleanText(title, 48), value: cleanText(description, 64) },
-    { label: t.status, value: t.active },
-    { label: "ID", value: String(id).replace(/_/g, "-").toUpperCase().slice(0, 28) },
+    { id: "name", label: entityTitle, value: cleanText(entity?.detail || description, 64), type: "text", required: true },
+    { id: "owner", label: "Ответственный", value: context.roles?.[0]?.title || t.customer, type: "text", required: true },
+    { id: "comment", label: "Комментарий", value: "Проверить данные перед отправкой", type: "textarea" },
   ];
 }
 
-function contextualSteps(title, t) {
+function contextualSteps(title, t, context = {}) {
+  const flow = context.domainModel?.flows?.[0];
+  if (flow?.steps?.length) {
+    return flow.steps.slice(0, 5).map((step, index) => ({
+      id: step.id || `step_${index + 1}`,
+      title: cleanText(step.intent || step.title || `${title}: ${index + 1}`, 60),
+      state: index === 0 ? "done" : index === 1 ? "active" : "pending",
+    }));
+  }
   return [
-    { title: `${title}: ${t.onboarding}`, state: "done" },
-    { title: `${title}: ${t.status}`, state: "active" },
-    { title: `${title}: ${t.done}`, state: "pending" },
+    { id: "prepare", title: `${title}: подготовка данных`, state: "done" },
+    { id: "review", title: `${title}: проверка решения`, state: "active" },
+    { id: "result", title: `${title}: ${t.done}`, state: "pending" },
   ];
 }
 
@@ -1262,10 +1785,131 @@ function tabsForScreen(id, t) {
   return [t.overview, t.history];
 }
 
-function chartForScreen(id, title) {
+function chartForScreen(id, title, context = {}) {
   if (!/dashboard|analytics|report|forecast/.test(id)) return [];
-  const seed = [...`${id}${title}`].reduce((sum, character) => sum + character.charCodeAt(0), 0);
-  return Array.from({ length: 7 }, (_, index) => 30 + ((seed + index * 17) % 61));
+  const scopeCount = Math.max(1, relevantScopeItems(context.semanticModel || {}, context.proposalModel || {}).length || 1);
+  const flowCount = Math.max(1, (context.semanticModel?.processes || []).length || 1);
+  const roleCount = Math.max(1, context.roles?.length || 1);
+  return [scopeCount, scopeCount + flowCount, scopeCount + flowCount + roleCount, scopeCount + roleCount + 1, scopeCount + flowCount + roleCount + 2]
+    .map((value) => Math.min(100, Math.max(18, value * 12)));
+}
+
+function normalizeFields(fields = [], screenId = "screen") {
+  return fields.slice(0, 8).map((field, index) => ({
+    id: safeId(field.id || field.label || `field_${index + 1}`, `${screenId}_field_${index + 1}`),
+    label: cleanText(field.label || `Field ${index + 1}`, 80),
+    value: cleanText(field.value || "", 180),
+    type: normalizeFieldType(field.type, field.label),
+    required: field.required !== false && index < 2,
+    readonly: false,
+    ...(field.pattern ? { pattern: String(field.pattern).slice(0, 120) } : {}),
+    ...(Array.isArray(field.options) ? { options: field.options.map((option) => cleanText(option, 80)).slice(0, 12) } : {}),
+  }));
+}
+
+function normalizeMetrics(metrics = [], context = {}) {
+  return metrics.slice(0, 6).map((metric, index) => ({
+    label: cleanText(metric.label || `Metric ${index + 1}`, 60),
+    value: cleanText(metric.value || "0", 32),
+    unit: cleanText(metric.unit || "demo", 32),
+    period: cleanText(metric.period || "prototype", 48),
+    tone: metric.tone || statusFor(index),
+    derivation: cleanText(metric.derivation || "grounded demo value for prototype", 120),
+    sourceRefs: uniqueStrings([...(metric.sourceRefs || []), ...(context.sourceRefs || []).slice(0, 1)]).slice(0, 4),
+  }));
+}
+
+function normalizeFieldType(type, label = "") {
+  const normalized = String(type || "").toLowerCase();
+  if (["email", "password", "tel", "number", "search", "textarea", "select", "otp"].includes(normalized)) return normalized;
+  if (/mail|почт|email/i.test(label)) return "email";
+  if (/парол|password/i.test(label)) return "password";
+  if (/тел|phone|номер/i.test(label)) return "tel";
+  if (/сумм|amount|price|колич/i.test(label)) return "number";
+  return "text";
+}
+
+function withItemActions(items = [], screenId, type, context) {
+  return items.slice(0, 12).map((item, index) => {
+    const id = safeId(item.id || item.title || `item_${index + 1}`, `${screenId}_item_${index + 1}`);
+    return {
+      ...item,
+      id,
+      title: cleanText(item.title || `${context.t.demo} ${index + 1}`, 80),
+      detail: cleanText(item.detail || context.t.projectDescription, 160),
+      status: item.status || statusFor(index),
+      action: item.action || itemActionFor(screenId, type, id, context),
+    };
+  });
+}
+
+function itemActionFor(screenId, type, itemId, context) {
+  if (["list", "product_grid", "dashboard", "analytics", "history"].includes(type)) {
+    return { id: safeId(`open_${itemId}`, "open_item"), type: "navigate", label: context.t.open, targetScreenId: detailsTargetFor(screenId, context) };
+  }
+  if (/settings|permissions/.test(type) || /settings|permissions|security/.test(screenId)) {
+    return { id: safeId(`toggle_${itemId}`, "toggle_item"), type: "toggle", label: context.t.configure, stateKey: `${screenId}.${itemId}` };
+  }
+  return { id: safeId(`select_${itemId}`, "select_item"), type: "select", label: context.t.open, stateKey: `${screenId}.selected`, value: itemId };
+}
+
+function intentForScreen(id, type, title, description) {
+  if (id === "onboarding") return "Понять ценность продукта и начать сценарий";
+  if (/login|otp|password/.test(id)) return "Подтвердить пользователя и открыть доступ";
+  if (/filter/.test(id)) return "Сузить рабочий список по условиям";
+  if (/search/.test(id)) return "Найти предметную запись в demo dataset";
+  if (type === "dashboard") return "Оценить состояние продукта и перейти к приоритетной работе";
+  if (["list", "product_grid", "history"].includes(type)) return `Выбрать запись: ${cleanText(title, 72)}`;
+  if (type === "details") return `Проверить атрибуты объекта: ${cleanText(title, 72)}`;
+  if (type === "form") return `Ввести и отправить данные: ${cleanText(title, 72)}`;
+  if (type === "stepper" || type === "tracking") return `Проследить процесс: ${cleanText(title, 72)}`;
+  if (type === "success") return `Подтвердить outcome: ${cleanText(title, 72)}`;
+  if (type === "settings") return `Изменить настройку: ${cleanText(title, 72)}`;
+  return cleanText(description || title, 120);
+}
+
+function entityRefForScreen(id, context) {
+  const exact = (context.domainModel?.entities || []).find((entity) => id.includes(entity.id) || id.includes(entity.kind));
+  if (exact) return exact.id;
+  const inferred = entityKindFromText(id, context.productFamily);
+  const byKind = (context.domainModel?.entities || []).find((entity) => entity.kind === inferred || entity.id === inferred);
+  return byKind?.id || context.domainModel?.entities?.[0]?.id || "record";
+}
+
+function defaultVariantFor(type) {
+  if (type === "empty_state") return "empty";
+  if (type === "error_state") return "error";
+  if (type === "stepper" || type === "tracking") return "in_progress";
+  return "ready";
+}
+
+function variantsForScreen(type) {
+  if (type === "form") return [{ id: "ready", trigger: "default" }, { id: "invalid", trigger: "demo-invalid" }, { id: "submitted", trigger: "demo-success" }];
+  if (["list", "product_grid"].includes(type)) return [{ id: "ready", trigger: "default" }, { id: "empty", trigger: "demo-empty" }];
+  if (type === "stepper" || type === "tracking") return [{ id: "in_progress", trigger: "default" }, { id: "done", trigger: "demo-success" }];
+  if (type === "error_state") return [{ id: "error", trigger: "default" }, { id: "retrying", trigger: "demo-retry" }];
+  return [{ id: "ready", trigger: "default" }];
+}
+
+function localStateForScreen(id, layout, content) {
+  const state = {};
+  if ((content.tabs || []).length) state.activeTab = safeId(content.tabs[0], "overview");
+  if ((content.fields || []).length) {
+    state.form = Object.fromEntries(content.fields.map((field) => [field.id, field.value || ""]));
+  }
+  if (/settings/.test(layout)) {
+    state.toggles = Object.fromEntries((content.items || []).map((item) => [item.id, item.status === "done"]));
+  }
+  if (/list|grid|kanban|choice/.test(layout)) state.selectedItemId = content.items?.[0]?.id || "";
+  return state;
+}
+
+function flowRefsForScreen(id, context) {
+  const refs = (context.domainModel?.flows || []).filter((flow) => {
+    const text = `${flow.title} ${(flow.steps || []).map((step) => step.intent).join(" ")}`.toLowerCase();
+    return id.split(/[_-]/).some((token) => token.length > 3 && text.includes(token));
+  }).map((flow) => flow.id);
+  return refs.length ? refs.slice(0, 4) : (context.domainModel?.flows?.[0]?.id ? [context.domainModel.flows[0].id] : []);
 }
 
 function buildNavigation(screens, roles, productFamily, t) {
@@ -1303,25 +1947,41 @@ function resolveRoles(semanticModel, productFamily, t) {
       kind: actorKind(actor),
     }));
   roles = dedupeRoles(roles);
+  const semanticText = JSON.stringify({
+    actors: semanticModel.actors,
+    scope: semanticModel.scopeItems,
+    capabilities: semanticModel.capabilities,
+    tasks: semanticModel.tasks,
+    integrations: semanticModel.integrations,
+  });
+  const wantsAdmin = roles.some((role) => role.kind === "admin")
+    || /admin|administrator|owner|permission|role|audit|админ|администратор|права|роли|аудит/i.test(semanticText);
+  const wantsSeller = roles.some((role) => role.kind === "seller")
+    || productFamily === "marketplace"
+    || /seller|merchant|vendor|продав|sotuvchi/i.test(semanticText);
+  const wantsOperator = roles.some((role) => role.kind === "operator")
+    || ["crm", "erp", "tms"].includes(productFamily)
+    || /operator|support|manager|agent|оператор|менеджер|поддерж/i.test(semanticText);
   if (productFamily === "ecommerce") {
     const buyer = roles.find((role) => role.kind === "buyer") || { id: "buyer", title: t.customer, kind: "buyer" };
-    const admin = roles.find((role) => role.kind === "admin") || { id: "admin", title: t.admin, kind: "admin" };
-    return dedupeRoles([buyer, admin]);
+    const admin = wantsAdmin ? (roles.find((role) => role.kind === "admin") || { id: "admin", title: t.admin, kind: "admin" }) : null;
+    return dedupeRoles([buyer, admin].filter(Boolean));
   }
   if (["erp", "tms"].includes(productFamily)) {
     const operator = roles.find((role) => role.kind === "operator") || { id: "operator", title: t.operator, kind: "operator" };
-    const admin = roles.find((role) => role.kind === "admin") || { id: "admin", title: t.admin, kind: "admin" };
-    return dedupeRoles([operator, admin]);
+    const admin = wantsAdmin ? (roles.find((role) => role.kind === "admin") || { id: "admin", title: t.admin, kind: "admin" }) : null;
+    return dedupeRoles([operator, admin].filter(Boolean));
   }
   if (["saas", "mobile-app", "website"].includes(productFamily)) {
     const user = roles.find((role) => role.kind === "buyer") || { id: "user", title: t.customer, kind: "buyer" };
-    const admin = roles.find((role) => role.kind === "admin") || { id: "admin", title: t.admin, kind: "admin" };
-    return dedupeRoles([user, admin]);
+    const admin = wantsAdmin ? (roles.find((role) => role.kind === "admin") || { id: "admin", title: t.admin, kind: "admin" }) : null;
+    return dedupeRoles([user, admin].filter(Boolean));
   }
   if (roles.length) return roles;
-  if (productFamily === "crm") return [{ id: "operator", title: t.operator, kind: "operator" }, { id: "admin", title: t.admin, kind: "admin" }];
-  if (productFamily === "marketplace") return [{ id: "buyer", title: t.customer, kind: "buyer" }, { id: "seller", title: t.seller, kind: "seller" }, { id: "admin", title: t.admin, kind: "admin" }];
-  return [{ id: "user", title: t.customer, kind: "buyer" }, { id: "admin", title: t.admin, kind: "admin" }];
+  if (productFamily === "crm") return dedupeRoles([{ id: "operator", title: t.operator, kind: "operator" }, ...(wantsAdmin ? [{ id: "admin", title: t.admin, kind: "admin" }] : [])]);
+  if (productFamily === "marketplace") return dedupeRoles([{ id: "buyer", title: t.customer, kind: "buyer" }, ...(wantsSeller ? [{ id: "seller", title: t.seller, kind: "seller" }] : []), ...(wantsAdmin ? [{ id: "admin", title: t.admin, kind: "admin" }] : [])]);
+  if (wantsOperator) return [{ id: "operator", title: t.operator, kind: "operator" }];
+  return [{ id: "user", title: t.customer, kind: "buyer" }];
 }
 
 function actorKind(actor) {
@@ -1525,6 +2185,17 @@ function safeRoleId(value) {
   return String(value || "user").toLowerCase().replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").replace(/^[^a-z]+/, "") || "user";
 }
 
+function safeId(value, fallback = "item") {
+  const raw = String(value || fallback)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/^[^a-z]+/, "");
+  const normalized = raw || fallback;
+  const ascii = /^[a-z]/.test(normalized) ? normalized : `x_${normalized}`;
+  return ascii.length >= 2 ? ascii.slice(0, 64) : `${ascii}_1`;
+}
+
 function hex(value, fallback) {
   const text = String(value || "").trim();
   return /^#[0-9A-Fa-f]{6}$/.test(text) ? text.toUpperCase() : fallback;
@@ -1532,4 +2203,19 @@ function hex(value, fallback) {
 
 function uniqueStrings(values) {
   return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+function firstExistingScreenId(screenSet, candidates = [], fallback = "") {
+  for (const id of candidates) {
+    if (screenSet.has(id)) return id;
+  }
+  return fallback || [...screenSet][0] || "";
+}
+
+function productValueDescription(context) {
+  const primaryFlow = context.domainModel.flows[0]?.title;
+  const primaryEntity = context.domainModel.entities[0]?.title;
+  return cleanText([primaryFlow, primaryEntity, context.proposalModel?.brief?.type || context.semanticModel?.project?.category]
+    .filter(Boolean)
+    .join(" · ") || context.t.projectDescription, 180);
 }

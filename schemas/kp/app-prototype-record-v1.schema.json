@@ -10,11 +10,14 @@
     "requestId": { "type": "string", "minLength": 1 },
     "publicId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
     "publicUrl": { "type": "string", "format": "uri" },
+    "specSchemaVersion": { "type": "string", "minLength": 1 },
+    "plannerVersion": { "type": "string", "minLength": 1 },
     "rendererVersion": { "type": "string", "minLength": 1 },
+    "qaVersion": { "type": "string", "minLength": 1 },
     "relativePath": { "type": "string", "minLength": 1 },
     "sha256": { "type": "string", "pattern": "^(sha256:)?[0-9a-f]{64}$" },
     "sizeBytes": { "type": "integer", "minimum": 1 },
-    "screenCount": { "type": "integer", "minimum": 48, "maximum": 60 },
+    "screenCount": { "type": "integer", "minimum": 6, "maximum": 24 },
     "qaStatus": { "enum": ["PASS", "WARN", "FAIL"] },
     "updatedAt": { "type": "string", "format": "date-time" }
   }

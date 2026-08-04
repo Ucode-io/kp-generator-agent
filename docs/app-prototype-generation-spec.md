@@ -7,6 +7,7 @@
 - Репозиторий: `kp-generator-agent`
 - Связанный артефакт: коммерческое предложение в PDF
 - Визуальный референс: `/Users/nurmuhammad/Downloads/prototype 2/index.html`
+- План устранения выявленных расхождений: `docs/app-prototype-quality-remediation-spec.md`
 
 ## 2. Цель
 

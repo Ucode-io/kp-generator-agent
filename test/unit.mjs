@@ -831,10 +831,14 @@ const marketplacePrototypeSpec = await buildAndValidateAppPrototypeSpec({
   },
 });
 assert.equal(marketplacePrototypeSpec.project.type, "marketplace");
-assert.equal(marketplacePrototypeSpec.screens.length, 55);
-assert.equal(marketplacePrototypeSpec.navigation.length, 6);
+assert.equal(marketplacePrototypeSpec.schemaVersion, "2.0");
+assert.ok(marketplacePrototypeSpec.screens.length >= 8 && marketplacePrototypeSpec.screens.length <= 16);
+assert.ok(marketplacePrototypeSpec.navigation.length <= 6);
 assert.ok(marketplacePrototypeSpec.screens.some((screen) => screen.id === "catalog"));
 assert.ok(marketplacePrototypeSpec.screens.some((screen) => screen.id === "checkout"));
+assert.ok(marketplacePrototypeSpec.screens.some((screen) => screen.id === "seller_workspace"));
+assert.ok(marketplacePrototypeSpec.screens.every((screen) => screen.intent && screen.layout));
+assert.ok(marketplacePrototypeSpec.screens.flatMap((screen) => screen.actions).every((action) => action.type));
 assert.equal(
   new Set(marketplacePrototypeSpec.navigation.flatMap((group) => group.screenIds)).size,
   marketplacePrototypeSpec.screens.length,
@@ -844,6 +848,7 @@ assert.ok(marketplacePrototypeHtml.includes("data-screen=\"catalog\""));
 assert.ok(marketplacePrototypeHtml.includes("grid-template-columns:repeat(5,1fr)"));
 assert.ok(marketplacePrototypeHtml.includes("#4C3FA8 0%,#2A2570 55%,#221E5E 100%"));
 assert.ok(marketplacePrototypeHtml.includes("class=\"ui-button primary\""));
+assert.equal(marketplacePrototypeHtml.includes("readonly"), false);
 assert.equal(/(?:file:\/\/|\/Users\/|\/tmp\/)/.test(marketplacePrototypeHtml), false);
 
 const ecommerceDealPrompt = `Составь коммерческое предложение (КП) для клиента на основе данных сделки.
@@ -870,8 +875,8 @@ const ecommercePrototypeSpec = await buildAndValidateAppPrototypeSpec({
   },
 });
 assert.equal(ecommercePrototypeSpec.project.type, "ecommerce");
-assert.ok(ecommercePrototypeSpec.screens.some((screen) => screen.id === "admin_catalog"));
 assert.ok(ecommercePrototypeSpec.screens.some((screen) => screen.id === "checkout"));
+assert.equal(ecommercePrototypeSpec.screens.some((screen) => screen.id === "admin_catalog"), false);
 assert.equal(ecommercePrototypeSpec.screens.some((screen) => screen.id === "seller_workspace"), false);
 assert.equal(ecommercePrototypeSpec.screens.some((screen) => screen.id === "pipeline"), false);
 
@@ -908,10 +913,10 @@ const explicitProjectTypeCases = [
   { declaredType: "CRM", category: "CRM / operations platform", family: "crm", pack: "crm", screen: "pipeline", forbidden: "purchase_orders" },
   { declaredType: "ERP", category: "ERP / operations platform", family: "erp", pack: "erp", screen: "purchase_orders", forbidden: "pipeline" },
   { declaredType: "Marketplace", category: "Marketplace product", family: "marketplace", pack: "marketplace", screen: "seller_workspace", forbidden: "admin_catalog" },
-  { declaredType: "SaaS", category: "SaaS product", family: "saas", pack: "saas", screen: "subscription_checkout", forbidden: "pipeline" },
-  { declaredType: "E-commerce", category: "E-commerce product", family: "ecommerce", pack: "ecommerce", screen: "admin_catalog", forbidden: "seller_workspace" },
+  { declaredType: "SaaS", category: "SaaS product", family: "saas", pack: "saas", screen: "workspaces", forbidden: "pipeline" },
+  { declaredType: "E-commerce", category: "E-commerce product", family: "ecommerce", pack: "ecommerce", screen: "checkout", forbidden: "seller_workspace" },
   { declaredType: "Mobile App", category: "Mobile product", family: "mobile-app", pack: "mobile-app", screen: "app_permissions", forbidden: "pipeline" },
-  { declaredType: "Website", category: "Web product", family: "website", pack: "website", screen: "cms_pages", forbidden: "pipeline" },
+  { declaredType: "Website", category: "Web product", family: "website", pack: "website", screen: "services", forbidden: "pipeline" },
   { declaredType: "Other", category: "Custom software product", family: "business-app", pack: null, screen: "workspace", forbidden: "pipeline" },
   { declaredType: "TMS", category: "TMS / logistics platform", family: "tms", pack: "tms", screen: "dispatch_board", forbidden: "pipeline" },
 ];
@@ -945,9 +950,12 @@ for (const [index, projectTypeCase] of explicitProjectTypeCases.entries()) {
     },
   });
   assert.equal(spec.project.type, projectTypeCase.family, projectTypeCase.declaredType);
-  assert.ok(spec.screens.length >= 48 && spec.screens.length <= 60, projectTypeCase.declaredType);
+  assert.equal(spec.schemaVersion, "2.0", projectTypeCase.declaredType);
+  assert.ok(spec.screens.length >= 6 && spec.screens.length <= 16, projectTypeCase.declaredType);
   assert.ok(spec.screens.some((screen) => screen.id === projectTypeCase.screen), projectTypeCase.declaredType);
   assert.equal(spec.screens.some((screen) => screen.id === projectTypeCase.forbidden), false, projectTypeCase.declaredType);
+  assert.ok(spec.screens.every((screen) => screen.intent && screen.sourceRefs.length), projectTypeCase.declaredType);
+  assert.ok(spec.screens.flatMap((screen) => screen.actions).every((action) => action.type), projectTypeCase.declaredType);
   assert.equal(
     new Set(spec.navigation.flatMap((group) => group.screenIds)).size,
     spec.screens.length,
@@ -971,13 +979,14 @@ const crmPrototypeSpec = await buildAndValidateAppPrototypeSpec({
   },
 });
 assert.equal(crmPrototypeSpec.project.type, "crm");
-assert.equal(crmPrototypeSpec.screens.length, 55);
+assert.equal(crmPrototypeSpec.schemaVersion, "2.0");
+assert.ok(crmPrototypeSpec.screens.length >= 8 && crmPrototypeSpec.screens.length <= 16);
 assert.ok(crmPrototypeSpec.screens.some((screen) => screen.id === "pipeline"));
 assert.equal(crmPrototypeSpec.screens.find((screen) => screen.id === "onboarding")?.content.layout, "onboarding");
 assert.equal(crmPrototypeSpec.screens.find((screen) => screen.id === "pipeline")?.content.layout, "kanban");
 assert.equal(crmPrototypeSpec.screens.find((screen) => screen.id === "calendar")?.content.layout, "calendar");
-assert.equal(crmPrototypeSpec.screens.find((screen) => screen.id === "permissions")?.content.layout, "permission-matrix");
-assert.equal(crmPrototypeSpec.screens.find((screen) => screen.id === "integrations")?.content.layout, "integration-grid");
+assert.equal(crmPrototypeSpec.screens.some((screen) => screen.id === "permissions"), false);
+assert.equal(crmPrototypeSpec.screens.some((screen) => screen.id === "integrations"), false);
 assert.equal(crmPrototypeSpec.screens.find((screen) => screen.id === "leads")?.content.items[0].title, "Азиза Каримова");
 const crmContentSignatures = crmPrototypeSpec.screens.map((screen) => JSON.stringify({
   layout: screen.content.layout,
@@ -992,7 +1001,7 @@ assert.ok(new Set(crmContentSignatures).size / crmPrototypeSpec.screens.length >
 const crmPrototypeHtml = renderAppPrototypeHtml(crmPrototypeSpec);
 assert.ok(crmPrototypeHtml.includes("class=\"kanban-board\""));
 assert.ok(crmPrototypeHtml.includes("class=\"calendar-card\""));
-assert.ok(crmPrototypeHtml.includes("class=\"permission-list\""));
+assert.equal(crmPrototypeHtml.includes("readonly"), false);
 
 const nonMarketplaceOrderModel = buildProposalSemanticModel({
   requestId: "KP-BPMN-NON-MARKETPLACE",

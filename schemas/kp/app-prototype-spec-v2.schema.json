@@ -1,0 +1,254 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://udevs.local/schemas/kp/app-prototype-spec-v2.schema.json",
+  "title": "KP AppPrototypeSpec v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "requestId", "publicId", "locale", "project", "theme", "navigation", "screens"],
+  "properties": {
+    "schemaVersion": { "const": "2.0" },
+    "requestId": { "type": "string", "minLength": 1 },
+    "publicId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+    "locale": { "enum": ["uz-Latn", "ru-RU", "en"] },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "description"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "type": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 260 }
+      }
+    },
+    "theme": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary", "secondary", "background", "surface"],
+      "properties": {
+        "primary": { "$ref": "#/$defs/hex" },
+        "secondary": { "$ref": "#/$defs/hex" },
+        "background": { "$ref": "#/$defs/hex" },
+        "surface": { "$ref": "#/$defs/hex" },
+        "success": { "$ref": "#/$defs/hex" },
+        "warning": { "$ref": "#/$defs/hex" },
+        "error": { "$ref": "#/$defs/hex" }
+      }
+    },
+    "navigation": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "screenIds"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "roleId": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "screenIds": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/$defs/id" }
+          }
+        }
+      }
+    },
+    "flows": {
+      "type": "array",
+      "maxItems": 12,
+      "items": { "$ref": "#/$defs/flow" }
+    },
+    "screens": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 24,
+      "items": { "$ref": "#/$defs/screen" }
+    }
+  },
+  "$defs": {
+    "hex": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{1,63}$" },
+    "screenType": {
+      "enum": ["onboarding", "login", "dashboard", "list", "product_grid", "details", "form", "stepper", "checkout", "payment", "tracking", "history", "profile", "analytics", "settings", "success", "empty_state", "error_state", "confirmation"]
+    },
+    "actionType": {
+      "enum": ["navigate", "back", "open_sheet", "open_dialog", "close_overlay", "select", "toggle", "set_value", "set_tab", "submit", "branch", "reset", "copy_demo"]
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "label"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "$ref": "#/$defs/actionType" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "targetScreenId": { "$ref": "#/$defs/id" },
+        "formId": { "$ref": "#/$defs/id" },
+        "stateKey": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "value": {},
+        "tabId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "pendingState": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "overlay": { "$ref": "#/$defs/overlay" },
+        "outcomes": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["when"],
+            "properties": {
+              "when": { "type": "string", "minLength": 1, "maxLength": 80 },
+              "targetScreenId": { "$ref": "#/$defs/id" },
+              "statePatch": { "type": "object", "additionalProperties": true }
+            }
+          }
+        },
+        "disabledReason": { "type": "string", "minLength": 1, "maxLength": 140 }
+      }
+    },
+    "overlay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["sheet", "dialog"] },
+        "title": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "description": { "type": "string", "maxLength": 180 },
+        "items": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/item" } },
+        "actions": { "type": "array", "maxItems": 3, "items": { "$ref": "#/$defs/action" } }
+      }
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["title"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "detail": { "type": "string", "maxLength": 160 },
+        "status": { "type": "string", "maxLength": 32 },
+        "action": { "$ref": "#/$defs/action" }
+      }
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "label"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "value": { "type": "string", "maxLength": 180 },
+        "type": { "enum": ["text", "email", "password", "tel", "number", "search", "textarea", "select", "otp"] },
+        "required": { "type": "boolean" },
+        "readonly": { "type": "boolean" },
+        "pattern": { "type": "string", "maxLength": 120 },
+        "options": { "type": "array", "maxItems": 12, "items": { "type": "string", "maxLength": 80 } }
+      }
+    },
+    "content": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "layout": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "metrics": {
+          "type": "array",
+          "maxItems": 6,
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["label", "value"],
+            "properties": {
+              "label": { "type": "string", "minLength": 1, "maxLength": 80 },
+              "value": { "type": "string", "minLength": 1, "maxLength": 48 },
+              "unit": { "type": "string", "maxLength": 32 },
+              "period": { "type": "string", "maxLength": 48 },
+              "tone": { "type": "string", "maxLength": 32 },
+              "derivation": { "type": "string", "maxLength": 160 },
+              "sourceRefs": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 120 } }
+            }
+          }
+        },
+        "items": { "type": "array", "maxItems": 12, "items": { "$ref": "#/$defs/item" } },
+        "fields": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/field" } },
+        "steps": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["title"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "title": { "type": "string", "minLength": 1, "maxLength": 100 },
+              "state": { "type": "string", "maxLength": 32 }
+            }
+          }
+        },
+        "tabs": { "type": "array", "maxItems": 6, "items": { "type": "string", "maxLength": 48 } },
+        "chart": { "type": "array", "maxItems": 12, "items": { "type": "number" } },
+        "note": { "type": "string", "maxLength": 180 }
+      }
+    },
+    "variant": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "trigger"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "trigger": { "type": "string", "minLength": 1, "maxLength": 80 }
+      }
+    },
+    "flow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "entryScreenId", "steps", "sourceRefs"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "actorRoleId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "entryScreenId": { "$ref": "#/$defs/id" },
+        "successScreenIds": { "type": "array", "items": { "$ref": "#/$defs/id" } },
+        "errorScreenIds": { "type": "array", "items": { "$ref": "#/$defs/id" } },
+        "steps": { "type": "array", "maxItems": 12, "items": { "type": "object", "additionalProperties": true } },
+        "sourceRefs": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1, "maxLength": 120 } }
+      }
+    },
+    "screen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "title", "description", "roleIds", "sourceRefs", "intent", "layout", "actions", "content"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "$ref": "#/$defs/screenType" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 180 },
+        "roleIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1, "maxLength": 80 }
+        },
+        "sourceRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1, "maxLength": 120 }
+        },
+        "intent": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "entityRef": { "type": "string", "maxLength": 80 },
+        "variant": { "type": "string", "maxLength": 80 },
+        "layout": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "flowRefs": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/id" } },
+        "localState": { "type": "object", "additionalProperties": true },
+        "variants": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/variant" } },
+        "navigation": { "type": "object", "additionalProperties": true },
+        "actions": {
+          "type": "array",
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/action" }
+        },
+        "content": { "$ref": "#/$defs/content" }
+      }
+    }
+  }
+}

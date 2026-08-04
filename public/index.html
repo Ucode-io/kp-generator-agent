@@ -91,6 +91,18 @@
       font-size: 13px;
       font-weight: 800;
     }
+    .download-button {
+      width: auto;
+      min-height: 36px;
+      padding: 0 12px;
+      white-space: nowrap;
+    }
+    .action-row {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
     .preview-stage {
       position: relative;
       width: 100%;
@@ -112,6 +124,27 @@
     @media (max-width: 720px) {
       form { grid-template-columns: 1fr; }
       label:first-child { grid-column: auto; }
+    }
+    @media print {
+      body { background: #fff; }
+      main { width: 100%; margin: 0; }
+      main > h1,
+      main > .lead,
+      form,
+      .status,
+      .result-head,
+      .result-tools { display: none !important; }
+      .result {
+        display: block !important;
+        border: 0;
+        border-radius: 0;
+        background: #fff;
+        overflow: visible;
+      }
+      .preview-stage {
+        height: auto;
+        overflow: visible;
+      }
     }
   </style>
 </head>
@@ -159,7 +192,10 @@
           <button id="pdf-tab" class="tab-button active" type="button">PDF preview</button>
           <button id="prototype-tab" class="tab-button" type="button">Prototype preview</button>
         </div>
-        <a id="prototype-open" class="prototype-link" href="#" target="_blank" rel="noopener noreferrer">Открыть прототип ↗</a>
+        <div class="action-row">
+          <a id="prototype-open" class="prototype-link" href="#" target="_blank" rel="noopener noreferrer">Открыть прототип ↗</a>
+          <button id="pdf-download" class="download-button" type="button" disabled>Сохранить PDF</button>
+        </div>
       </div>
       <div id="preview-stage" class="preview-stage">
         <iframe id="preview" title="Сгенерированное коммерческое предложение"></iframe>
@@ -181,8 +217,11 @@
     const pdfTab = document.querySelector("#pdf-tab");
     const prototypeTab = document.querySelector("#prototype-tab");
     const prototypeOpen = document.querySelector("#prototype-open");
+    const pdfDownload = document.querySelector("#pdf-download");
     let lastPdfHtml = "";
     let lastPrototypeHtml = "";
+    let lastPdfDownloadUrl = "";
+    let lastPdfTitle = "proposal";
 
     dynamicPalettes.addEventListener("change", () => {
       dynamicPalettesLabel.textContent = dynamicPalettes.checked
@@ -192,11 +231,19 @@
 
     pdfTab.addEventListener("click", () => switchPreview("pdf"));
     prototypeTab.addEventListener("click", () => switchPreview("prototype"));
+    pdfDownload.addEventListener("click", () => {
+      downloadGeneratedPdf().catch((error) => {
+        status.className = "status error";
+        status.textContent = error.message || String(error);
+      });
+    });
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       submit.disabled = true;
       result.classList.remove("visible");
+      pdfDownload.disabled = true;
+      lastPdfDownloadUrl = "";
       status.className = "status";
       status.textContent = "Генерация запущена. Анализ сайта и сборка HTML могут занять несколько минут…";
       const apiKey = document.querySelector("#api-key").value
@@ -222,6 +269,7 @@
           throw new Error(payload.error?.message || `HTTP ${response.status}`);
         }
         resultTitle.textContent = payload.title || payload.requestId;
+        lastPdfTitle = payload.title || payload.requestId || "proposal";
         const source = payload.theme?.source;
         const selection = source?.paletteSelection;
         const selectionLabel = source?.kind === "udevs_static"
@@ -237,6 +285,8 @@
         renderPalette(payload.theme?.palette || {});
         lastPdfHtml = payload.html || "";
         lastPrototypeHtml = "";
+        lastPdfDownloadUrl = payload.downloadUrl || "";
+        pdfDownload.disabled = !lastPdfDownloadUrl;
         preview.srcdoc = lastPdfHtml;
         pdfTab.classList.add("active");
         prototypeTab.classList.remove("active");
@@ -317,6 +367,44 @@
       preview.title = prototypeMode ? "Интерактивный HTML-прототип" : "Сгенерированное коммерческое предложение";
       preview.srcdoc = prototypeMode ? (lastPrototypeHtml || "<!doctype html><body style=\"font:16px system-ui;padding:24px\">Prototype is loading…</body>") : lastPdfHtml;
       requestAnimationFrame(fitPreview);
+    }
+
+    async function downloadGeneratedPdf() {
+      if (!lastPdfDownloadUrl) throw new Error("PDF artifact URL is not available");
+      pdfDownload.disabled = true;
+      const apiKey = document.querySelector("#api-key").value
+        .trim()
+        .replace(/^(?:Bearer\s+)+/i, "")
+        .trim();
+      try {
+        const response = await fetch(lastPdfDownloadUrl, {
+          headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null);
+          throw new Error(payload?.error?.message || `PDF HTTP ${response.status}`);
+        }
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${safeDownloadName(lastPdfTitle)}.pdf`;
+        document.body.append(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      } finally {
+        pdfDownload.disabled = !lastPdfDownloadUrl;
+      }
+    }
+
+    function safeDownloadName(value) {
+      return String(value || "proposal")
+        .replace(/[\\/:*?"<>|]+/g, "-")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 100) || "proposal";
     }
     new ResizeObserver(fitPreview).observe(previewStage);
   </script>

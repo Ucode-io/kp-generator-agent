@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { atomicWriteJson, sha256Digest } from "./kp_reference_contracts.mjs";
+import { APP_PROTOTYPE_PLANNER_VERSION } from "./kp_app_prototype_planner.mjs";
 import { APP_PROTOTYPE_RENDERER_VERSION } from "./kp_app_prototype_renderer.mjs";
+import { APP_PROTOTYPE_QA_VERSION } from "./kp_app_prototype_qa.mjs";
 
 const PUBLIC_ID_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -26,7 +28,10 @@ export async function publishAppPrototype({
     requestId,
     publicId,
     publicUrl,
+    specSchemaVersion: "2.0",
+    plannerVersion: APP_PROTOTYPE_PLANNER_VERSION,
     rendererVersion: APP_PROTOTYPE_RENDERER_VERSION,
+    qaVersion: APP_PROTOTYPE_QA_VERSION,
     relativePath: finalRelativePath,
     sha256: sha256Digest(html),
     sizeBytes: html.length,
