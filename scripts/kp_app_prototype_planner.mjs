@@ -1,6 +1,13 @@
 import { validateKpContract } from "./kp_reference_contracts.mjs";
+import { buildProductDeliveryInventory } from "./kp_product_map_model.mjs";
+import {
+  buildCuratedPrototypeMedia,
+  derivePrototypeExperienceFamily,
+  derivePrototypeImageKeywords,
+  resolveAppPrototypeMedia,
+} from "./kp_app_prototype_media.mjs";
 
-export const APP_PROTOTYPE_PLANNER_VERSION = "app-prototype-planner-v2";
+export const APP_PROTOTYPE_PLANNER_VERSION = "app-prototype-planner-v4";
 
 const SCREEN_LIMIT = 24;
 const TARGET_SCREEN_RANGE = Object.freeze({ min: 6, preferred: 12, max: 16 });
@@ -150,7 +157,18 @@ const DICTIONARY = {
 };
 
 export async function buildAndValidateAppPrototypeSpec(input = {}) {
-  const spec = buildAppPrototypeSpec(input);
+  let spec = buildAppPrototypeSpec(input);
+  const packageSemantic = input.proposalPackage?.semanticModel || input.semanticModel || {};
+  const packageProposal = input.proposalPackage?.proposalModel || input.proposalModel || {};
+  const media = await resolveAppPrototypeMedia({
+    productFamily: spec.project.type,
+    experienceFamily: spec.sourceContext.experienceFamily,
+    semanticModel: packageSemantic,
+    proposalModel: packageProposal,
+    env: input.env || {},
+    fetchImpl: input.fetchImpl,
+  });
+  spec = applyPrototypeMedia(spec, media);
   await validateAppPrototypeSpec(spec);
   return spec;
 }
@@ -171,13 +189,21 @@ export function buildAppPrototypeSpec({
   const packageProposal = proposalPackage.proposalModel || proposalModel || {};
   const project = packageSemantic.project || {};
   const productFamily = detectProductFamily(packageProposal, packageSemantic);
+  const experienceFamily = derivePrototypeExperienceFamily({ productFamily, semanticModel: packageSemantic, proposalModel: packageProposal });
   const roles = resolveRoles(packageSemantic, productFamily, t);
-  const sourceRefs = sourceRefsFor(packageSemantic, packageProposal);
-  const domainModel = buildPrototypeDomainModel(packageSemantic, packageProposal, roles, productFamily, t, sourceRefs);
+  const deliveryInventory = buildProductDeliveryInventory(packageSemantic)
+    .filter((row) => !["deferred", "out_of_scope"].includes(String(row.inclusion || "").toLowerCase()) && !TECHNICAL_TERMS.test(textOf(row)));
+  const sourceRefs = sourceRefsFor(packageSemantic, packageProposal, proposalPackage);
+  const domainModel = buildPrototypeDomainModel(packageSemantic, packageProposal, roles, productFamily, t, sourceRefs, {
+    deliveryInventory,
+    experienceFamily,
+    visualizationSpecs: proposalPackage.visualizationSpecs || [],
+  });
   const context = {
     t,
     roles,
     productFamily,
+    experienceFamily,
     domainModel,
     semanticModel: packageSemantic,
     proposalModel: packageProposal,
@@ -185,7 +211,8 @@ export function buildAppPrototypeSpec({
   };
 
   let screens;
-  if (productFamily === "ecommerce") screens = ecommerceScreens(context);
+  if (productFamily === "mobile-app" && experienceFamily === "real-estate") screens = realEstateScreens(context);
+  else if (productFamily === "ecommerce") screens = ecommerceScreens(context);
   else if (productFamily === "erp") screens = erpScreens(context);
   else if (productFamily === "tms") screens = tmsScreens(context);
   else if (productFamily === "saas") screens = saasScreens(context);
@@ -198,6 +225,11 @@ export function buildAppPrototypeSpec({
 
   screens = selectScreensForPrototype(dedupeScreens(screens), context).slice(0, SCREEN_LIMIT);
   screens = wireScreenActions(screens, context);
+  screens = ensureScreenActionReachability(screens, context);
+
+  const imageKeywords = derivePrototypeImageKeywords({ experienceFamily, proposalModel: packageProposal, semanticModel: packageSemantic });
+  const media = buildCuratedPrototypeMedia({ experienceFamily, keywords: imageKeywords });
+  screens = applyMediaToScreens(screens, media);
 
   return {
     schemaVersion: "2.0",
@@ -209,6 +241,15 @@ export function buildAppPrototypeSpec({
       type: productFamily,
       description: cleanText(project.category || packageProposal.brief?.type || t.projectDescription, 260),
     },
+    sourceContext: buildPrototypeSourceContext({
+      productFamily,
+      experienceFamily,
+      domainModel,
+      semanticModel: packageSemantic,
+      proposalPackage,
+      imageKeywords,
+    }),
+    media,
     theme: normalizeTheme(visualStyleProfile, themeTokens),
     navigation: buildNavigation(screens, roles, productFamily, t),
     flows: buildSpecFlows(domainModel, screens),
@@ -225,8 +266,16 @@ export async function validateAppPrototypeSpec(spec) {
   }))];
   const screenIds = spec?.screens?.map((screen) => screen.id) || [];
   const screenSet = new Set(screenIds);
+  const mediaIds = (spec?.media?.images || []).map((image) => image.id);
+  const mediaSet = new Set(mediaIds);
   if (screenSet.size !== screenIds.length) {
     findings.push({ code: "APP_PROTOTYPE_SCREEN_IDS_DUPLICATED", severity: "BLOCKER", message: "Screen ids must be unique." });
+  }
+  if (mediaSet.size !== mediaIds.length) {
+    findings.push({ code: "APP_PROTOTYPE_MEDIA_IDS_DUPLICATED", severity: "BLOCKER", message: "Media ids must be unique." });
+  }
+  if (spec?.sourceContext?.projectType !== spec?.project?.type) {
+    findings.push({ code: "APP_PROTOTYPE_PROJECT_TYPE_DRIFT", severity: "BLOCKER", message: "Grounding project type must match prototype project type." });
   }
   const navRefs = (spec?.navigation || []).flatMap((group) => group.screenIds || []);
   const navSet = new Set(navRefs);
@@ -239,7 +288,34 @@ export async function validateAppPrototypeSpec(spec) {
   if (navSet.size !== navRefs.length || navRefs.length !== screenIds.length) {
     findings.push({ code: "APP_PROTOTYPE_NAVIGATION_NOT_EXACT", severity: "BLOCKER", message: "Navigation must include each screen exactly once." });
   }
+  if (["marketplace", "ecommerce"].includes(spec?.project?.type) && !screenSet.has("favorites")) {
+    findings.push({ code: "APP_PROTOTYPE_FAVORITES_MISSING", severity: "BLOCKER", message: "Commerce prototype must include a favorites screen." });
+  }
+  for (const flow of spec?.flows || []) {
+    const flowScreenIds = uniqueStrings([flow.entryScreenId, ...(flow.screenIds || []), ...(flow.successScreenIds || []), ...(flow.errorScreenIds || [])]);
+    for (const screenId of flowScreenIds) {
+      if (!screenSet.has(screenId)) findings.push({ code: "APP_PROTOTYPE_FLOW_SCREEN_INVALID", severity: "BLOCKER", message: `Flow ${flow.id} references unknown screen: ${screenId}` });
+    }
+    if (!(flow.screenIds || []).includes(flow.entryScreenId)) {
+      findings.push({ code: "APP_PROTOTYPE_FLOW_ENTRY_MISSING", severity: "BLOCKER", message: `Flow ${flow.id} screenIds must include its entry screen.` });
+    }
+  }
   for (const screen of spec?.screens || []) {
+    const commerceClientSurface = ["marketplace", "ecommerce"].includes(spec?.project?.type)
+      && ["storefront-home", "commerce-catalog", "commerce-product", "commerce-cart", "commerce-checkout", "commerce-payment"].includes(screen.layout || screen.content?.layout);
+    if (["marketplace", "ecommerce"].includes(spec?.project?.type) && (screen.layout || screen.content?.layout) === "scope-board") {
+      findings.push({ code: "APP_PROTOTYPE_INTERNAL_SCOPE_LEAK", severity: "BLOCKER", message: `Internal product scope is rendered as a client screen: ${screen.id}` });
+    }
+    if (commerceClientSurface && (screen.content?.items || []).some((item) => item.status)) {
+      findings.push({ code: "APP_PROTOTYPE_DECORATIVE_STATUS_BADGE", severity: "BLOCKER", message: `Client commerce screen uses non-semantic item statuses: ${screen.id}` });
+    }
+    if (["marketplace", "ecommerce"].includes(spec?.project?.type) && (screen.content?.items || []).some((item) => /доступные действия соответствуют роли|demo flow|из карты продукта/i.test(`${item.title || ""} ${item.detail || ""}`))) {
+      findings.push({ code: "APP_PROTOTYPE_INTERNAL_COPY_LEAK", severity: "BLOCKER", message: `Internal planning copy is rendered as product UI: ${screen.id}` });
+    }
+    const imageRefs = [screen.content?.imageId, ...(screen.content?.items || []).map((item) => item.imageId)].filter(Boolean);
+    for (const imageId of imageRefs) {
+      if (!mediaSet.has(imageId)) findings.push({ code: "APP_PROTOTYPE_MEDIA_REF_INVALID", severity: "BLOCKER", message: `Screen ${screen.id} references unknown image: ${imageId}` });
+    }
     if (!screen.intent && spec?.schemaVersion !== "1.0") {
       findings.push({ code: "APP_PROTOTYPE_SCREEN_WITHOUT_INTENT", severity: "BLOCKER", message: `Screen is missing intent: ${screen.id}` });
     }
@@ -259,6 +335,13 @@ export async function validateAppPrototypeSpec(spec) {
         findings.push({ code: "APP_PROTOTYPE_ACTION_TARGET_INVALID", severity: "BLOCKER", message: `Action ${screen.id}/${action.id} references unknown screen: ${action.targetScreenId}` });
       }
     }
+    for (const item of screen.content?.items || []) {
+      for (const targetScreenId of actionTargetIds(item.action)) {
+        if (!screenSet.has(targetScreenId)) {
+          findings.push({ code: "APP_PROTOTYPE_ITEM_ACTION_TARGET_INVALID", severity: "BLOCKER", message: `Item action ${screen.id}/${item.id || item.title} references unknown screen: ${targetScreenId}` });
+        }
+      }
+    }
     const genericPrimary = hasGenericPrimaryContent(screen);
     if (genericPrimary) {
       findings.push({ code: "APP_PROTOTYPE_GENERIC_PRIMARY_CONTENT", severity: "BLOCKER", message: `Screen uses generic primary content: ${screen.id}` });
@@ -267,9 +350,17 @@ export async function validateAppPrototypeSpec(spec) {
       findings.push({ code: "APP_PROTOTYPE_FORM_NOT_EDITABLE", severity: "BLOCKER", message: `Editable screen contains readonly fields: ${screen.id}` });
     }
   }
+  const unreachableScreenIds = findUnreachablePrototypeScreens(spec?.screens || []);
+  if (unreachableScreenIds.length) {
+    findings.push({
+      code: "APP_PROTOTYPE_SCREEN_UNREACHABLE",
+      severity: "BLOCKER",
+      message: `Screens cannot be reached through in-prototype actions: ${unreachableScreenIds.join(", ")}`,
+    });
+  }
   const linearRatio = linearActionRatio(spec?.screens || []);
-  if ((spec?.screens || []).length > 8 && linearRatio > 0.7) {
-    findings.push({ code: "APP_PROTOTYPE_ACTION_GRAPH_LINEARIZED", severity: "BLOCKER", message: `Primary navigate actions follow screen order in ${Math.round(linearRatio * 100)}% of screens.` });
+  if ((spec?.screens || []).length > 8 && linearRatio > 0.9) {
+    findings.push({ code: "APP_PROTOTYPE_ACTION_GRAPH_LINEARIZED", severity: "ERROR", message: `Primary navigate actions follow screen order in ${Math.round(linearRatio * 100)}% of screens; add semantic branches where the flow supports them.` });
   }
   const contentSignatures = (spec?.screens || []).map((screen) => JSON.stringify({
     layout: screen.layout || screen.content?.layout,
@@ -303,10 +394,11 @@ export async function validateAppPrototypeSpec(spec) {
   return qa;
 }
 
-function buildPrototypeDomainModel(semanticModel = {}, proposalModel = {}, roles = [], productFamily = "business-app", t = DICTIONARY.en, sourceRefs = []) {
+function buildPrototypeDomainModel(semanticModel = {}, proposalModel = {}, roles = [], productFamily = "business-app", t = DICTIONARY.en, sourceRefs = [], options = {}) {
   const scopeItems = relevantScopeItems(semanticModel, proposalModel);
   const tasks = (semanticModel.tasks || []).filter((task) => !TECHNICAL_TERMS.test(textOf(task)));
   const capabilities = (semanticModel.capabilities || []).filter((capability) => !TECHNICAL_TERMS.test(textOf(capability)));
+  const deliveryInventory = (options.deliveryInventory || []).filter((row) => !TECHNICAL_TERMS.test(textOf(row)));
   const states = (semanticModel.states || []).map((state, index) => ({
     id: safeId(state.id || state.label || `state_${index + 1}`, `state_${index + 1}`),
     title: cleanText(state.label || state.id || `${t.status} ${index + 1}`, 80),
@@ -318,9 +410,9 @@ function buildPrototypeDomainModel(semanticModel = {}, proposalModel = {}, roles
     type: cleanText(integration.type || "", 48),
     sourceRefs: uniqueStrings([integration.id, ...(integration.sourceRefs || [])]).slice(0, 4),
   }));
-  const entities = deriveDomainEntities(scopeItems, tasks, capabilities, productFamily, t);
+  const entities = deriveDomainEntities(scopeItems, [...tasks, ...deliveryInventory], capabilities, productFamily, t);
   const searchable = searchableText(semanticModel, proposalModel);
-  const hasAuth = /auth|login|profile|role|access|permission|identity|user|пользоват|роль|доступ|парол|kiritish|foydalanuv/i.test(searchable)
+  const hasAuth = /auth|login|profile|role|access|permission|identity|user|пользоват|профил|личн(?:ый|ого)\s+кабинет|роль|доступ|парол|kiritish|foydalanuv/i.test(searchable)
     || roles.length > 1;
   const hasAdminScope = roles.some((role) => role.kind === "admin")
     || /admin|administrator|owner|control panel|permissions|roles|audit|админ|администратор|права|роли|аудит|sozlama/i.test(searchable);
@@ -343,6 +435,9 @@ function buildPrototypeDomainModel(semanticModel = {}, proposalModel = {}, roles
     flows,
     states,
     integrations,
+    deliveryInventory,
+    experienceFamily: options.experienceFamily || "generic",
+    visualizationSpecs: options.visualizationSpecs || [],
     navigationCandidates: [],
     sourceRefs: uniqueStrings(sourceRefs.length ? sourceRefs : ["DERIVED-APP-PROTOTYPE"]),
     hasAuth,
@@ -445,11 +540,17 @@ function buildSpecFlows(domainModel, screens) {
   return (domainModel.flows || []).slice(0, 4).map((flow) => {
     const entryScreenId = firstExistingScreenId(screenSet, familyEntryScreenIds(flow.id), screens[0]?.id);
     const successScreenIds = screens.filter((screen) => screen.type === "success").map((screen) => screen.id);
+    const flowTraversal = prototypeTraversalOrder(screens, entryScreenId);
+    const linkedScreenIds = new Set(screens.filter((screen) => (screen.flowRefs || []).includes(flow.id)).map((screen) => screen.id));
     const specFlow = {
       id: flow.id,
       title: flow.title,
       actorRoleId: flow.actorRoleId,
       entryScreenId,
+      screenIds: uniqueStrings([
+        entryScreenId,
+        ...flowTraversal.filter((screenId) => linkedScreenIds.has(screenId)),
+      ]).slice(0, SCREEN_LIMIT),
       steps: flow.steps,
       sourceRefs: flow.sourceRefs,
     };
@@ -824,6 +925,117 @@ function mobileAppScreens(context) {
   ]);
 }
 
+function realEstateScreens(context) {
+  const { t } = context;
+  return catalogScreens(context, [
+    ...sharedScreenDefinitions(t),
+    ["home", "dashboard", t.home, "Персональные рекомендации, популярные районы и быстрый поиск"],
+    ["property_catalog", "product_grid", "Каталог объектов", "Поиск квартир и домов по району, ЖК, адресу и параметрам"],
+    ["property_filters", "form", "Фильтры объектов", "Тип сделки, цена, комнаты, площадь, район и удобства"],
+    ["property_details", "details", "Карточка объекта", "Фотографии, характеристики, цена, описание и контакты продавца"],
+    ["property_gallery", "product_grid", "Фотографии объекта", "Галерея фасада, интерьера и инфраструктуры рядом"],
+    ["ai_search", "details", "ИИ-поиск", "Диалоговый поиск по площадке и внешним источникам"],
+    ["seller_chat", "details", "Чат с продавцом", "Переписка по объекту, звонок и согласование просмотра"],
+    ["favorites", "product_grid", "Избранное", "Сохранённые квартиры, дома и подборки"],
+    ["property_map", "details", "Объекты на карте", "Расположение, инфраструктура и построение маршрута"],
+    ["viewing_booking", "form", "Запись на просмотр", "Дата, время, способ связи и комментарий продавцу"],
+    ["viewing_success", "success", "Просмотр согласован", "Встреча добавлена в календарь, продавец получил уведомление"],
+    ["my_listings", "list", "Мои объявления", "Опубликованные объекты, просмотры и отклики"],
+    ["listing_create", "form", "Новое объявление", "Адрес, параметры, цена, описание и фотографии"],
+    ["profile", "profile", t.profile, "Личные данные, объявления, избранное и безопасность"],
+  ]).map((screenRow) => applyRealEstatePreset(screenRow, context));
+}
+
+function applyRealEstatePreset(screenRow, context) {
+  const item = (id, title, detail, status = "active") => ({ id, title, detail, status });
+  const presets = {
+    home: {
+      layout: "property-home",
+      metrics: [{ label: "Найдено", value: "124", tone: "primary" }, { label: "Новые", value: "18", tone: "success" }],
+      items: [
+        item("tashkent_city", "ЖК Tashkent City, 3-комн.", "Мирзо-Улугбек · 95 м² · $95,000", "done"),
+        item("modern_house", "Современный дом с бассейном", "Юнусабад · 240 м² · $280,000", "active"),
+        item("city_apartment", "Светлая квартира у метро", "Чиланзар · 72 м² · $68,000", "pending"),
+      ],
+      tabs: ["Купить", "Аренда", "Посуточно"],
+      note: "Рекомендации по выбранным районам и бюджету",
+    },
+    property_catalog: {
+      layout: "property-grid",
+      items: [
+        item("tashkent_city", "ЖК Tashkent City, 3-комн.", "Мирзо-Улугбек · 95 м² · $95,000", "done"),
+        item("garden_house", "Дом с садом, 5 комнат", "Юнусабад · 210 м² · $245,000", "active"),
+        item("new_build", "Новостройка, 2-комн.", "Мирабад · 68 м² · $82,000", "pending"),
+        item("studio", "Студия с ремонтом", "Яккасарай · 42 м² · $54,000", "active"),
+      ],
+      tabs: ["Рекомендуем", "Новые", "Рядом"],
+    },
+    property_details: {
+      title: "ЖК Tashkent City, 3-комн.",
+      description: "Мирзо-Улугбек, Ташкент · 124 отзыва",
+      layout: "property-details",
+      metrics: [{ label: "Комнаты", value: "3", tone: "primary" }, { label: "Площадь", value: "95 м²", tone: "success" }, { label: "Этаж", value: "7/16", tone: "active" }],
+      items: [
+        item("price", "Цена", "$95,000", "done"),
+        item("address", "Адрес", "Мирзо-Улугбек, Ташкент", "active"),
+        item("seller", "Азиз Каримов", "+998 90 123-45-67 · собственник", "pending"),
+        item("description", "Об объекте", "Панорамные окна, закрытая территория и подземный паркинг", "done"),
+      ],
+      tabs: ["Обзор", "Удобства", "На карте"],
+    },
+    ai_search: {
+      layout: "assistant-chat",
+      items: [
+        item("request", "Вы", "Найдите 3-комнатную квартиру до $100,000 рядом с центром", "done"),
+        item("answer", "ИИ-помощник", "Нашёл 12 объектов на платформе и 6 релевантных вариантов во внешних источниках", "active"),
+        item("result", "ЖК Tashkent City, 3-комн.", "$95,000 · 95 м² · Мирзо-Улугбек", "pending"),
+      ],
+      tabs: [],
+    },
+    seller_chat: {
+      layout: "seller-chat",
+      items: [
+        item("seller_message", "Азиз Каримов", "Здравствуйте! Объект актуален, готов ответить на вопросы.", "active"),
+        item("buyer_message", "Вы", "Добрый день! Можно посмотреть квартиру завтра после 18:00?", "done"),
+        item("seller_reply", "Азиз Каримов", "Да, подойдёт 18:30. Я подтвержу встречу в приложении.", "active"),
+      ],
+      tabs: [],
+    },
+    favorites: {
+      layout: "property-grid",
+      items: [item("favorite_home", "ЖК Tashkent City, 3-комн.", "Мирзо-Улугбек · 95 м² · $95,000", "done")],
+      tabs: ["Все", "Квартиры", "Дома"],
+    },
+    viewing_booking: {
+      layout: "form",
+      fields: [
+        { id: "date", label: "Дата просмотра", value: "6 августа 2026", type: "text", required: true },
+        { id: "time", label: "Время", value: "18:30", type: "text", required: true },
+        { id: "contact", label: "Связаться со мной", value: "Телефон", type: "select", options: ["Телефон", "Чат"] },
+        { id: "comment", label: "Комментарий", value: "Буду вдвоём, прошу показать парковку", type: "textarea" },
+      ],
+      tabs: [],
+    },
+  };
+  const preset = presets[screenRow.id];
+  if (!preset) return screenRow;
+  const content = {
+    ...screenRow.content,
+    ...preset,
+    metrics: normalizeMetrics(preset.metrics || screenRow.content.metrics, context),
+    items: withItemActions(preset.items || screenRow.content.items, screenRow.id, screenRow.type, context),
+    fields: normalizeFields(preset.fields || screenRow.content.fields, screenRow.id),
+  };
+  return {
+    ...screenRow,
+    title: preset.title || screenRow.title,
+    description: preset.description || screenRow.description,
+    layout: preset.layout || screenRow.layout,
+    content,
+    localState: localStateForScreen(screenRow.id, preset.layout || screenRow.layout, content),
+  };
+}
+
 function websiteScreens(context) {
   const { t } = context;
   return catalogScreens(context, [
@@ -1030,6 +1242,58 @@ function catalogScreens(context, definitions) {
   ));
 }
 
+function scopeDrivenScreens(context) {
+  const groups = new Map();
+  for (const row of context.domainModel.deliveryInventory || []) {
+    const key = cleanText(row.epic || row.functionLabel || context.t.workspace, 80);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  return [...groups.entries()].slice(0, 6).map(([epic, rows], index) => {
+    const first = rows[0] || {};
+    const id = safeId(`scope_${first.functionId || index + 1}`, `scope_module_${index + 1}`);
+    const detail = uniqueStrings(rows.map((row) => row.functionLabel || row.subfunctionLabel)).slice(0, 3).join(" · ");
+    const base = screen(
+      id,
+      "list",
+      epic,
+      detail || "Функции и пользовательские задачи из карты продукта",
+      [context.roles[0]?.id],
+      context,
+    );
+    const items = rows.slice(0, 8).map((row, rowIndex) => ({
+      id: safeId(row.id || row.subfunctionId || row.functionId, `${id}_item_${rowIndex + 1}`),
+      title: cleanText(row.subfunctionLabel || row.functionLabel, 80),
+      detail: cleanText([row.functionLabel !== row.subfunctionLabel ? row.functionLabel : "", row.phase || row.deadline || "MVP"].filter(Boolean).join(" · "), 160),
+      status: statusFor(rowIndex),
+      sourceRefs: uniqueStrings([row.id, row.functionId, row.subfunctionId, ...(row.sourceEntityIds || []), ...(row.sourceIds || [])]).slice(0, 8),
+      action: { id: safeId(`select_${row.id || rowIndex + 1}`, "select_scope_item"), type: "select", label: context.t.open, stateKey: `${id}.selected`, value: row.id || row.functionId },
+    }));
+    const sourceRefs = uniqueStrings(rows.flatMap((row) => [row.id, row.functionId, row.subfunctionId, ...(row.sourceEntityIds || []), ...(row.sourceIds || [])])).slice(0, 12);
+    const content = {
+      ...base.content,
+      layout: "scope-board",
+      metrics: normalizeMetrics([
+        { label: "Функции", value: String(new Set(rows.map((row) => row.functionId)).size), derivation: "product mind map branch", sourceRefs },
+        { label: context.t.tasks, value: String(rows.length), derivation: "canonical task-list rows", sourceRefs },
+      ], context),
+      items,
+      fields: [],
+      steps: [],
+      tabs: [],
+      note: cleanText(detail || epic, 180),
+    };
+    return {
+      ...base,
+      sourceRefs: sourceRefs.length ? sourceRefs : base.sourceRefs,
+      intent: `Проверить функции блока: ${cleanText(epic, 80)}`,
+      layout: "scope-board",
+      content,
+      localState: localStateForScreen(id, "scope-board", content),
+    };
+  });
+}
+
 function applyConditionalScreens(screens, context) {
   const text = searchableText(context.semanticModel, context.proposalModel);
   const hasAuth = context.domainModel.hasAuth;
@@ -1091,14 +1355,16 @@ function coreScreenIdsFor(context) {
   const auth = context.domainModel.hasAuth ? ["login", "login_otp"] : [];
   const admin = context.domainModel.hasAdminScope;
   const map = {
-    marketplace: ["onboarding", ...auth, "home", "catalog", "product", "cart", "checkout", "payment", "confirmation", "orders", "order_details", "tracking", "seller_workspace", "seller_products", "support", "profile"],
-    ecommerce: ["onboarding", ...auth, "home", "catalog", "product", "cart", "checkout", "payment_methods", "payment", "confirmation", "orders", "order_details", "support", "profile"],
+    marketplace: ["onboarding", ...auth, "home", "catalog", "product", "cart", "checkout", "payment", "confirmation", "orders", "order_details", "tracking", "favorites", "seller_workspace", "profile", "seller_products", "support"],
+    ecommerce: ["onboarding", ...auth, "home", "catalog", "product", "cart", "checkout", "payment_methods", "payment", "confirmation", "orders", "order_details", "favorites", "support", "profile"],
     fintech: ["onboarding", ...auth, "home", "limit_request", "verification", "offers", "contract_review", "contract_sign", "contract_success", "installments", "payment", "payment_success", "documents", "profile"],
     crm: ["onboarding", ...auth, "dashboard", "leads", "lead_details", "lead_create", "lead_qualify", "lead_convert", "pipeline", "tasks", "task_create", "calendar", "clients", "profile"],
     erp: ["onboarding", ...auth, "dashboard", "procurement_requests", "procurement_request_details", "procurement_approval", "purchase_orders", "inventory", "inventory_item", "finance_dashboard", "invoices", "reports"],
     tms: ["onboarding", ...auth, "dashboard", "transport_orders", "transport_order_details", "shipment_status", "shipment_tracking", "dispatch_board", "shipments", "fleet", "vehicle_details", "reports"],
     saas: ["onboarding", ...auth, "dashboard", "workspaces", "workspace_details", "projects", "project_create", "records", "record_details", "tasks", "automations", "reports"],
-    "mobile-app": ["onboarding", ...auth, "home", "feed", "discover", "content_details", "create_entry", "submit_review", "submit_success", "inbox", "media_library", "app_permissions"],
+    "mobile-app": context.experienceFamily === "real-estate"
+      ? ["onboarding", ...auth, "home", "property_catalog", "property_details", "ai_search", "seller_chat", "viewing_booking", "viewing_success", "favorites", "property_map", "profile"]
+      : ["onboarding", ...auth, "home", "feed", "discover", "content_details", "create_entry", "submit_review", "submit_success", "inbox", "media_library", "app_permissions"],
     website: ["onboarding", "home", "services", "service_details", "case_studies", "contacts", "contact_form", "contact_success", "faq", "blog", "article"],
     "business-app": ["onboarding", ...auth, "dashboard", "workspace", `${context.domainModel.entities[0]?.id || "record"}_details`, `${context.domainModel.entities[0]?.id || "record"}_form`, "workflow", "workflow_success", "tasks"],
   };
@@ -1130,6 +1396,7 @@ function targetScreenMax(context) {
     + (context.roles.length > 1 ? 2 : 0)
     + (context.domainModel.hasAdminScope ? 2 : 0);
   if (context.productFamily === "marketplace" && context.domainModel.hasSellerScope) return TARGET_SCREEN_RANGE.max;
+  if (context.productFamily === "mobile-app" && context.experienceFamily === "real-estate") return TARGET_SCREEN_RANGE.max;
   return Math.min(TARGET_SCREEN_RANGE.max, Math.max(TARGET_SCREEN_RANGE.min, TARGET_SCREEN_RANGE.preferred + complexity - 2));
 }
 
@@ -1179,16 +1446,118 @@ function trimScreensForTarget(screens, targetMax) {
 
 function wireScreenActions(screens, context) {
   const ids = new Set(screens.map((screen) => screen.id));
+  const screensById = new Map(screens.map((screen) => [screen.id, screen]));
   const first = screens[0]?.id || "";
   const find = (...candidates) => firstExistingScreenId(ids, candidates, first);
   return screens.map((screen) => {
-    const actions = actionsForScreen(screen, ids, find, context);
+    const actions = actionsForScreen(screen, ids, find, context, screensById);
     return {
       ...screen,
       content: normalizeItemActionTargets(screen.content, ids),
       actions: actions.length ? actions : [],
     };
   });
+}
+
+function ensureScreenActionReachability(screens, context) {
+  let connected = screens.map((screen) => ({ ...screen, actions: [...(screen.actions || [])] }));
+  for (let iteration = 0; iteration < screens.length * 2; iteration += 1) {
+    const unreachableIds = findUnreachablePrototypeScreens(connected);
+    if (!unreachableIds.length) return connected;
+    const reachableIds = new Set(connected.map((screen) => screen.id).filter((id) => !unreachableIds.includes(id)));
+    const candidates = [];
+    for (const [sourceIndex, source] of connected.entries()) {
+      if (!reachableIds.has(source.id)) continue;
+      if (/^(onboarding|language|login|login_otp|password_reset|password_reset_done)$/.test(source.id)) continue;
+      const slot = flowBridgeSlot(source.actions || []);
+      if (slot < 0) continue;
+      for (const targetId of unreachableIds) {
+        const targetIndex = connected.findIndex((screen) => screen.id === targetId);
+        const target = connected[targetIndex];
+        candidates.push({
+          sourceIndex,
+          targetIndex,
+          slot,
+          score: flowBridgeAffinity(source, target, context) - Math.abs(sourceIndex - targetIndex) * 0.01,
+        });
+      }
+    }
+    candidates.sort((left, right) => right.score - left.score || left.sourceIndex - right.sourceIndex || left.targetIndex - right.targetIndex);
+    const selected = candidates[0];
+    if (!selected) break;
+    const source = connected[selected.sourceIndex];
+    const target = connected[selected.targetIndex];
+    const bridge = {
+      id: safeId(`flow_${source.id}_${target.id}`, "continue_flow"),
+      type: "navigate",
+      label: cleanText(`${context.t.next}: ${target.title}`, 80),
+      targetScreenId: target.id,
+    };
+    const actions = [...(source.actions || [])];
+    if (selected.slot >= actions.length) actions.push(bridge);
+    else {
+      const [displaced] = actions.splice(selected.slot, 1, bridge);
+      if (displaced && actions.length < 4) actions.push(displaced);
+    }
+    connected[selected.sourceIndex] = { ...source, actions: actions.slice(0, 4) };
+  }
+  return connected;
+}
+
+function flowBridgeSlot(actions = []) {
+  if (actions.length < 2) return actions.length;
+  return [1, 0].find((index) => !actionTargetIds(actions[index]).length) ?? -1;
+}
+
+function flowBridgeAffinity(source, target, context) {
+  let score = 0;
+  const sourceFlows = new Set(source.flowRefs || []);
+  if ((target.flowRefs || []).some((id) => sourceFlows.has(id))) score += 10;
+  if (source.entityRef && source.entityRef === target.entityRef) score += 6;
+  if (["home", "dashboard", "workspace"].includes(source.id)) score += 4;
+  if (["dashboard", "list", "product_grid"].includes(source.type) && target.type === "details") score += 7;
+  if (source.type === "details" && target.type === "form") score += 8;
+  if (["form", "checkout", "payment", "stepper"].includes(source.type) && ["success", "confirmation"].includes(target.type)) score += 9;
+  if (source.type === "success" && ["home", "dashboard", "workspace"].includes(target.id)) score += 5;
+  const sourceTokens = new Set(`${source.id} ${source.title}`.toLowerCase().split(/[^a-zа-яё0-9]+/i).filter((token) => token.length > 3));
+  const targetTokens = `${target.id} ${target.title}`.toLowerCase().split(/[^a-zа-яё0-9]+/i).filter((token) => token.length > 3);
+  score += targetTokens.filter((token) => sourceTokens.has(token)).length * 2;
+  if (context.experienceFamily === "real-estate" && /property|catalog|favorite|map|viewing|seller|ai/.test(`${source.id} ${target.id}`)) score += 2;
+  return score;
+}
+
+export function findUnreachablePrototypeScreens(screens = []) {
+  if (!screens.length) return [];
+  const commerceNavigationRoots = screens.some((screen) => screen.id === "catalog") && screens.some((screen) => screen.id === "cart")
+    ? ["home", "catalog", "cart", "orders", "profile"]
+    : [];
+  const roots = uniqueStrings([screens[0].id, ...commerceNavigationRoots]).filter((id) => screens.some((screen) => screen.id === id));
+  const reachable = new Set(roots.flatMap((rootId) => prototypeTraversalOrder(screens, rootId)));
+  return screens.map((screen) => screen.id).filter((id) => !reachable.has(id));
+}
+
+function prototypeTraversalOrder(screens = [], startId = "") {
+  if (!screens.length || !startId) return [];
+  const ids = new Set(screens.map((screen) => screen.id));
+  const byId = new Map(screens.map((screen) => [screen.id, screen]));
+  const reachable = new Set([startId]);
+  const order = [startId];
+  const queue = [startId];
+  while (queue.length) {
+    const currentId = queue.shift();
+    const current = byId.get(currentId);
+    const targets = [
+      ...(current?.actions || []).slice(0, 2),
+      ...(current?.content?.items || []).map((item) => item.action).filter(Boolean),
+    ].flatMap(actionTargetIds).filter((id) => ids.has(id));
+    for (const targetId of targets) {
+      if (reachable.has(targetId)) continue;
+      reachable.add(targetId);
+      order.push(targetId);
+      queue.push(targetId);
+    }
+  }
+  return order;
 }
 
 function normalizeItemActionTargets(content = {}, screenIds = new Set()) {
@@ -1205,20 +1574,66 @@ function normalizeItemActionTargets(content = {}, screenIds = new Set()) {
   };
 }
 
-function actionsForScreen(screen, ids, find, context) {
+function actionsForScreen(screen, ids, find, context, screensById) {
   const t = context.t;
   const id = screen.id;
+  if (id === "onboarding") {
+    const opensLogin = context.domainModel.hasAuth && ids.has("login");
+    return [{
+      id: "start-flow",
+      type: "navigate",
+      label: opensLogin ? t.login : t.open,
+      targetScreenId: opensLogin ? "login" : find("home", "dashboard", "workspace", "catalog", "leads"),
+    }];
+  }
+  if (id === "login") return [{ id: "submit-login", type: "submit", label: t.login, formId: "login-form", outcomes: [{ when: "demo-success", targetScreenId: find("login_otp", "home", "dashboard", "workspace") }] }];
+  if (id === "login_otp") return [{ id: "verify-code", type: "submit", label: t.submit, formId: "otp-form", outcomes: [{ when: "demo-success", targetScreenId: find("home", "dashboard", "workspace", "catalog", "leads") }] }];
+  if (id === "property_details") {
+    return [
+      { id: "book-viewing", type: "navigate", label: "Записаться на просмотр", targetScreenId: find("viewing_booking") },
+      { id: "contact-seller", type: "navigate", label: "Написать продавцу", targetScreenId: find("seller_chat") },
+    ];
+  }
+  if (id === "ai_search") return [
+    { id: "open-ai-result", type: "navigate", label: "Открыть объект", targetScreenId: find("property_details", "property_catalog") },
+    { id: "save-ai-search", type: "copy_demo", label: "Сохранить подборку", value: "Подборка сохранена в demo state" },
+  ];
+  if (id === "seller_chat") return [
+    { id: "book-from-chat", type: "navigate", label: "Записаться на просмотр", targetScreenId: find("viewing_booking", "property_details") },
+    { id: "call-seller", type: "copy_demo", label: "Позвонить", value: "Демо-звонок продавцу" },
+  ];
+  if (["marketplace", "ecommerce"].includes(context.productFamily) && id === "seller_workspace" && ids.has("seller_products")) {
+    const label = t.catalog === "Каталог" ? "Управлять товарами" : t.catalog === "Katalog" ? "Mahsulotlarni boshqarish" : "Manage products";
+    return [{ id: "manage-seller-products", type: "navigate", label, targetScreenId: "seller_products" }];
+  }
+  if (context.productFamily === "marketplace" && id === "profile" && ids.has("seller_workspace")) {
+    const label = t.catalog === "Каталог" ? "Кабинет продавца" : t.catalog === "Katalog" ? "Sotuvchi kabineti" : "Seller workspace";
+    return [{ id: "open-seller-workspace", type: "navigate", label, targetScreenId: "seller_workspace" }];
+  }
+  const coreFlowTarget = coreFlowTargetFor(id, ids, context);
+  if (coreFlowTarget) {
+    const itemOpensCoreTarget = (screen.content?.items || []).some((item) => actionTargetIds(item.action).includes(coreFlowTarget));
+    if (["product_grid", "list", "history", "dashboard"].includes(screen.type) && itemOpensCoreTarget) return [];
+    const coreFlowLabel = cleanText(
+      commerceActionLabel(id, coreFlowTarget, context) || `${t.next}: ${screensById.get(coreFlowTarget)?.title || coreFlowTarget}`,
+      80,
+    );
+    if (["form", "checkout", "payment"].includes(screen.type)) {
+      return [{ id: `continue-${id}`, type: "submit", label: coreFlowLabel, formId: `${id}-form`, outcomes: [{ when: "demo-success", targetScreenId: coreFlowTarget }] }];
+    }
+    return [{ id: `continue-${id}`, type: "navigate", label: coreFlowLabel, targetScreenId: coreFlowTarget }];
+  }
   if (screen.type === "success") return [{ id: "go-home", type: "navigate", label: t.done, targetScreenId: find("home", "dashboard", "workspace", "catalog", "leads") }];
   if (screen.type === "empty_state") return [{ id: "reset-view", type: "reset", label: "Сбросить фильтр", stateKey: `${id}.filter` }];
   if (screen.type === "error_state") return [{ id: "retry", type: "back", label: "Повторить" }];
-  if (id === "onboarding") return [{ id: "start-flow", type: "navigate", label: context.domainModel.hasAuth ? t.login : t.open, targetScreenId: context.domainModel.hasAuth ? find("login") : find("home", "dashboard", "workspace", "catalog", "leads") }];
-  if (id === "login") return [{ id: "submit-login", type: "submit", label: t.login, formId: "login-form", outcomes: [{ when: "demo-success", targetScreenId: find("login_otp", "home", "dashboard", "workspace") }] }];
-  if (id === "login_otp") return [{ id: "verify-code", type: "submit", label: t.submit, formId: "otp-form", outcomes: [{ when: "demo-success", targetScreenId: find("home", "dashboard", "workspace", "catalog", "leads") }] }];
   if (/global_search|search/.test(id) && ids.has("search_results")) return [{ id: "run-search", type: "set_value", label: t.search, stateKey: `${id}.query`, value: screen.content?.fields?.[0]?.value || screen.title }];
-  if (/filter/.test(id)) return [{ id: "apply-filter", type: "submit", label: "Применить", formId: `${id}-form`, outcomes: [{ when: "demo-success", targetScreenId: find(id.replace(/_?filters?$/, ""), "workspace", "leads", "catalog") }] }];
+  if (/filter/.test(id)) return [{ id: "apply-filter", type: "submit", label: "Применить", formId: `${id}-form`, outcomes: [{ when: "demo-success", targetScreenId: find(id.replace(/_?filters?$/, ""), "property_catalog", "workspace", "leads", "catalog") }] }];
   if (/settings|security|permissions|roles|app_permissions/.test(id) || screen.layout === "settings-list") return [{ id: "save-settings", type: "copy_demo", label: t.done, value: "Настройки сохранены в demo state" }];
   if (/document/.test(id) && screen.type === "list") {
     return [{ id: "open-document-preview", type: "open_sheet", label: t.open, overlay: overlayForScreen(screen, "sheet") }];
+  }
+  if (screen.layout === "scope-board") {
+    return [{ id: "open-scope-context", type: "open_sheet", label: t.open, overlay: overlayForScreen(screen, "sheet") }];
   }
   if (screen.type === "form") {
     return [{ id: "submit-form", type: "submit", label: t.submit, formId: `${id}-form`, outcomes: [{ when: "demo-success", targetScreenId: find(successTargetFor(id), "workflow_success", "lead_convert", "contract_success", "submit_success", "contact_success", "confirmation", "dashboard", "workspace") }] }];
@@ -1230,25 +1645,97 @@ function actionsForScreen(screen, ids, find, context) {
     return [{ id: "open-stage", type: "navigate", label: t.open, targetScreenId: find("pipeline_stage", "workflow_details", "deal_details", "lead_details", "workspace", "dashboard") }];
   }
   if (screen.type === "stepper" || screen.type === "tracking") {
+    const advanceLabel = ["marketplace", "ecommerce"].includes(context.productFamily) && id === "tracking"
+      ? (t.catalog === "Каталог" ? "Следующий этап" : t.catalog === "Katalog" ? "Keyingi bosqich" : "Next stage")
+      : t.next;
     return [
-      { id: "advance-step", type: "select", label: t.next, stateKey: `${id}.currentStep`, value: "next" },
+      { id: "advance-step", type: "select", label: advanceLabel, stateKey: `${id}.currentStep`, value: "next" },
       ...(ids.has(successTargetFor(id)) ? [{ id: "finish-flow", type: "navigate", label: t.done, targetScreenId: successTargetFor(id) }] : []),
     ];
   }
   if (["list", "product_grid", "dashboard", "analytics", "history"].includes(screen.type)) {
+    if (screen.type === "product_grid" && (screen.content?.items || []).some((item) => actionTargetIds(item.action).length)) return [];
     return [{ id: "open-primary-record", type: "navigate", label: t.open, targetScreenId: find(detailsTargetFor(id, context), "product", "lead_details", "record_details", "order_details", "details", "workspace") }];
   }
   if (screen.type === "details" || screen.type === "profile") {
     const formTarget = formTargetFor(id, context);
     return [
-      ...(ids.has(formTarget) ? [{ id: "edit-record", type: "navigate", label: t.configure, targetScreenId: formTarget }] : []),
+      ...(formTarget !== id && ids.has(formTarget) ? [{ id: "edit-record", type: "navigate", label: t.configure, targetScreenId: formTarget }] : []),
       { id: "open-context", type: "open_sheet", label: t.open, overlay: overlayForScreen(screen, "sheet") },
     ];
   }
   return [];
 }
 
+function commerceActionLabel(sourceId, targetId, context) {
+  if (!["marketplace", "ecommerce"].includes(context.productFamily)) return "";
+  const locale = context.t.catalog === "Каталог" ? "ru" : context.t.catalog === "Katalog" ? "uz" : "en";
+  const labels = {
+    ru: {
+      "home:catalog": "Открыть каталог",
+      "product:cart": "Добавить в корзину",
+      "cart:checkout": "Оформить заказ",
+      "checkout:payment_methods": "Выбрать способ оплаты",
+      "checkout:payment": "Перейти к оплате",
+      "payment_methods:payment": "Продолжить",
+      "payment:confirmation": "Оплатить",
+      "confirmation:orders": "Посмотреть заказы",
+      "orders:order_details": "Открыть заказ",
+      "order_details:tracking": "Отследить заказ",
+    },
+    uz: {
+      "home:catalog": "Katalogni ochish",
+      "product:cart": "Savatga qo'shish",
+      "cart:checkout": "Buyurtma berish",
+      "checkout:payment_methods": "To'lov usulini tanlash",
+      "checkout:payment": "To'lovga o'tish",
+      "payment_methods:payment": "Davom etish",
+      "payment:confirmation": "To'lash",
+      "confirmation:orders": "Buyurtmalarni ko'rish",
+      "orders:order_details": "Buyurtmani ochish",
+      "order_details:tracking": "Buyurtmani kuzatish",
+    },
+    en: {
+      "home:catalog": "Open catalog",
+      "product:cart": "Add to cart",
+      "cart:checkout": "Checkout",
+      "checkout:payment_methods": "Choose payment method",
+      "checkout:payment": "Continue to payment",
+      "payment_methods:payment": "Continue",
+      "payment:confirmation": "Pay",
+      "confirmation:orders": "View orders",
+      "orders:order_details": "Open order",
+      "order_details:tracking": "Track order",
+    },
+  };
+  return labels[locale][`${sourceId}:${targetId}`] || "";
+}
+
+function coreFlowTargetFor(id, ids, context) {
+  const family = context.productFamily;
+  const sequences = {
+    marketplace: ["home", "catalog", "product", "cart", "checkout", "payment", "confirmation", "orders", "order_details", "tracking"],
+    ecommerce: ["home", "catalog", "product", "cart", "checkout", "payment_methods", "payment", "confirmation", "orders", "order_details", "tracking"],
+    crm: ["dashboard", "leads", "lead_details", "lead_qualify", "lead_convert", "clients", "tasks", "calendar", "reports"],
+    erp: ["dashboard", "procurement_requests", "procurement_request_details", "procurement_approval", "purchase_orders", "inventory", "inventory_item", "finance_dashboard", "invoices", "reports"],
+    tms: ["dashboard", "transport_orders", "transport_order_details", "shipment_status", "shipment_tracking", "dispatch_board", "shipments", "fleet", "vehicle_details", "reports"],
+    saas: ["dashboard", "workspaces", "workspace_details", "projects", "project_create", "records", "record_details", "tasks", "automations", "reports"],
+    fintech: ["home", "limit_request", "verification", "offers", "contract_review", "contract_sign", "contract_success", "installments", "payment", "payment_success", "documents"],
+    website: ["home", "services", "service_details", "case_studies", "contacts", "contact_form", "contact_success"],
+    "business-app": ["dashboard", "workspace", "workflow", "workflow_success", "tasks"],
+    "mobile-app": context.experienceFamily === "real-estate"
+      ? ["home", "property_catalog", "property_details", "viewing_booking", "viewing_success"]
+      : ["home", "feed", "discover", "content_details", "create_entry", "submit_review", "submit_success", "inbox"],
+  };
+  const sequence = sequences[family] || sequences["business-app"];
+  const currentIndex = sequence.indexOf(id);
+  if (currentIndex < 0) return "";
+  return sequence.slice(currentIndex + 1).find((candidate) => ids.has(candidate)) || "";
+}
+
 function detailsTargetFor(id, context) {
+  if (context.experienceFamily === "real-estate" && /home|catalog|property|favorite|map/.test(id)) return "property_details";
+  if (["marketplace", "ecommerce"].includes(context.productFamily) && /^(home|catalog|categories|favorites)$/.test(id)) return "product";
   if (/catalog|product|favorite|merchant/.test(id)) return "product";
   if (/cart|checkout|order|payment/.test(id)) return "order_details";
   if (/lead|dashboard|activity/.test(id) && context.productFamily === "crm") return "lead_details";
@@ -1271,6 +1758,7 @@ function formTargetFor(id, context) {
 }
 
 function successTargetFor(id) {
+  if (/viewing/.test(id)) return "viewing_success";
   if (/lead_qualify|lead_create|lead_assign/.test(id)) return "lead_convert";
   if (/contract|verification|limit|offer/.test(id)) return "contract_success";
   if (/payment/.test(id)) return "payment_success";
@@ -1294,11 +1782,13 @@ function screen(id, type, title, description, roleIds, context, options = {}) {
   const sourceRefs = pickSourceRefs(context, id);
   const content = contentFor(id, type, title, description, context);
   const layout = content.layout || layoutForScreen(id, type);
+  const screenTitle = content.screenTitle || title;
+  const screenDescription = content.screenDescription || description;
   return {
     id,
     type,
-    title: cleanText(title, 80),
-    description: cleanText(localizeDescription(description, context.t), 180),
+    title: cleanText(screenTitle, 80),
+    description: cleanText(localizeDescription(screenDescription, context.t), 180),
     roleIds: roleIds.filter(Boolean).length ? roleIds.filter(Boolean) : [firstRoleId(context.roles, "buyer")],
     sourceRefs,
     intent: intentForScreen(id, type, title, description),
@@ -1333,7 +1823,8 @@ function contentFor(id, type, title, description, context) {
   }));
   const layout = preset.layout || layoutForScreen(id, type);
   return {
-    title: cleanText(title, 80),
+    ...preset,
+    title: cleanText(preset.screenTitle || title, 80),
     layout,
     metrics,
     items: withItemActions(preset.items || domainItemsForScreen(id, type, title, description, context, semanticItems), id, type, context),
@@ -1348,10 +1839,337 @@ function contentFor(id, type, title, description, context) {
 
 function screenContentPreset(id, type, title, description, context) {
   if (context.productFamily === "crm") return crmContentPreset(id, title, description, context.t);
+  if (["marketplace", "ecommerce"].includes(context.productFamily)) return commerceContentPreset(id, type, context.t, context.productFamily);
   return {
     layout: layoutForScreen(id, type),
     metrics: metricSetFor(id, type, context.t),
   };
+}
+
+function commerceContentPreset(id, type, t, productFamily) {
+  const locale = t.catalog === "Каталог" ? "ru" : t.catalog === "Katalog" ? "uz" : "en";
+  const copy = {
+    ru: {
+      onboardingTitle: "Покупки без лишних шагов",
+      onboardingDescription: "Находите товары, сравнивайте предложения и отслеживайте заказ в одном приложении",
+      homeNote: "Персональные предложения и популярные товары",
+      recommended: "Рекомендуем",
+      categories: ["Электроника", "Для дома", "Одежда", "Красота"],
+      products: [
+        ["airbeat_pro", "Наушники AirBeat Pro", "Шумоподавление · до 30 часов", "799 000 сум", "4,9"],
+        ["pulse_s2", "Умные часы Pulse S2", "GPS · защита 5 ATM", "1 249 000 сум", "4,8"],
+        ["barista_mini", "Кофемашина Barista Mini", "15 бар · капучинатор", "2 390 000 сум", "4,7"],
+        ["urban_flex", "Рюкзак Urban Flex", "24 л · отделение для ноутбука", "389 000 сум", "4,9"],
+      ],
+      catalogDescription: "Товары, категории, поиск и фильтры",
+      productDescription: "Беспроводные наушники с активным шумоподавлением",
+      inStock: "В наличии",
+      delivery: "Доставка завтра",
+      seller: "Продавец",
+      color: "Цвет",
+      warranty: "Гарантия",
+      cartItem: "1 шт. · доставка завтра",
+      subtotal: "Товары",
+      deliveryPrice: "Доставка",
+      total: "Итого",
+      free: "Бесплатно",
+      address: "Адрес доставки",
+      recipient: "Получатель",
+      phone: "Телефон",
+      paymentMethod: "Способ оплаты",
+      bankCard: "Банковская карта",
+      cash: "Наличными при получении",
+      orderAccepted: "Заказ №1048 оформлен",
+      orderAcceptedDetail: "Мы отправили подтверждение и уже готовим товары к доставке",
+      preparing: "Собирается",
+      delivered: "Получен",
+      onTheWay: "В пути",
+      cancelled: "Отменён",
+      orderOne: "Заказ №1048",
+      orderTwo: "Заказ №1021",
+      orderThree: "Заказ №987",
+      orderFour: "Заказ №954",
+      orderDetail: "AirBeat Pro · доставка 6 августа",
+      support: ["Вопрос по заказу", "Возврат товара", "Оплата и промокоды", "Связаться с поддержкой"],
+      profileRows: [["Имя", "Демо Покупатель"], ["Телефон", "+998 90 123-45-67"], ["Адрес", "Ташкент, ул. Амира Темура, 15"]],
+      catalogMetric: "Товаров",
+      orderMetric: "Заказов",
+      rating: "Рейтинг",
+      revenue: "Выручка",
+      sellerOrders: "Новые заказы",
+      sellerStock: "Требуют внимания",
+      sellerWorkspaceTitle: "Кабинет продавца",
+      sellerWorkspaceDescription: "Товары, заказы и выручка магазина",
+      favoritesTitle: "Избранное",
+      favoritesDescription: "Сохранённые товары",
+      favoritesCount: "2 сохранённых товара",
+    },
+    uz: {
+      onboardingTitle: "Ortiqcha qadamlarsiz xarid",
+      onboardingDescription: "Mahsulotlarni toping, takliflarni solishtiring va buyurtmani bitta ilovada kuzating",
+      homeNote: "Shaxsiy takliflar va ommabop mahsulotlar",
+      recommended: "Tavsiya qilamiz",
+      categories: ["Elektronika", "Uy uchun", "Kiyim", "Go'zallik"],
+      products: [
+        ["airbeat_pro", "AirBeat Pro quloqchini", "Shovqinni kamaytirish · 30 soat", "799 000 so'm", "4,9"],
+        ["pulse_s2", "Pulse S2 aqlli soati", "GPS · 5 ATM himoya", "1 249 000 so'm", "4,8"],
+        ["barista_mini", "Barista Mini qahva mashinasi", "15 bar · kapuchinator", "2 390 000 so'm", "4,7"],
+        ["urban_flex", "Urban Flex ryukzagi", "24 l · noutbuk bo'limi", "389 000 so'm", "4,9"],
+      ],
+      catalogDescription: "Mahsulotlar, toifalar, qidiruv va filtrlar",
+      productDescription: "Faol shovqin kamaytirishli simsiz quloqchin",
+      inStock: "Mavjud",
+      delivery: "Ertaga yetkaziladi",
+      seller: "Sotuvchi",
+      color: "Rang",
+      warranty: "Kafolat",
+      cartItem: "1 dona · ertaga yetkaziladi",
+      subtotal: "Mahsulotlar",
+      deliveryPrice: "Yetkazish",
+      total: "Jami",
+      free: "Bepul",
+      address: "Yetkazish manzili",
+      recipient: "Qabul qiluvchi",
+      phone: "Telefon",
+      paymentMethod: "To'lov usuli",
+      bankCard: "Bank kartasi",
+      cash: "Olganda naqd",
+      orderAccepted: "№1048 buyurtma rasmiylashtirildi",
+      orderAcceptedDetail: "Tasdiq yuborildi, mahsulotlar yetkazishga tayyorlanmoqda",
+      preparing: "Tayyorlanmoqda",
+      delivered: "Qabul qilindi",
+      onTheWay: "Yo'lda",
+      cancelled: "Bekor qilindi",
+      orderOne: "№1048 buyurtma",
+      orderTwo: "№1021 buyurtma",
+      orderThree: "№987 buyurtma",
+      orderFour: "№954 buyurtma",
+      orderDetail: "AirBeat Pro · 6-avgustda yetkaziladi",
+      support: ["Buyurtma bo'yicha savol", "Mahsulotni qaytarish", "To'lov va promokodlar", "Yordam bilan bog'lanish"],
+      profileRows: [["Ism", "Demo Xaridor"], ["Telefon", "+998 90 123-45-67"], ["Manzil", "Toshkent, Amir Temur ko'chasi, 15"]],
+      catalogMetric: "Mahsulotlar",
+      orderMetric: "Buyurtmalar",
+      rating: "Reyting",
+      revenue: "Tushum",
+      sellerOrders: "Yangi buyurtmalar",
+      sellerStock: "E'tibor talab qiladi",
+      sellerWorkspaceTitle: "Sotuvchi kabineti",
+      sellerWorkspaceDescription: "Do'kon mahsulotlari, buyurtmalari va tushumi",
+      favoritesTitle: "Saralanganlar",
+      favoritesDescription: "Saqlangan mahsulotlar",
+      favoritesCount: "2 ta saqlangan mahsulot",
+    },
+    en: {
+      onboardingTitle: "Shopping without extra steps",
+      onboardingDescription: "Find products, compare offers, and track delivery in one app",
+      homeNote: "Personal offers and popular products",
+      recommended: "Recommended",
+      categories: ["Electronics", "Home", "Fashion", "Beauty"],
+      products: [
+        ["airbeat_pro", "AirBeat Pro headphones", "Noise cancelling · 30 hours", "UZS 799,000", "4.9"],
+        ["pulse_s2", "Pulse S2 smart watch", "GPS · 5 ATM protection", "UZS 1,249,000", "4.8"],
+        ["barista_mini", "Barista Mini coffee machine", "15 bar · milk frother", "UZS 2,390,000", "4.7"],
+        ["urban_flex", "Urban Flex backpack", "24 L · laptop compartment", "UZS 389,000", "4.9"],
+      ],
+      catalogDescription: "Products, categories, search, and filters",
+      productDescription: "Wireless headphones with active noise cancelling",
+      inStock: "In stock",
+      delivery: "Delivery tomorrow",
+      seller: "Seller",
+      color: "Color",
+      warranty: "Warranty",
+      cartItem: "1 item · delivery tomorrow",
+      subtotal: "Items",
+      deliveryPrice: "Delivery",
+      total: "Total",
+      free: "Free",
+      address: "Delivery address",
+      recipient: "Recipient",
+      phone: "Phone",
+      paymentMethod: "Payment method",
+      bankCard: "Bank card",
+      cash: "Cash on delivery",
+      orderAccepted: "Order #1048 placed",
+      orderAcceptedDetail: "Confirmation sent; the items are being prepared for delivery",
+      preparing: "Preparing",
+      delivered: "Delivered",
+      onTheWay: "On the way",
+      cancelled: "Cancelled",
+      orderOne: "Order #1048",
+      orderTwo: "Order #1021",
+      orderThree: "Order #987",
+      orderFour: "Order #954",
+      orderDetail: "AirBeat Pro · delivery August 6",
+      support: ["Question about an order", "Return an item", "Payments and promo codes", "Contact support"],
+      profileRows: [["Name", "Demo Customer"], ["Phone", "+998 90 123-45-67"], ["Address", "15 Amir Temur Street, Tashkent"]],
+      catalogMetric: "Products",
+      orderMetric: "Orders",
+      rating: "Rating",
+      revenue: "Revenue",
+      sellerOrders: "New orders",
+      sellerStock: "Needs attention",
+      sellerWorkspaceTitle: "Seller workspace",
+      sellerWorkspaceDescription: "Store products, orders, and revenue",
+      favoritesTitle: "Favorites",
+      favoritesDescription: "Saved products",
+      favoritesCount: "2 saved products",
+    },
+  }[locale];
+  const plain = (itemId, itemTitle, detail, extra = {}) => ({ id: itemId, title: itemTitle, detail, status: "", ...extra });
+  const state = (itemId, itemTitle, detail, status, statusLabel) => ({ id: itemId, title: itemTitle, detail, status, statusLabel });
+  const products = copy.products.map(([itemId, itemTitle, detail, price, rating], index) => plain(itemId, itemTitle, detail, { price, rating, favorite: index < 2 }));
+  const product = products[0];
+  const presets = {
+    onboarding: {
+      layout: "onboarding",
+      screenTitle: copy.onboardingTitle,
+      screenDescription: copy.onboardingDescription,
+      metrics: [], items: [], fields: [], steps: [], tabs: [],
+      note: copy.onboardingDescription,
+    },
+    language: {
+      layout: "choice-grid",
+      metrics: [],
+      items: [
+        plain("ru", "Русский", "Русский язык", { action: false }),
+        plain("uz", "O'zbekcha", "Lotin yozuvi", { action: false }),
+        plain("en", "English", "English language", { action: false }),
+      ],
+      fields: [], steps: [], tabs: [],
+    },
+    login: {
+      layout: "login", metrics: [], items: [], tabs: [],
+      fields: [
+        { id: "email", label: locale === "ru" ? "Рабочая почта" : locale === "uz" ? "Elektron pochta" : "Email", value: "demo@company.uz", type: "email", required: true },
+        { id: "password", label: locale === "ru" ? "Пароль" : locale === "uz" ? "Parol" : "Password", value: "Demo2026!", type: "password", required: true },
+      ],
+    },
+    login_otp: {
+      layout: "otp", metrics: [], items: [], tabs: [],
+      fields: [{ id: "otp", label: locale === "ru" ? "Код подтверждения" : locale === "uz" ? "Tasdiqlash kodi" : "Verification code", value: "4821", type: "otp", required: true, pattern: "^[0-9]{4,6}$" }],
+    },
+    home: {
+      layout: "storefront-home", metrics: [], items: products.slice(0, 4), fields: [], steps: [], tabs: [],
+      categories: copy.categories,
+      sectionTitle: copy.recommended,
+      note: copy.homeNote,
+    },
+    catalog: {
+      layout: "commerce-catalog", screenDescription: copy.catalogDescription,
+      metrics: [], items: products, fields: [], steps: [], tabs: [], categories: copy.categories,
+    },
+    categories: {
+      layout: "commerce-catalog", metrics: [], fields: [], steps: [], tabs: [],
+      items: copy.categories.map((category, index) => plain(`category_${index + 1}`, category, `${4 + index * 3} ${copy.catalogMetric.toLowerCase()}`)),
+      categories: copy.categories,
+    },
+    favorites: {
+      layout: "commerce-catalog", screenTitle: copy.favoritesTitle, screenDescription: copy.favoritesDescription,
+      metrics: [], items: products.slice(0, 2), fields: [], steps: [], tabs: [], categories: [],
+    },
+    product: {
+      layout: "commerce-product", screenTitle: product.title, screenDescription: copy.productDescription,
+      metrics: [], fields: [], steps: [], tabs: [], productId: product.id, price: product.price, rating: product.rating, favorite: product.favorite,
+      variants: [locale === "ru" ? "Чёрный" : locale === "uz" ? "Qora" : "Black", locale === "ru" ? "Белый" : locale === "uz" ? "Oq" : "White"],
+      items: [
+        plain("availability", copy.inStock, copy.delivery, { action: false }),
+        plain("seller", copy.seller, productFamily === "marketplace" ? "Tech Market · 4,9 ★" : "UStore", { action: false }),
+        plain("color", copy.color, locale === "ru" ? "Чёрный" : locale === "uz" ? "Qora" : "Black", { action: false }),
+        plain("warranty", copy.warranty, locale === "ru" ? "12 месяцев" : locale === "uz" ? "12 oy" : "12 months", { action: false }),
+      ],
+    },
+    cart: {
+      layout: "commerce-cart", metrics: [], fields: [], steps: [], tabs: [],
+      items: [plain(product.id, product.title, copy.cartItem, { price: product.price, quantity: 1, action: false })],
+      summary: [[copy.subtotal, product.price], [copy.deliveryPrice, copy.free], [copy.total, product.price]],
+    },
+    checkout: {
+      layout: "commerce-checkout", metrics: [], steps: [], tabs: [],
+      fields: [
+        { id: "recipient", label: copy.recipient, value: locale === "ru" ? "Демо Покупатель" : locale === "uz" ? "Demo Xaridor" : "Demo Customer", type: "text", required: true },
+        { id: "phone", label: copy.phone, value: "+998 90 123-45-67", type: "tel", required: true },
+        { id: "address", label: copy.address, value: locale === "ru" ? "Ташкент, ул. Амира Темура, 15" : locale === "uz" ? "Toshkent, Amir Temur ko'chasi, 15" : "15 Amir Temur Street, Tashkent", type: "text", required: true },
+      ],
+      items: [plain(product.id, product.title, copy.cartItem, { price: product.price, action: false })],
+      summary: [[copy.total, product.price]],
+    },
+    payment_methods: {
+      layout: "choice-grid", metrics: [], fields: [], steps: [], tabs: [],
+      items: [plain("card", copy.bankCard, "•••• 4242", { action: false }), plain("cash", copy.cash, copy.delivery, { action: false })],
+    },
+    payment: {
+      layout: "commerce-payment", metrics: [], steps: [], tabs: [],
+      fields: [
+        { id: "card", label: copy.bankCard, value: "8600 1234 5678 4242", type: "text", required: true },
+        { id: "expiry", label: "MM/YY", value: "08/29", type: "text", required: true },
+        { id: "cvv", label: "CVV", value: "123", type: "password", required: true },
+      ],
+      items: [], summary: [[copy.total, product.price]],
+    },
+    confirmation: {
+      layout: "success", screenTitle: copy.orderAccepted, screenDescription: copy.orderAcceptedDetail,
+      metrics: [], items: [], fields: [], steps: [], tabs: [],
+    },
+    orders: {
+      layout: "commerce-orders", metrics: [], fields: [], steps: [], tabs: [],
+      items: [
+        state("order_1048", copy.orderOne, copy.orderDetail, "pending", copy.preparing),
+        state("order_1021", copy.orderTwo, `${copy.products[1][1]} · 2 ${locale === "ru" ? "августа" : locale === "uz" ? "avgust" : "August"}`, "done", copy.delivered),
+        state("order_987", copy.orderThree, copy.products[2][1], "active", copy.onTheWay),
+        state("order_954", copy.orderFour, copy.products[3][1], "warning", copy.cancelled),
+      ],
+    },
+    order_details: {
+      layout: "commerce-order-details", screenTitle: copy.orderOne, screenDescription: copy.orderDetail,
+      metrics: [], fields: [], steps: [], tabs: [],
+      items: [plain(product.id, product.title, copy.cartItem, { price: product.price, action: false })],
+      summary: [[copy.subtotal, product.price], [copy.deliveryPrice, copy.free], [copy.total, product.price]],
+      orderStatus: copy.preparing,
+    },
+    tracking: {
+      layout: "tracking", metrics: [], fields: [], items: [], tabs: [],
+      steps: [
+        { id: "placed", title: locale === "ru" ? "Заказ оформлен" : locale === "uz" ? "Buyurtma rasmiylashtirildi" : "Order placed", state: "done" },
+        { id: "packed", title: locale === "ru" ? "Товары собираются" : locale === "uz" ? "Mahsulotlar tayyorlanmoqda" : "Items are being packed", state: "active" },
+        { id: "courier", title: locale === "ru" ? "Передано курьеру" : locale === "uz" ? "Kuryerga topshirildi" : "Handed to courier", state: "pending" },
+        { id: "delivered", title: copy.delivered, state: "pending" },
+      ],
+    },
+    support: {
+      layout: "entity-list", metrics: [], fields: [], steps: [], tabs: [],
+      items: copy.support.map((label, index) => plain(`support_${index + 1}`, label, locale === "ru" ? "Ответим в течение нескольких минут" : locale === "uz" ? "Bir necha daqiqada javob beramiz" : "We usually reply in a few minutes")),
+    },
+    profile: {
+      layout: "profile", metrics: [], fields: [], steps: [], tabs: [],
+      items: [
+        plain("favorites", copy.favoritesTitle, copy.favoritesCount, {
+          action: { id: "open_favorites", type: "navigate", label: copy.favoritesTitle, targetScreenId: "favorites" },
+        }),
+        ...copy.profileRows.map(([label, value], index) => plain(`profile_${index + 1}`, label, value)),
+      ],
+    },
+    seller_workspace: {
+      layout: "seller-dashboard", screenTitle: copy.sellerWorkspaceTitle, screenDescription: copy.sellerWorkspaceDescription,
+      fields: [], steps: [], tabs: [],
+      metrics: [
+        { label: copy.revenue, value: locale === "en" ? "UZS 18.4m" : locale === "uz" ? "18,4 mln" : "18,4 млн", tone: "primary" },
+        { label: copy.sellerOrders, value: "12", tone: "success" },
+        { label: copy.sellerStock, value: "3", tone: "warning" },
+      ],
+      items: [state("seller_order_1", copy.orderOne, product.title, "pending", copy.preparing), state("seller_order_2", copy.orderTwo, copy.products[1][1], "active", copy.onTheWay)],
+    },
+    seller_products: { layout: "commerce-catalog", metrics: [], fields: [], steps: [], tabs: [], items: products, categories: copy.categories },
+    seller_orders: {
+      layout: "commerce-orders", metrics: [], fields: [], steps: [], tabs: [],
+      items: [state("seller_order_1", copy.orderOne, product.title, "pending", copy.preparing), state("seller_order_2", copy.orderTwo, copy.products[1][1], "active", copy.onTheWay)],
+    },
+    seller_analytics: {
+      layout: "analytics", fields: [], steps: [], tabs: [],
+      metrics: [{ label: copy.revenue, value: locale === "en" ? "UZS 18.4m" : "18,4 млн", tone: "primary" }, { label: copy.orderMetric, value: "84", tone: "success" }, { label: copy.rating, value: "4,9", tone: "primary" }],
+      items: [], chart: [42, 58, 54, 71, 66, 84, 78],
+    },
+  };
+  return presets[id] || { layout: layoutForScreen(id, type), metrics: [], items: [], tabs: [] };
 }
 
 function crmContentPreset(id, title, description, t) {
@@ -1736,14 +2554,14 @@ function relatedDomainItems(id, title, context, semanticItems = []) {
 }
 
 function contextualFields(id, title, description, t, context = {}) {
+  if (/otp|verification_code/.test(id)) {
+    return [{ id: "otp", label: "Код подтверждения", value: "4821", type: "otp", required: true, pattern: "^[0-9]{4,6}$" }];
+  }
   if (/login/.test(id)) {
     return [
       { id: "email", label: "Рабочая почта", value: "demo@company.uz", type: "email", required: true },
       { id: "password", label: "Пароль", value: "Demo2026!", type: "password", required: true },
     ];
-  }
-  if (/otp|verification_code/.test(id)) {
-    return [{ id: "otp", label: "Код подтверждения", value: "4821", type: "otp", required: true, pattern: "^[0-9]{4,6}$" }];
   }
   if (/search/.test(id)) return [{ id: "query", label: t.search, value: cleanText(context.domainModel?.entities?.[0]?.title || title, 48), type: "search" }];
   if (/filter/.test(id)) {
@@ -1832,14 +2650,19 @@ function normalizeFieldType(type, label = "") {
 function withItemActions(items = [], screenId, type, context) {
   return items.slice(0, 12).map((item, index) => {
     const id = safeId(item.id || item.title || `item_${index + 1}`, `${screenId}_item_${index + 1}`);
-    return {
+    const hasExplicitStatus = Object.prototype.hasOwnProperty.call(item, "status");
+    const hasExplicitAction = Object.prototype.hasOwnProperty.call(item, "action");
+    const normalized = {
       ...item,
       id,
       title: cleanText(item.title || `${context.t.demo} ${index + 1}`, 80),
       detail: cleanText(item.detail || context.t.projectDescription, 160),
-      status: item.status || statusFor(index),
-      action: item.action || itemActionFor(screenId, type, id, context),
     };
+    if (hasExplicitAction && item.action === false) delete normalized.action;
+    else normalized.action = item.action || itemActionFor(screenId, type, id, context);
+    if (hasExplicitStatus && !item.status) delete normalized.status;
+    else normalized.status = item.status || statusFor(index);
+    return normalized;
   });
 }
 
@@ -2059,13 +2882,96 @@ function normalizeTheme(profile = {}, tokens = null) {
   };
 }
 
-function sourceRefsFor(semanticModel, proposalModel) {
+function buildPrototypeSourceContext({ productFamily, experienceFamily, domainModel, semanticModel, proposalPackage, imageKeywords }) {
+  const visualizationSpecs = proposalPackage.visualizationSpecs || [];
+  const mindMapSpecs = visualizationSpecs.filter((spec) => spec.kind === "hub_spoke" || spec.variant === "left_to_right_tree");
+  const flowSpecs = visualizationSpecs.filter((spec) => ["bpmn", "user_flow", "process_flow"].includes(spec.kind) || /bpmn|flow/i.test(spec.variant || ""));
+  const functionalityRefs = sourceRefArray([
+    ...(semanticModel.scopeItems || []).map((row) => row.id),
+    ...(semanticModel.capabilities || []).map((row) => row.id),
+  ]);
+  const inventoryRefs = sourceRefArray((domainModel.deliveryInventory || []).flatMap((row) => [row.id, row.functionId, row.subfunctionId, ...(row.sourceEntityIds || [])]));
+  const mindMapRefs = sourceRefArray([
+    ...inventoryRefs,
+    ...mindMapSpecs.flatMap((spec) => [spec.visualizationSpecId, ...(spec.nodes || []).map((node) => node.id)]),
+  ]);
+  const taskListRefs = sourceRefArray([
+    ...(semanticModel.tasks || []).map((row) => row.id),
+    ...inventoryRefs,
+  ]);
+  const userFlowRefs = sourceRefArray([
+    ...(semanticModel.processes || []).map((row) => row.id),
+    ...(semanticModel.processRelations || []).map((row) => row.id),
+    ...flowSpecs.flatMap((spec) => [spec.visualizationSpecId, ...(spec.nodes || []).map((node) => node.id), ...(spec.edges || []).map((edge) => edge.id)]),
+  ]);
+  return {
+    projectType: productFamily,
+    experienceFamily,
+    functionalityRefs,
+    mindMapRefs,
+    taskListRefs,
+    userFlowRefs,
+    imageKeywords: uniqueStrings(imageKeywords).slice(0, 4),
+    coverage: {
+      functionality: functionalityRefs.length,
+      mindMap: mindMapRefs.length,
+      taskList: taskListRefs.length,
+      userFlows: userFlowRefs.length,
+    },
+  };
+}
+
+export function applyPrototypeMedia(spec, media) {
+  const normalizedMedia = media?.images?.length ? media : spec.media;
+  return {
+    ...spec,
+    sourceContext: {
+      ...spec.sourceContext,
+      imageKeywords: uniqueStrings(normalizedMedia?.keywords || spec.sourceContext?.imageKeywords || []).slice(0, 4),
+    },
+    media: normalizedMedia,
+    screens: applyMediaToScreens(spec.screens || [], normalizedMedia),
+  };
+}
+
+function applyMediaToScreens(screens, media) {
+  const imageIds = (media?.images || []).map((image) => image.id).filter(Boolean);
+  if (!imageIds.length) return screens;
+  const stableProductImageId = (itemId) => {
+    const hash = [...String(itemId || "product")].reduce((total, character) => ((total * 31) + character.codePointAt(0)) >>> 0, 0);
+    return imageIds[hash % imageIds.length];
+  };
+  return screens.map((screen, screenIndex) => {
+    const layout = screen.layout || screen.content?.layout || "";
+    const commerceSurface = /commerce|storefront/.test(layout);
+    const primaryProductId = screen.content?.productId || (screen.content?.items || []).find((item) => item.price)?.id;
+    const hasVisualSurface = screen.type === "onboarding"
+      || ["dashboard", "product_grid", "details"].includes(screen.type)
+      || /property|gallery|media|catalog|feed|discover|case|article|commerce|storefront|seller-dashboard/.test(`${screen.id} ${layout}`);
+    const content = {
+      ...screen.content,
+      ...(hasVisualSurface ? { imageId: commerceSurface && primaryProductId ? stableProductImageId(primaryProductId) : imageIds[screenIndex % imageIds.length] } : {}),
+      items: (screen.content?.items || []).map((item, itemIndex) => ({
+        ...item,
+        ...(hasVisualSurface ? { imageId: commerceSurface && item.price ? stableProductImageId(item.id) : imageIds[(screenIndex + itemIndex + 1) % imageIds.length] } : {}),
+      })),
+    };
+    return { ...screen, content };
+  });
+}
+
+function sourceRefsFor(semanticModel, proposalModel, proposalPackage = {}) {
   return [
     ...(semanticModel.scopeItems || []),
     ...(semanticModel.capabilities || []),
     ...(semanticModel.tasks || []),
     ...(proposalModel.scope || []),
-  ].map((row) => row.id).filter(Boolean);
+    ...(proposalPackage.visualizationSpecs || []),
+  ].map((row) => row.id || row.visualizationSpecId).filter(Boolean);
+}
+
+function sourceRefArray(values) {
+  return uniqueStrings(values).map((value) => cleanText(value, 120)).filter(Boolean).slice(0, 64);
 }
 
 function pickSourceRefs(context, id) {
@@ -2178,7 +3084,7 @@ function localizeDescription(value, t) {
 }
 
 function textOf(value) {
-  return [value?.id, value?.label, value?.title, value?.feature, value?.detail, value?.epic, value?.type].filter(Boolean).join(" ");
+  return [value?.id, value?.label, value?.title, value?.feature, value?.functionLabel, value?.subfunctionLabel, value?.detail, value?.epic, value?.type].filter(Boolean).join(" ");
 }
 
 function safeRoleId(value) {

@@ -13,6 +13,7 @@ import {
 import {
   formatRendererUnit,
   localizeRendererText,
+  normalizeClientTerminology,
   normalizeRendererLocale,
   rendererIntlLocale,
   rendererPageBadges,
@@ -3708,7 +3709,15 @@ function normalizeFunctionPrice(lock, semanticModel, proposalModel, exponent, lo
 
 function normalizeFunctionSchedule(semanticModel, commercialRows, locale) {
   const inventory = buildProductDeliveryInventory(semanticModel);
-  if (!inventory.length) return array(commercialRows);
+  if (!inventory.length) {
+    return array(commercialRows).map((row) => ({
+      ...row,
+      name: clientText(localizeKnown(row.name, locale), 120),
+      epic: clientText(localizeKnown(row.epic, locale), 100),
+      detail: clientText(localizeKnown(row.detail, locale), 170),
+      deadline: clientText(localizeKnown(row.deadline, locale), 70),
+    }));
+  }
   const rows = array(commercialRows);
   const rowForLeaf = (leaf) => {
     const functionKey = normalizeFunctionMatchLabel(leaf.functionLabel);
@@ -3724,10 +3733,10 @@ function normalizeFunctionSchedule(semanticModel, commercialRows, locale) {
     const hasDistinctSubfunction = Boolean(leaf.subfunctionId && normalizeFunctionMatchLabel(terminalLabel) !== normalizeFunctionMatchLabel(leaf.functionLabel));
     return {
       id: String(leaf.id || `PRODUCT-DELIVERY-${index + 1}`),
-      name: clientText(localizeRendererText(leaf.functionLabel || commercial?.name || `Function ${index + 1}`, locale), 120),
-      epic: clientText(localizeRendererText(leaf.epic || commercial?.epic || "To confirm", locale), 100),
-      detail: clientText(localizeRendererText(hasDistinctSubfunction ? terminalLabel : commercial?.detail || terminalLabel || "To confirm", locale), 170),
-      deadline: clientText(localizeRendererText(leaf.deadline || leaf.phase || commercial?.deadline || "To confirm", locale), 70),
+      name: clientText(localizeKnown(leaf.functionLabel || commercial?.name || `Function ${index + 1}`, locale), 120),
+      epic: clientText(localizeKnown(leaf.epic || commercial?.epic || "To confirm", locale), 100),
+      detail: clientText(localizeKnown(hasDistinctSubfunction ? terminalLabel : commercial?.detail || terminalLabel || "To confirm", locale), 170),
+      deadline: clientText(localizeKnown(leaf.deadline || leaf.phase || commercial?.deadline || "To confirm", locale), 70),
       scopeStatus: normalizeFunctionScopeStatus(leaf, commercial),
       amountMinor: null,
       truthStatus: normalizeTruthStatus(leaf.truthStatus, commercial?.truthStatus),
@@ -4461,47 +4470,6 @@ function l(content, text) {
 
 function localizeKnown(value, locale) {
   return normalizeClientTerminology(localizeRendererText(value, locale), locale);
-}
-
-function normalizeClientTerminology(value, locale) {
-  let text = String(value ?? "");
-  const normalized = normalizeRendererLocale(locale);
-  const replacements = normalized === "uz-Latn"
-    ? [
-        [/\bMVP\s+scope\b/gi, "boshlang‘ich mahsulot tarkibi"],
-        [/\bscope\b/gi, "tarkib"],
-        [/\bdiscovery\b/gi, "talablarni aniqlash"],
-        [/\broadmap\b/gi, "yo‘l xaritasi"],
-        [/\bcheckout\b/gi, "buyurtmani rasmiylashtirish"],
-        [/\breconciliation\b/gi, "hisob-kitoblarni solishtirish"],
-        [/\bbenchmark\b/gi, "taqqoslash namunasi"],
-        [/\bmobile[- ]first\b/gi, "mobilga yo‘naltirilgan"],
-        [/\bmobil[- ]first\b/gi, "mobilga yo‘naltirilgan"],
-        [/\bpush(?:-based)?\b/gi, "tezkor bildirishnomalar"],
-        [/\bdashboards?\b/gi, "boshqaruv panellari"],
-        [/\badmin\b/gi, "boshqaruv"],
-        [/\bAI\b/g, "sun’iy intellekt"],
-        [/\bMarketplace\b/g, "Marketpleys"],
-        [/\bMVP\b/g, "boshlang‘ich mahsulot"],
-      ]
-    : normalized === "ru-RU"
-      ? [
-          [/\bMVP\s+scope\b/gi, "состав первого выпуска"],
-          [/\bscope\b/gi, "состав"],
-          [/\bdiscovery\b/gi, "предпроектный анализ"],
-          [/\broadmap\b/gi, "дорожная карта"],
-          [/\bcheckout\b/gi, "оформление заказа"],
-          [/\breconciliation\b/gi, "сверка расчётов"],
-          [/\bbenchmark\b/gi, "аналог"],
-          [/\bmobile[- ]first\b/gi, "ориентированный на мобильные устройства"],
-          [/\bpush(?:-based)?\b/gi, "уведомления"],
-          [/\bdashboards?\b/gi, "панели управления"],
-          [/\badmin\b/gi, "администрирование"],
-          [/\bMVP\b/g, "первый выпуск"],
-        ]
-      : [];
-  for (const [pattern, replacement] of replacements) text = text.replace(pattern, replacement);
-  return text;
 }
 
 function localizeVisualizationSpec(spec, locale) {

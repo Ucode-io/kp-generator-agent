@@ -3,7 +3,7 @@ import path from "node:path";
 import { chromium } from "playwright";
 import { validateAppPrototypeSpec } from "./kp_app_prototype_planner.mjs";
 
-export const APP_PROTOTYPE_QA_VERSION = "app-prototype-qa-v2";
+export const APP_PROTOTYPE_QA_VERSION = "app-prototype-qa-v6";
 
 export async function runAppPrototypeQa({ spec, htmlPath, outputPath = null } = {}) {
   const findings = [];
@@ -26,7 +26,11 @@ export async function runAppPrototypeQa({ spec, htmlPath, outputPath = null } = 
     });
     page.on("pageerror", (error) => pageErrors.push(String(error.message || error)));
     await page.setContent(html, { waitUntil: "load" });
-    await page.waitForTimeout(100);
+    const imageLoadSummary = await page.evaluate(async () => {
+      if (typeof window.__kpWaitForPrototypeImages !== "function") return null;
+      return window.__kpWaitForPrototypeImages(document, 10_000);
+    });
+    await page.waitForTimeout(50);
 
     const dom = await page.evaluate(() => {
       const screens = [...document.querySelectorAll("[data-screen]")];
@@ -42,6 +46,23 @@ export async function runAppPrototypeQa({ spec, htmlPath, outputPath = null } = 
       const primaryStyle = primaryButton ? getComputedStyle(primaryButton) : null;
       const actionRow = document.querySelector(".action-row");
       const actionStyle = actionRow ? getComputedStyle(actionRow) : null;
+      const prototypeImages = [...document.querySelectorAll("img[data-prototype-image]")];
+      const prototypeData = JSON.parse(document.getElementById("prototype-data")?.textContent || "{}");
+      const inPhoneReachable = new Set((prototypeData.entryScreenIds || [prototypeData.firstScreenId]).filter(Boolean));
+      const reachabilityQueue = [...inPhoneReachable];
+      const runtimeScreens = new Map((prototypeData.screens || []).map((screen) => [screen.id, screen]));
+      while (reachabilityQueue.length) {
+        const current = runtimeScreens.get(reachabilityQueue.shift());
+        const targets = [...(current?.actions || []).slice(0, 2), ...(current?.itemActions || [])].flatMap((action) => [
+          action.targetScreenId,
+          ...(action.outcomes || []).map((outcome) => outcome.targetScreenId),
+        ]).filter(Boolean);
+        for (const target of targets) {
+          if (!runtimeScreens.has(target) || inPhoneReachable.has(target)) continue;
+          inPhoneReachable.add(target);
+          reachabilityQueue.push(target);
+        }
+      }
       function structuralSignature(node) {
         if (!node || node.nodeType !== Node.ELEMENT_NODE) return "";
         const tag = node.tagName.toLowerCase();
@@ -58,6 +79,25 @@ export async function runAppPrototypeQa({ spec, htmlPath, outputPath = null } = 
       const structuralSignatures = screens.map((screen) => structuralSignature(screen.querySelector(".screen-scroll")));
       const structuralCounts = structuralSignatures.reduce((map, signature) => map.set(signature, (map.get(signature) || 0) + 1), new Map());
       const genericTexts = ["Название", "Статус", "Далее", "Description", "Status", "Next"];
+      const photoOverlayTextNodes = [...document.querySelectorAll([
+        ".photo-hero .hero-copy h2",
+        ".photo-hero .hero-copy p",
+        ".detail-cover.has-photo .detail-copy h2",
+        ".detail-cover.has-photo .detail-copy p",
+        ".storefront-hero>div:last-child>strong",
+        ".dashboard-photo>span:last-child",
+        ".scope-visual>div:last-child>strong",
+        ".scope-visual>div:last-child>p",
+      ].join(","))];
+      const darkPhotoOverlayTextCount = photoOverlayTextNodes.filter((node) => {
+        const channels = (getComputedStyle(node).color.match(/[\d.]+/g) || []).slice(0, 3).map(Number);
+        if (channels.length !== 3) return true;
+        const linear = channels.map((value) => {
+          const normalized = value / 255;
+          return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+        });
+        return (0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]) < 0.8;
+      }).length;
       return {
         screenCount: screens.length,
         navLinkCount: navLinks.length,
@@ -73,7 +113,7 @@ export async function runAppPrototypeQa({ spec, htmlPath, outputPath = null } = 
         primaryButtonRadius: primaryStyle?.borderRadius || "",
         primaryButtonBackground: primaryStyle?.backgroundImage || "",
         actionPosition: actionStyle?.position || "",
-        targetIds: [...document.querySelectorAll("[data-action-target]")].map((node) => node.dataset.actionTarget).filter(Boolean),
+        targetIds: [...document.querySelectorAll("[data-action-target],[data-row-target]")].map((node) => node.dataset.actionTarget || node.dataset.rowTarget).filter(Boolean),
         localPaths: /(?:file:\/\/|\/Users\/|\/home\/|\/tmp\/|[A-Z]:\\)/.test(document.documentElement.outerHTML),
         uniqueScreenContentCount: new Set(screenContentSignatures).size,
         uniqueStructuralCount: new Set(structuralSignatures).size,
@@ -83,8 +123,29 @@ export async function runAppPrototypeQa({ spec, htmlPath, outputPath = null } = 
           const rows = [...screen.querySelectorAll(".list-row strong,.entity-row strong,.form-card label")].slice(0, 3).map((node) => node.textContent.trim());
           return rows.length >= 3 && rows.every((text) => genericTexts.includes(text));
         }).length,
-        interactiveControlCount: [...document.querySelectorAll("[data-action-id],[data-tab-id],[data-toggle-id],[data-row-action],[data-menu-id],[data-search-clear],[data-demo-state]")].length,
+        interactiveControlCount: [...document.querySelectorAll("[data-action-id],[data-tab-id],[data-toggle-id],[data-row-action],[data-menu-id],[data-search-clear],[data-demo-state],[data-favorite-id]")].length,
+        favoriteControlCount: document.querySelectorAll("[data-favorite-id]").length,
+        favoritesScreenCount: document.querySelectorAll('[data-screen="favorites"]').length,
+        genericDemoToastCopyPresent: document.documentElement.innerHTML.includes("Demo state changed"),
         disabledWithoutReasonCount: [...document.querySelectorAll("button:disabled")].filter((node) => !node.title && !node.getAttribute("aria-describedby")).length,
+        commerceDecorativeStatusBadgeCount: [...document.querySelectorAll('[data-layout="storefront-home"] .badge,[data-layout="commerce-catalog"] .badge,[data-layout="commerce-product"] .badge,[data-layout="commerce-cart"] .badge,[data-layout="commerce-checkout"] .badge,[data-layout="commerce-payment"] .badge')].length,
+        internalPlanningCopyCount: screens.filter((screen) => /доступные действия соответствуют роли|demo flow|из карты продукта/i.test(screen.textContent || "")).length,
+        photoOverlayTextCount: photoOverlayTextNodes.length,
+        darkPhotoOverlayTextCount,
+        inPhoneUnreachableIds: (prototypeData.screens || []).map((screen) => screen.id).filter((id) => !inPhoneReachable.has(id)),
+        prototypeImageCount: prototypeImages.length,
+        loadedImageCount: prototypeImages.filter((image) => image.complete && image.naturalWidth > 0 && image.dataset.imageStatus === "loaded").length,
+        failedImageCount: prototypeImages.filter((image) => image.dataset.imageStatus === "failed" || (image.complete && image.naturalWidth === 0)).length,
+        pendingImageCount: prototypeImages.filter((image) => !image.complete || !image.dataset.imageStatus).length,
+        imageMetadataMissingCount: prototypeImages.filter((image) => !image.alt || !["lazy", "eager"].includes(image.loading) || image.decoding !== "async").length,
+        unsafeImageCount: prototypeImages.filter((image) => {
+          try {
+            const url = new URL(image.src);
+            return url.protocol !== "https:" || url.hostname !== "images.unsplash.com";
+          } catch {
+            return true;
+          }
+        }).length,
       };
     });
 
@@ -105,6 +166,16 @@ export async function runAppPrototypeQa({ spec, htmlPath, outputPath = null } = 
     if (dom.readonlyFieldCount > 0) add(findings, "APP_PROTOTYPE_FORM_NOT_EDITABLE", "BLOCKER", `${dom.readonlyFieldCount} form fields are readonly.`);
     if (dom.genericPrimaryContentCount > 0) add(findings, "APP_PROTOTYPE_GENERIC_PRIMARY_CONTENT", "BLOCKER", `${dom.genericPrimaryContentCount} screens render generic primary rows.`);
     if (dom.disabledWithoutReasonCount > 0) add(findings, "APP_PROTOTYPE_DISABLED_CONTROL_WITHOUT_REASON", "ERROR", `${dom.disabledWithoutReasonCount} disabled controls lack an explanation.`);
+    if (dom.commerceDecorativeStatusBadgeCount > 0) add(findings, "APP_PROTOTYPE_DECORATIVE_STATUS_BADGE", "BLOCKER", `${dom.commerceDecorativeStatusBadgeCount} non-semantic status badges are rendered on commerce client screens.`);
+    if (["marketplace", "ecommerce"].includes(spec.project?.type) && dom.internalPlanningCopyCount > 0) add(findings, "APP_PROTOTYPE_INTERNAL_COPY_LEAK", "BLOCKER", `${dom.internalPlanningCopyCount} commerce screens render internal planning copy.`);
+    if (dom.darkPhotoOverlayTextCount > 0) add(findings, "APP_PROTOTYPE_PHOTO_TEXT_CONTRAST_INVALID", "BLOCKER", `${dom.darkPhotoOverlayTextCount} of ${dom.photoOverlayTextCount} text elements over photos are not rendered with a light foreground.`);
+    if (dom.inPhoneUnreachableIds.length > 0) add(findings, "APP_PROTOTYPE_IN_PHONE_FLOW_INCOMPLETE", "BLOCKER", `Screens require sidebar navigation: ${dom.inPhoneUnreachableIds.join(", ")}`);
+    if ((spec.media?.images || []).length >= 6 && dom.prototypeImageCount < 3) add(findings, "APP_PROTOTYPE_THEMATIC_MEDIA_MISSING", "BLOCKER", "Thematic media pool is not represented in the rendered prototype.");
+    if (dom.prototypeImageCount > 0 && (imageLoadSummary?.timedOut || dom.pendingImageCount > 0)) add(findings, "APP_PROTOTYPE_IMAGE_LOAD_TIMEOUT", "BLOCKER", `${dom.pendingImageCount} prototype images did not finish loading.`);
+    if (dom.failedImageCount > 0) add(findings, "APP_PROTOTYPE_IMAGE_LOAD_FAILED", "BLOCKER", `${dom.failedImageCount} prototype images failed to load.`);
+    if ((spec.media?.images || []).length >= 6 && dom.loadedImageCount < 3) add(findings, "APP_PROTOTYPE_THEMATIC_MEDIA_NOT_LOADED", "BLOCKER", `Only ${dom.loadedImageCount} thematic images loaded successfully.`);
+    if (dom.imageMetadataMissingCount > 0) add(findings, "APP_PROTOTYPE_IMAGE_METADATA_MISSING", "ERROR", `${dom.imageMetadataMissingCount} images miss alt text, loading policy, or async decoding.`);
+    if (dom.unsafeImageCount > 0) add(findings, "APP_PROTOTYPE_IMAGE_SOURCE_INVALID", "BLOCKER", `${dom.unsafeImageCount} images use an unapproved source.`);
     if (dom.uniqueScreenContentCount / Math.max(1, dom.screenCount) < 0.8) {
       add(findings, "APP_PROTOTYPE_DOM_SCREEN_CONTENT_REPETITIVE", "BLOCKER", `Only ${dom.uniqueScreenContentCount} of ${dom.screenCount} rendered screens have distinct content.`);
     }
@@ -112,16 +183,27 @@ export async function runAppPrototypeQa({ spec, htmlPath, outputPath = null } = 
       add(findings, "APP_PROTOTYPE_STRUCTURAL_REPETITION", "BLOCKER", `One structural template is reused by ${dom.maxStructuralTemplateUse} of ${dom.screenCount} screens.`);
     }
     if (dom.interactiveControlCount < dom.screenCount) add(findings, "APP_PROTOTYPE_INTERACTION_COVERAGE_LOW", "ERROR", "Rendered prototype has fewer interactive controls than screens.");
+    if (["marketplace", "ecommerce"].includes(spec.project?.type) && (dom.favoritesScreenCount !== 1 || dom.favoriteControlCount < 1)) add(findings, "APP_PROTOTYPE_FAVORITES_INTERACTION_MISSING", "BLOCKER", "Commerce favorites screen or controls are missing.");
+    if (["marketplace", "ecommerce"].includes(spec.project?.type) && dom.genericDemoToastCopyPresent) add(findings, "APP_PROTOTYPE_GENERIC_DEMO_TOAST", "BLOCKER", "Commerce controls expose the internal 'Demo state changed' message.");
     const screenSet = new Set((spec.screens || []).map((screen) => screen.id));
     for (const target of dom.targetIds) {
       if (!screenSet.has(target)) add(findings, "APP_PROTOTYPE_ACTION_TARGET_MISSING", "BLOCKER", `Rendered action references missing screen: ${target}`);
     }
     for (const screen of (spec.screens || [])) {
-      for (const action of screen.actions || []) {
+      const actions = [...(screen.actions || []), ...(screen.content?.items || []).map((item) => item.action).filter(Boolean)];
+      for (const action of actions) {
         for (const target of actionTargets(action)) {
           if (!screenSet.has(target)) add(findings, "APP_PROTOTYPE_ACTION_TARGET_MISSING", "BLOCKER", `Spec action ${screen.id}/${action.id} references missing screen: ${target}`);
         }
       }
+    }
+
+    const inPhoneCrawl = await crawlInPhoneActionGraph(page, spec);
+    for (const row of inPhoneCrawl.failures) {
+      add(findings, "APP_PROTOTYPE_IN_PHONE_NAVIGATION_FAILED", "BLOCKER", `${row.screenId}: ${row.message}`);
+    }
+    if (inPhoneCrawl.unreachableIds.length > 0) {
+      add(findings, "APP_PROTOTYPE_IN_PHONE_FLOW_INCOMPLETE", "BLOCKER", `Physical in-phone crawl could not reach: ${inPhoneCrawl.unreachableIds.join(", ")}`);
     }
 
     for (const screen of (spec.screens || [])) {
@@ -202,6 +284,91 @@ function actionTargets(action = {}) {
   ].filter(Boolean);
 }
 
+function runtimeActionTarget(action = {}) {
+  if (action.targetScreenId) return action.targetScreenId;
+  const outcomes = action.outcomes || [];
+  return outcomes.find((outcome) => outcome.when === "demo-success")?.targetScreenId || outcomes[0]?.targetScreenId || "";
+}
+
+function screenNavigationControls(screen = {}) {
+  return [
+    ...(screen.actions || []).slice(0, 2).map((action) => ({
+      action,
+      selector: `[data-action-id="${cssString(action.id)}"]`,
+    })),
+    ...(screen.content?.items || []).filter((item) => runtimeActionTarget(item.action)).map((item) => ({
+      action: item.action,
+      selector: `[data-select-id="${cssString(item.id)}"][data-row-target]`,
+    })),
+  ];
+}
+
+function prototypeQaEntryScreenIds(spec = {}) {
+  const screenIds = new Set((spec.screens || []).map((screen) => screen.id));
+  const preferred = ["marketplace", "ecommerce"].includes(spec.project?.type)
+    ? ["home", "catalog", "cart", "orders", "profile"]
+    : [];
+  return [...new Set([spec.screens?.[0]?.id, ...preferred].filter((id) => id && screenIds.has(id)))];
+}
+
+async function crawlInPhoneActionGraph(page, spec) {
+  const screens = spec.screens || [];
+  const byId = new Map(screens.map((screen) => [screen.id, screen]));
+  const visited = new Set();
+  const failures = [];
+  async function visit(screenId) {
+    if (visited.has(screenId)) return;
+    const activeId = await page.locator(".screen.is-active").getAttribute("data-screen");
+    if (activeId !== screenId) {
+      failures.push({ screenId, message: `expected active screen ${screenId}, got ${activeId || "none"}` });
+      return;
+    }
+    visited.add(screenId);
+    const screen = byId.get(screenId);
+    for (const { action, selector } of screenNavigationControls(screen)) {
+      const targetScreenId = runtimeActionTarget(action);
+      if (!targetScreenId || !byId.has(targetScreenId) || visited.has(targetScreenId)) continue;
+      const control = page.locator(`.screen.is-active ${selector}`);
+      if (await control.count() !== 1) {
+        failures.push({ screenId, message: `action ${action.id} is not rendered inside the phone` });
+        continue;
+      }
+      try {
+        await control.click({ timeout: 2000 });
+        await page.waitForTimeout(35);
+      } catch {
+        failures.push({ screenId, message: `action ${action.id} could not be clicked` });
+        continue;
+      }
+      const targetActiveId = await page.locator(".screen.is-active").getAttribute("data-screen");
+      if (targetActiveId !== targetScreenId) {
+        failures.push({ screenId, message: `action ${action.id} expected ${targetScreenId}, opened ${targetActiveId || "none"}` });
+        continue;
+      }
+      await visit(targetScreenId);
+      await page.evaluate((returnScreenId) => { location.hash = returnScreenId; }, screenId);
+      await page.waitForTimeout(35);
+      const returnedId = await page.locator(".screen.is-active").getAttribute("data-screen");
+      if (returnedId !== screenId) {
+        failures.push({ screenId, message: `back navigation returned to ${returnedId || "none"}` });
+        return;
+      }
+    }
+  }
+  for (const entryScreenId of prototypeQaEntryScreenIds(spec)) {
+    const activeId = await page.locator(".screen.is-active").getAttribute("data-screen");
+    if (activeId !== entryScreenId) {
+      await page.click(`[data-screen-link="${cssString(entryScreenId)}"]`);
+      await page.waitForTimeout(35);
+    }
+    await visit(entryScreenId);
+  }
+  return {
+    failures,
+    unreachableIds: screens.map((screen) => screen.id).filter((id) => !visited.has(id)),
+  };
+}
+
 async function crawlInteractions(page, spec) {
   const failures = [];
   const selector = [
@@ -212,6 +379,7 @@ async function crawlInteractions(page, spec) {
     "[data-menu-id]:not(:disabled)",
     "[data-search-clear]:not(:disabled)",
     "[data-demo-state]:not(:disabled)",
+    "[data-favorite-id]:not(:disabled)",
   ].map((part) => `.screen.is-active ${part}`).join(",");
   for (const screen of spec.screens || []) {
     await page.click(`[data-screen-link="${cssString(screen.id)}"]`);

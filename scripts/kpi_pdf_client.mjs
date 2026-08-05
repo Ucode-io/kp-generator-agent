@@ -749,6 +749,12 @@ export function dynamicColorPalettesEnabled(env = process.env) {
   );
 }
 
+export function prototypeDomainPalettesEnabled(env = process.env) {
+  return ["1", "true", "on", "yes"].includes(
+    String(env.KP_PROTOTYPE_DOMAIN_PALETTES_ENABLED ?? "1").trim().toLowerCase(),
+  );
+}
+
 function udevsStaticThemeResult() {
   return {
     themeTokens: udevsFallbackTheme(),
@@ -2107,6 +2113,17 @@ function resolvedUrlTheme(kind, url, themeTokens, warnings = []) {
     },
     themeWarnings: nextWarnings,
     referenceUrl: url,
+  };
+}
+
+export function appPrototypeThemeTokens(brandTheme = null) {
+  const tokens = brandTheme?.themeTokens || {};
+  const primary = parseCssColor(tokens.decorativePrimary || tokens.brand || tokens.primary);
+  const secondary = parseCssColor(tokens.decorativeSecondary || tokens.secondary || tokens.brandDeep);
+  if (!primary || !secondary) return null;
+  return {
+    primary: rgbToHex(primary),
+    secondary: rgbToHex(secondary),
   };
 }
 
@@ -9418,8 +9435,9 @@ export async function buildKpiPdfReport(question = "KP PDF generation", progress
 }
 
 async function buildKpiPdfReportV5(question = "KP PDF generation", progress = async () => {}, options = {}) {
-  const config = options.config || resolveKpPdfConfig(options.env || process.env);
-  const dynamicPalettes = dynamicColorPalettesEnabled(options.env || process.env);
+  const env = options.env || process.env;
+  const config = options.config || resolveKpPdfConfig(env);
+  const dynamicPalettes = dynamicColorPalettesEnabled(env);
   await progress("KP v5: request workspace tayyorlanyapti.");
   const requestContext = normalizeV5RequestContext(options.requestContext, { question, config });
   const referenceMode = options.storedEvidenceBundle?.selectionTrace?.mode || requestContext.routing?.referenceModeHint || "none";
@@ -9450,6 +9468,23 @@ async function buildKpiPdfReportV5(question = "KP PDF generation", progress = as
   } else if (!suppliedStyleProfile && referenceMode === "none" && hasUrlThemeReference) {
     analogTheme = await resolveKpBrandTheme({
       options,
+      groundedBrief: groundedBriefForTheme,
+      preliminaryLinks: preliminaryThemeLinks,
+      progress,
+    });
+  }
+  let prototypeBrandTheme = null;
+  if (options.appPrototype?.publicId && hasUrlThemeReference && prototypeDomainPalettesEnabled(env)) {
+    const reusablePdfTheme = ["analog_url", "brand_url", "client_site_url", "ai_domain_fallback"].includes(analogTheme?.themeSource?.kind)
+      ? analogTheme
+      : null;
+    prototypeBrandTheme = reusablePdfTheme || await resolveKpBrandTheme({
+      options: {
+        ...options,
+        env: { ...env, KP_DYNAMIC_COLOR_PALETTES_ENABLED: "1" },
+        themeTokens: null,
+        evidenceBundle: null,
+      },
       groundedBrief: groundedBriefForTheme,
       preliminaryLinks: preliminaryThemeLinks,
       progress,
@@ -9557,6 +9592,8 @@ async function buildKpiPdfReportV5(question = "KP PDF generation", progress = as
       semanticModel,
       proposalPackage,
       visualStyleProfile: styleProfile,
+      themeTokens: appPrototypeThemeTokens(prototypeBrandTheme),
+      env: options.env || process.env,
     });
     await atomicWriteJson(path.join(workspace, "contracts", "app-prototype-spec.json"), appPrototypeSpec, { schemaName: "appPrototypeSpec" });
     const candidatePrototypePath = path.join(workspace, "candidate", "prototype", "index.html");
@@ -9764,6 +9801,12 @@ async function buildKpiPdfReportV5(question = "KP PDF generation", progress = as
         screenCount: appPrototype.record.screenCount,
         rendererVersion: appPrototype.record.rendererVersion,
         recordPath: path.join(workspace, "model", "app-prototype-record.json"),
+        theme: {
+          source: prototypeBrandTheme?.themeSource || { kind: "proposal_style", reference: "visual-style-profile" },
+          referenceUrl: prototypeBrandTheme?.referenceUrl || "",
+          palette: appPrototype.spec.theme,
+          warnings: prototypeBrandTheme?.themeWarnings || [],
+        },
       } : null,
     },
   };

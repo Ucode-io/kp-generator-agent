@@ -63,6 +63,32 @@ HTML-экраны соответствуют интерфейсам будуще
 
 На основании этих данных создаётся план экранов.
 
+### 3.4. Grounding по артефактам КП
+
+Планировщик обязан сохранять тип проекта (CRM, ERP, SaaS, mobile и другие)
+отдельно от предметной вертикали. Состав экранов и demo-контент формируются по
+единому каноническому inventory, который используется страницами PDF:
+
+- функциональный scope и capabilities;
+- product mind map и её terminal nodes;
+- task list / function schedule;
+- процессы, роли, состояния и user flow;
+- integrations и решения/развилки.
+
+Контракт `sourceContext` фиксирует refs и coverage каждого источника. Экранные
+модули, созданные из mind map/task list, должны сохранять исходные ID в
+`sourceRefs`, чтобы QA мог обнаружить расхождение между КП и прототипом.
+
+### 3.5. Тематические изображения
+
+Для каждого проекта формируются 2–4 физических предметных поисковых фразы —
+например, `modern residential architecture`, а не `business app`. При наличии
+`UNSPLASH_ACCESS_KEY` генератор получает до 12 landscape-фото из
+Unsplash и распределяет их по hero/card/thumb surfaces. Без ключа или при
+ошибке API используется встроенный тематический пул. Допускаются только HTTPS
+URL хоста `images.unsplash.com`; все `<img>` имеют `alt`, `loading="lazy"`, async decoding и
+визуальный fallback.
+
 ## 4. Общая архитектура
 
 ```text
@@ -175,6 +201,29 @@ Promise.all
     "name": "Marketplace",
     "type": "ecommerce",
     "description": "Клиентское приложение маркетплейса"
+  },
+  "sourceContext": {
+    "projectType": "ecommerce",
+    "experienceFamily": "commerce",
+    "functionalityRefs": ["SCOPE-002"],
+    "mindMapRefs": ["CAP-CAP-002"],
+    "taskListRefs": ["CAP-CAP-002"],
+    "userFlowRefs": ["PROCESS-CHECKOUT"],
+    "imageKeywords": ["premium retail products", "modern boutique interior"],
+    "coverage": { "functionality": 1, "mindMap": 1, "taskList": 1, "userFlows": 1 }
+  },
+  "media": {
+    "source": "curated_unsplash",
+    "keywords": ["premium retail products", "modern boutique interior"],
+    "images": [
+      { "id": "photo_01", "url": "https://images.unsplash.com/photo-1", "alt": "Premium retail products", "role": "hero", "photographer": "" },
+      { "id": "photo_02", "url": "https://images.unsplash.com/photo-2", "alt": "Modern boutique interior", "role": "hero", "photographer": "" },
+      { "id": "photo_03", "url": "https://images.unsplash.com/photo-3", "alt": "Retail lifestyle", "role": "hero", "photographer": "" },
+      { "id": "photo_04", "url": "https://images.unsplash.com/photo-4", "alt": "Product card", "role": "card", "photographer": "" },
+      { "id": "photo_05", "url": "https://images.unsplash.com/photo-5", "alt": "Store collection", "role": "card", "photographer": "" },
+      { "id": "photo_06", "url": "https://images.unsplash.com/photo-6", "alt": "Customer choice", "role": "card", "photographer": "" }
+    ],
+    "warnings": []
   },
   "theme": {
     "primary": "#1A54FE",
@@ -386,16 +435,20 @@ Promise.all
 
 Приоритет источников цвета:
 
-1. Подтверждённый `visualStyleProfile`.
-2. Безопасно извлечённая палитра сайта или visual reference.
+1. Безопасно извлечённая палитра домена из запроса — только для прототипа.
+2. Подтверждённый `visualStyleProfile`, если домен не указан или недоступен.
 3. Статическая палитра Udevs.
+
+Доменный источник изменяет `primary` и `secondary` интерактивного прототипа,
+но не передаётся в PDF renderer. PDF сохраняет утверждённую визуальную систему
+Udevs независимо от доменной палитры прототипа.
 
 Renderer обязан обеспечить:
 
 - достаточный контраст текста;
 - единое назначение primary/secondary/success/warning/error;
 - отсутствие динамически созданных небезопасных CSS-значений;
-- одинаковую визуальную идентичность PDF и HTML-прототипа.
+- сохранение доменной идентичности прототипа без изменения темы PDF.
 
 ## 11. Локализация
 
@@ -415,6 +468,7 @@ Renderer обязан обеспечить:
 
 - переходы через sidebar;
 - переходы по кнопкам внутри мобильного интерфейса;
+- достижимость каждого экрана от стартового экрана только через действия внутри телефона, без обязательного использования sidebar;
 - возврат на предыдущий экран;
 - bottom navigation;
 - tabs;
@@ -579,6 +633,7 @@ Playwright должен проверить:
 - стартовый экран активен;
 - переходы по навигации работают;
 - внутренние кнопки открывают существующие экраны;
+- внутренний action graph покрывает все экраны и не оставляет sidebar-only страниц;
 - отсутствует нежелательное горизонтальное переполнение;
 - мобильный viewport не выходит за рамку телефона;
 - заголовок выбранного экрана обновляется.

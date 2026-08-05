@@ -4,12 +4,14 @@ import path from "node:path";
 import { agentConfig, normalizeProfileContrast } from "../src/agent.mjs";
 import { AGENT_ROOT } from "../src/root.mjs";
 import {
+  appPrototypeThemeTokens,
   applyUdevsScreenshotVisualSystem,
   classifyBrandPaletteFromDomainWithAi,
   classifyBrandPaletteWithAi,
   deriveReferenceThemeFromSnapshot,
   dynamicColorPalettesEnabled,
   normalizeV5StyleProfile,
+  prototypeDomainPalettesEnabled,
   taskListRows,
   udevsFallbackTheme,
 } from "../scripts/kpi_pdf_client.mjs";
@@ -20,11 +22,13 @@ import {
 } from "../scripts/kp_pdf_reference_renderer.mjs";
 import { buildProductDeliveryInventory, buildProductMapModel, buildProductMapSegments } from "../scripts/kp_product_map_model.mjs";
 import { buildPresentationPlan, selectDynamicPageDecisions } from "../scripts/kp_presentation_planner.mjs";
-import { localizeRendererText } from "../scripts/kp_pdf_reference_locale.mjs";
+import { localizeRendererText, normalizeClientTerminology } from "../scripts/kp_pdf_reference_locale.mjs";
 import { buildProposalSemanticModel, normalizeScopeItems, validateProposalSemanticModel } from "../scripts/kp_semantic_model.mjs";
 import { getDomainResearchPacks, parseKpBrief } from "../scripts/kp_grounded_content.mjs";
-import { buildAndValidateAppPrototypeSpec } from "../scripts/kp_app_prototype_planner.mjs";
+import { buildPrototypeContentSecurityPolicy } from "../src/prototype_security.mjs";
+import { buildAndValidateAppPrototypeSpec, findUnreachablePrototypeScreens } from "../scripts/kp_app_prototype_planner.mjs";
 import { renderAppPrototypeHtml } from "../scripts/kp_app_prototype_renderer.mjs";
+import { derivePrototypeExperienceFamily, resolveAppPrototypeMedia } from "../scripts/kp_app_prototype_media.mjs";
 import {
   buildPrimaryFlowSpec,
   buildProductMapSpec,
@@ -46,10 +50,13 @@ assert.equal(config.KP_PDF_RENDERER_MODE, "v5");
 assert.equal(config.KP_PDF_QUALITY_GATE_MODE, "enforce");
 assert.equal(config.KP_DISABLE_WEB_RESEARCH, "1");
 assert.equal(config.KP_DYNAMIC_COLOR_PALETTES_ENABLED, "0");
+assert.equal(config.KP_PROTOTYPE_DOMAIN_PALETTES_ENABLED, "1");
 assert.equal(dynamicColorPalettesEnabled({}), false);
 assert.equal(dynamicColorPalettesEnabled({ KP_DYNAMIC_COLOR_PALETTES_ENABLED: "off" }), false);
 assert.equal(dynamicColorPalettesEnabled({ KP_DYNAMIC_COLOR_PALETTES_ENABLED: "1" }), true);
 assert.equal(dynamicColorPalettesEnabled({ KP_DYNAMIC_COLOR_PALETTES_ENABLED: "on" }), true);
+assert.equal(prototypeDomainPalettesEnabled({}), true);
+assert.equal(prototypeDomainPalettesEnabled({ KP_PROTOTYPE_DOMAIN_PALETTES_ENABLED: "0" }), false);
 assert.ok((await fs.stat(path.join(AGENT_ROOT, "scripts", "kpi_pdf_client.mjs"))).isFile());
 assert.ok((await fs.stat(path.join(AGENT_ROOT, "schemas", "kp", "request-context-v1.schema.json"))).isFile());
 const dockerfile = await fs.readFile(path.join(AGENT_ROOT, "Dockerfile"), "utf8");
@@ -575,6 +582,9 @@ assert.equal(localizeRendererText("listings", "ru-RU"), "объявления");
 assert.equal(localizeRendererText("product cards", "uz-Latn"), "mahsulot kartalari");
 assert.equal(localizeRendererText("Business logic", "ru-RU"), "Бизнес-логика");
 assert.equal(localizeRendererText("service endpoints", "uz-Latn"), "servis nuqtalari");
+assert.equal(normalizeClientTerminology(localizeRendererText("Sales dashboards", "ru-RU"), "ru-RU"), "панели продаж");
+assert.equal(normalizeClientTerminology(localizeRendererText("Admin panel navigation", "ru-RU"), "ru-RU"), "навигация административной панели");
+assert.equal(normalizeClientTerminology(localizeRendererText("Reporting dashboard", "ru-RU"), "ru-RU"), "панель отчётности");
 assertProductMapSegmentContract(buildProductMapSegments(compoundDetailSemanticModel));
 
 const normalizedDeliveryScope = normalizeScopeItems([{
@@ -839,17 +849,193 @@ assert.ok(marketplacePrototypeSpec.screens.some((screen) => screen.id === "check
 assert.ok(marketplacePrototypeSpec.screens.some((screen) => screen.id === "seller_workspace"));
 assert.ok(marketplacePrototypeSpec.screens.every((screen) => screen.intent && screen.layout));
 assert.ok(marketplacePrototypeSpec.screens.flatMap((screen) => screen.actions).every((action) => action.type));
+assert.equal(marketplacePrototypeSpec.sourceContext.projectType, "marketplace");
+assert.equal(marketplacePrototypeSpec.sourceContext.experienceFamily, "commerce");
+assert.ok(marketplacePrototypeSpec.sourceContext.functionalityRefs.length >= 2);
+assert.ok(marketplacePrototypeSpec.sourceContext.mindMapRefs.length >= 2);
+assert.ok(marketplacePrototypeSpec.sourceContext.taskListRefs.length >= 2);
+assert.ok(marketplacePrototypeSpec.sourceContext.userFlowRefs.length >= 2);
+assert.equal(marketplacePrototypeSpec.screens.some((screen) => screen.layout === "scope-board"), false);
+assert.ok(marketplacePrototypeSpec.media.images.length >= 6);
+assert.ok(marketplacePrototypeSpec.media.images.every((image) => image.url.startsWith("https://images.unsplash.com/")));
+assert.deepEqual(findUnreachablePrototypeScreens(marketplacePrototypeSpec.screens), []);
+assert.ok(marketplacePrototypeSpec.flows.every((flow) => flow.screenIds.includes(flow.entryScreenId)));
 assert.equal(
   new Set(marketplacePrototypeSpec.navigation.flatMap((group) => group.screenIds)).size,
   marketplacePrototypeSpec.screens.length,
 );
 const marketplacePrototypeHtml = renderAppPrototypeHtml(marketplacePrototypeSpec);
+const marketplaceCatalogScreen = marketplacePrototypeSpec.screens.find((screen) => screen.id === "catalog");
+const marketplaceOtpScreen = marketplacePrototypeSpec.screens.find((screen) => screen.id === "login_otp");
+const marketplaceHomeScreen = marketplacePrototypeSpec.screens.find((screen) => screen.id === "home");
+const marketplaceProductScreen = marketplacePrototypeSpec.screens.find((screen) => screen.id === "product");
+const marketplaceCartScreen = marketplacePrototypeSpec.screens.find((screen) => screen.id === "cart");
+const marketplaceTrackingScreen = marketplacePrototypeSpec.screens.find((screen) => screen.id === "tracking");
+const marketplaceSellerWorkspaceScreen = marketplacePrototypeSpec.screens.find((screen) => screen.id === "seller_workspace");
+const marketplaceFavoritesScreen = marketplacePrototypeSpec.screens.find((screen) => screen.id === "favorites");
+const marketplaceProfileScreen = marketplacePrototypeSpec.screens.find((screen) => screen.id === "profile");
+assert.equal(marketplaceHomeScreen.layout, "storefront-home");
+assert.equal(marketplaceCatalogScreen.layout, "commerce-catalog");
+assert.equal(marketplaceProductScreen.layout, "commerce-product");
+assert.equal(marketplaceCartScreen.layout, "commerce-cart");
+assert.ok(marketplaceHomeScreen.content.items.every((item) => !item.status));
+assert.ok(marketplaceCatalogScreen.content.items.every((item) => !item.status));
+assert.ok(marketplaceProductScreen.content.items.every((item) => !item.status));
+assert.ok(marketplaceCatalogScreen.content.items.some((item) => item.action?.type === "navigate" && item.action.targetScreenId === "product"));
+assert.equal(marketplaceCatalogScreen.actions.some((action) => action.targetScreenId === "product"), false);
+assert.equal(marketplaceTrackingScreen.actions[0].label, "Следующий этап");
+assert.equal(marketplaceSellerWorkspaceScreen.title, "Кабинет продавца");
+assert.equal(marketplaceSellerWorkspaceScreen.content.title, "Кабинет продавца");
+assert.equal(marketplaceFavoritesScreen.layout, "commerce-catalog");
+assert.equal(marketplaceFavoritesScreen.title, "Избранное");
+assert.ok(marketplaceProfileScreen.content.items.some((item) => item.action?.targetScreenId === "favorites"));
+assert.equal(
+  marketplaceCatalogScreen.content.items.find((item) => item.id === "airbeat_pro")?.imageId,
+  marketplaceFavoritesScreen.content.items.find((item) => item.id === "airbeat_pro")?.imageId,
+);
+assert.equal(marketplaceOtpScreen.content.fields[0].type, "otp");
+assert.equal(marketplaceOtpScreen.content.fields[0].value, "4821");
 assert.ok(marketplacePrototypeHtml.includes("data-screen=\"catalog\""));
+assert.ok(marketplacePrototypeHtml.includes('class="product-card"'));
+assert.ok(marketplacePrototypeHtml.includes('data-row-target="product"'));
+assert.ok(marketplacePrototypeHtml.includes('data-favorite-id="airbeat_pro"'));
+assert.ok(marketplacePrototypeHtml.includes('class="favorites-shortcut"'));
+assert.ok(marketplacePrototypeHtml.includes("data-favorites-empty"));
+assert.ok(marketplacePrototypeHtml.includes("Добавлено в избранное"));
+assert.equal(marketplacePrototypeHtml.includes("Demo state changed"), false);
+assert.ok(marketplacePrototypeHtml.includes('placeholder="Поиск товаров"'));
+assert.equal(marketplacePrototypeHtml.includes(">Далее: Карточка</button>"), false);
+assert.equal(marketplacePrototypeHtml.includes("Доступные действия соответствуют роли в demo flow"), false);
+assert.equal(marketplacePrototypeHtml.includes("Из карты продукта"), false);
+assert.ok(marketplacePrototypeHtml.includes('class="otp-form"'));
+assert.equal(marketplacePrototypeHtml.includes('<div class="otp-boxes"><span>'), false);
 assert.ok(marketplacePrototypeHtml.includes("grid-template-columns:repeat(5,1fr)"));
-assert.ok(marketplacePrototypeHtml.includes("#4C3FA8 0%,#2A2570 55%,#221E5E 100%"));
+assert.ok(marketplacePrototypeHtml.includes("linear-gradient(135deg,var(--primary-glow) 0%,var(--primary) 55%,var(--primary-dark) 100%)"));
 assert.ok(marketplacePrototypeHtml.includes("class=\"ui-button primary\""));
+assert.ok(marketplacePrototypeHtml.includes("get('embed') === 'phone'"));
+assert.ok(marketplacePrototypeHtml.includes("html.kp-embed-phone .sidebar,html.kp-embed-phone .stage-copy{display:none!important}"));
+assert.ok(marketplacePrototypeHtml.includes("html.kp-embed-phone .phone{transform:scale(.88)}"));
+assert.ok(marketplacePrototypeHtml.includes("loading=\"lazy\" decoding=\"async\" data-prototype-image"));
+assert.ok(marketplacePrototypeHtml.includes('rel="preload" as="image"'));
+assert.ok(marketplacePrototypeHtml.includes("__kpWaitForPrototypeImages"));
+assert.ok(marketplacePrototypeHtml.includes("backButton.hidden = (data.entryScreenIds || [data.firstScreenId]).includes(id)"));
+assert.ok(marketplacePrototypeHtml.includes("img-src data: https://images.unsplash.com"));
+const prototypeCsp = buildPrototypeContentSecurityPolicy("'self' https://professio.ucode.co");
+assert.ok(prototypeCsp.includes("img-src data: https://images.unsplash.com"));
+assert.ok(prototypeCsp.includes("frame-ancestors 'self' https://professio.ucode.co"));
+assert.throws(() => buildPrototypeContentSecurityPolicy("'self'; img-src *"), /invalid CSP characters/);
 assert.equal(marketplacePrototypeHtml.includes("readonly"), false);
 assert.equal(/(?:file:\/\/|\/Users\/|\/tmp\/)/.test(marketplacePrototypeHtml), false);
+const uzumPrototypeTokens = appPrototypeThemeTokens({
+  themeTokens: {
+    decorativePrimary: "#7000FF",
+    decorativeSecondary: "#00FF66",
+    canvas: "#7000FF",
+  },
+});
+assert.deepEqual(uzumPrototypeTokens, { primary: "#7000FF", secondary: "#00FF66" });
+const uzumPrototypeHtml = renderAppPrototypeHtml({
+  ...marketplacePrototypeSpec,
+  theme: {
+    ...marketplacePrototypeSpec.theme,
+    ...uzumPrototypeTokens,
+  },
+});
+assert.ok(uzumPrototypeHtml.includes("--brand-primary:#7000FF;--brand-secondary:#00FF66;--brand-on-primary:#FFFFFF"));
+assert.ok(uzumPrototypeHtml.includes("--primary:var(--brand-primary)"));
+const texnomartPrototypeHtml = renderAppPrototypeHtml({
+  ...marketplacePrototypeSpec,
+  theme: {
+    ...marketplacePrototypeSpec.theme,
+    primary: "#FBC100",
+    secondary: "#000000",
+  },
+});
+assert.ok(texnomartPrototypeHtml.includes("--brand-primary:#FBC100;--brand-secondary:#000000;--brand-on-primary:#111827"));
+assert.ok(texnomartPrototypeHtml.includes(".photo-hero{position:relative;isolation:isolate;overflow:hidden;padding:0;color:#fff}"));
+assert.ok(texnomartPrototypeHtml.includes(".hero-copy{padding:54px 18px 18px;color:#fff;text-shadow:"));
+assert.ok(texnomartPrototypeHtml.includes(".detail-cover.has-photo{position:relative;min-height:218px;overflow:hidden;padding:0;color:#fff}"));
+assert.equal(screenshotProfile.accents.decorativePrimary, "#1A54FE");
+assert.equal(derivePrototypeExperienceFamily({
+  productFamily: "marketplace",
+  proposalModel: { title: "Платформа маркетплейса", scope: [{ feature: "Уведомления о заказах" }] },
+  semanticModel: { tasks: [{ label: "Отправить уведомление покупателю" }] },
+}), "commerce");
+
+const uyTopProposal = {
+  title: "UY TOP",
+  brief: {
+    projectName: "UY TOP",
+    type: "Mobile app",
+    locale: "ru-RU",
+    prompt: "Мобильное приложение недвижимости: каталог и карточки объектов, ИИ-чат с поиском вне платформы, чат с продавцом и звонок, избранное и личный кабинет",
+  },
+  scope: [
+    { id: "UY-SCOPE-1", epic: "Поиск недвижимости", feature: "Каталог объектов", detail: "Фильтры, районы и карточки квартир", inclusion: "in_scope" },
+    { id: "UY-SCOPE-2", epic: "ИИ-помощник", feature: "ИИ-чат", detail: "Поиск на платформе и во внешних источниках", inclusion: "in_scope" },
+    { id: "UY-SCOPE-3", epic: "Коммуникации", feature: "Чат с продавцом", detail: "Сообщения, звонок и запись на просмотр", inclusion: "in_scope" },
+    { id: "UY-SCOPE-4", epic: "Профиль", feature: "Избранное и личный кабинет", detail: "Сохранённые объекты и профиль", inclusion: "in_scope" },
+  ],
+};
+const uyTopSemanticModel = {
+  project: { name: "UY TOP", category: "Mobile app" },
+  actors: [{ id: "UY-ACTOR-BUYER", label: "Покупатель", type: "external_user" }],
+  scopeItems: uyTopProposal.scope.map((row, index) => ({ ...row, capabilityIds: [`UY-CAP-${index + 1}`] })),
+  capabilities: uyTopProposal.scope.map((row, index) => ({ id: `UY-CAP-${index + 1}`, label: row.feature, feature: row.feature, detail: row.detail })),
+  tasks: [{ id: "UY-TASK-1", label: "Найти объект" }, { id: "UY-TASK-2", label: "Связаться с продавцом" }],
+  processes: [{ id: "UY-FLOW-1", label: "Поиск и просмотр объекта", type: "primary", nodeRefs: ["tasks/UY-TASK-1", "tasks/UY-TASK-2"] }],
+  processRelations: [],
+  states: [],
+  integrations: [],
+};
+const uyTopPrototypeSpec = await buildAndValidateAppPrototypeSpec({
+  requestId: "KP-UY-TOP-PROTOTYPE",
+  publicId: "UyTopProto12",
+  locale: "ru-RU",
+  proposalModel: uyTopProposal,
+  semanticModel: uyTopSemanticModel,
+  env: {},
+});
+assert.equal(uyTopPrototypeSpec.project.type, "mobile-app");
+assert.equal(uyTopPrototypeSpec.sourceContext.experienceFamily, "real-estate");
+for (const screenId of ["login", "home", "property_catalog", "property_details", "ai_search", "seller_chat", "viewing_booking", "viewing_success", "favorites", "profile"]) {
+  assert.ok(uyTopPrototypeSpec.screens.some((screen) => screen.id === screenId), `UY TOP misses ${screenId}`);
+}
+assert.equal(uyTopPrototypeSpec.screens.find((screen) => screen.id === "property_details")?.title, "ЖК Tashkent City, 3-комн.");
+assert.deepEqual(findUnreachablePrototypeScreens(uyTopPrototypeSpec.screens), []);
+assert.ok(uyTopPrototypeSpec.sourceContext.imageKeywords.some((keyword) => /residential|apartment|homes/.test(keyword)));
+assert.ok(uyTopPrototypeSpec.screens.filter((screen) => screen.content.imageId).length >= 6);
+const uyTopHtml = renderAppPrototypeHtml(uyTopPrototypeSpec);
+assert.ok(uyTopHtml.includes("class=\"property-card\""));
+assert.ok(uyTopHtml.includes("class=\"chat-composer\""));
+assert.ok(uyTopHtml.includes("class=\"property-detail-photo\""));
+
+const unsplashCalls = [];
+const apiMedia = await resolveAppPrototypeMedia({
+  productFamily: "mobile-app",
+  experienceFamily: "real-estate",
+  semanticModel: uyTopSemanticModel,
+  proposalModel: uyTopProposal,
+  env: { UNSPLASH_ACCESS_KEY: "test-key" },
+  fetchImpl: async (url, options) => {
+    const requestNumber = unsplashCalls.length + 1;
+    unsplashCalls.push({ url: String(url), authorization: options.headers.Authorization });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        results: Array.from({ length: 8 }, (_, index) => ({
+          urls: { raw: `https://images.unsplash.com/photo-api-${requestNumber}-${index}` },
+          user: { name: `Photographer ${index + 1}` },
+        })),
+      }),
+    };
+  },
+});
+assert.equal(apiMedia.source, "unsplash_api");
+assert.equal(apiMedia.images.length, 12);
+assert.ok(unsplashCalls.length >= 3);
+assert.ok(unsplashCalls.every((call) => call.authorization === "Client-ID test-key" && call.url.includes("orientation=landscape")));
 
 const ecommerceDealPrompt = `Составь коммерческое предложение (КП) для клиента на основе данных сделки.
 Сделка: Сайфулло
@@ -956,6 +1142,7 @@ for (const [index, projectTypeCase] of explicitProjectTypeCases.entries()) {
   assert.equal(spec.screens.some((screen) => screen.id === projectTypeCase.forbidden), false, projectTypeCase.declaredType);
   assert.ok(spec.screens.every((screen) => screen.intent && screen.sourceRefs.length), projectTypeCase.declaredType);
   assert.ok(spec.screens.flatMap((screen) => screen.actions).every((action) => action.type), projectTypeCase.declaredType);
+  assert.deepEqual(findUnreachablePrototypeScreens(spec.screens), [], projectTypeCase.declaredType);
   assert.equal(
     new Set(spec.navigation.flatMap((group) => group.screenIds)).size,
     spec.screens.length,

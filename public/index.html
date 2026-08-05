@@ -151,7 +151,7 @@
 <body>
   <main>
     <h1>KP Generator API Test</h1>
-    <p class="lead">Динамические палитры по умолчанию выключены: любой домен получает палитру и фон Udevs со скриншота.</p>
+    <p class="lead">PDF сохраняет визуальную систему Udevs, а интерактивный прототип автоматически получает палитру сайта из промпта.</p>
     <form id="generator-form">
       <label>
         Промпт
@@ -168,13 +168,6 @@
           <option value="uz-Latn">O‘zbekcha</option>
           <option value="en">English</option>
         </select>
-      </label>
-      <label class="toggle-field">
-        Динамические палитры сайта
-        <span class="toggle-row">
-          <input id="dynamic-palettes" type="checkbox">
-          <span id="dynamic-palettes-label">Off — использовать стиль Udevs</span>
-        </span>
       </label>
       <button id="submit" type="submit">Сгенерировать</button>
     </form>
@@ -212,8 +205,6 @@
     const palette = document.querySelector("#palette");
     const resultTitle = document.querySelector("#result-title");
     const resultSource = document.querySelector("#result-source");
-    const dynamicPalettes = document.querySelector("#dynamic-palettes");
-    const dynamicPalettesLabel = document.querySelector("#dynamic-palettes-label");
     const pdfTab = document.querySelector("#pdf-tab");
     const prototypeTab = document.querySelector("#prototype-tab");
     const prototypeOpen = document.querySelector("#prototype-open");
@@ -222,12 +213,6 @@
     let lastPrototypeHtml = "";
     let lastPdfDownloadUrl = "";
     let lastPdfTitle = "proposal";
-
-    dynamicPalettes.addEventListener("change", () => {
-      dynamicPalettesLabel.textContent = dynamicPalettes.checked
-        ? "On — брать палитру сайта"
-        : "Off — использовать стиль Udevs";
-    });
 
     pdfTab.addEventListener("click", () => switchPreview("pdf"));
     prototypeTab.addEventListener("click", () => switchPreview("prototype"));
@@ -260,7 +245,6 @@
           body: JSON.stringify({
             prompt: document.querySelector("#prompt").value.trim(),
             locale: document.querySelector("#locale").value,
-            dynamicColorPalettesEnabled: dynamicPalettes.checked,
             prototypePublicBaseUrl: `${window.location.origin}/p`,
           }),
         });
@@ -270,7 +254,8 @@
         }
         resultTitle.textContent = payload.title || payload.requestId;
         lastPdfTitle = payload.title || payload.requestId || "proposal";
-        const source = payload.theme?.source;
+        const prototypeTheme = payload.prototype?.theme || null;
+        const source = prototypeTheme?.source;
         const selection = source?.paletteSelection;
         const selectionLabel = source?.kind === "udevs_static"
           ? " · fixed Udevs screenshot system"
@@ -280,9 +265,9 @@
             ? ` · deterministic (${selection.reason || "AI fallback"})`
             : " · deterministic";
         resultSource.textContent = source
-          ? `Палитра: ${source.kind} · ${source.reference || payload.theme.referenceUrl || ""}${selectionLabel}`
-          : "Источник палитры не указан";
-        renderPalette(payload.theme?.palette || {});
+          ? `Палитра прототипа: ${source.kind} · ${source.reference || prototypeTheme.referenceUrl || ""}${selectionLabel}`
+          : "Палитра прототипа: визуальная система КП";
+        renderPalette(prototypeTheme?.palette || {});
         lastPdfHtml = payload.html || "";
         lastPrototypeHtml = "";
         lastPdfDownloadUrl = payload.downloadUrl || "";
