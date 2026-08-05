@@ -4,7 +4,7 @@
   "title": "KP AppPrototypeSpec v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "requestId", "publicId", "locale", "project", "theme", "navigation", "screens"],
+  "required": ["schemaVersion", "requestId", "publicId", "locale", "project", "sourceContext", "media", "theme", "navigation", "screens"],
   "properties": {
     "schemaVersion": { "const": "2.0" },
     "requestId": { "type": "string", "minLength": 1 },
@@ -18,6 +18,42 @@
         "name": { "type": "string", "minLength": 1, "maxLength": 120 },
         "type": { "type": "string", "minLength": 1, "maxLength": 80 },
         "description": { "type": "string", "minLength": 1, "maxLength": 260 }
+      }
+    },
+    "sourceContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectType", "experienceFamily", "functionalityRefs", "mindMapRefs", "taskListRefs", "userFlowRefs", "imageKeywords", "coverage"],
+      "properties": {
+        "projectType": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "experienceFamily": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "functionalityRefs": { "$ref": "#/$defs/sourceRefs" },
+        "mindMapRefs": { "$ref": "#/$defs/sourceRefs" },
+        "taskListRefs": { "$ref": "#/$defs/sourceRefs" },
+        "userFlowRefs": { "$ref": "#/$defs/sourceRefs" },
+        "imageKeywords": { "type": "array", "minItems": 2, "maxItems": 4, "items": { "type": "string", "minLength": 1, "maxLength": 120 } },
+        "coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["functionality", "mindMap", "taskList", "userFlows"],
+          "properties": {
+            "functionality": { "type": "integer", "minimum": 0 },
+            "mindMap": { "type": "integer", "minimum": 0 },
+            "taskList": { "type": "integer", "minimum": 0 },
+            "userFlows": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "media": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "keywords", "images", "warnings"],
+      "properties": {
+        "source": { "enum": ["curated_unsplash", "unsplash_api"] },
+        "keywords": { "type": "array", "minItems": 2, "maxItems": 4, "items": { "type": "string", "minLength": 1, "maxLength": 120 } },
+        "images": { "type": "array", "minItems": 6, "maxItems": 12, "items": { "$ref": "#/$defs/mediaImage" } },
+        "warnings": { "type": "array", "maxItems": 4, "items": { "type": "string", "maxLength": 200 } }
       }
     },
     "theme": {
@@ -69,6 +105,19 @@
   "$defs": {
     "hex": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
     "id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{1,63}$" },
+    "sourceRefs": { "type": "array", "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 120 } },
+    "mediaImage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "url", "alt", "role", "photographer"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "url": { "type": "string", "format": "uri", "pattern": "^https://images\\.unsplash\\.com/" },
+        "alt": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "role": { "enum": ["hero", "card", "thumb"] },
+        "photographer": { "type": "string", "maxLength": 80 }
+      }
+    },
     "screenType": {
       "enum": ["onboarding", "login", "dashboard", "list", "product_grid", "details", "form", "stepper", "checkout", "payment", "tracking", "history", "profile", "analytics", "settings", "success", "empty_state", "error_state", "confirmation"]
     },
@@ -129,6 +178,7 @@
         "title": { "type": "string", "minLength": 1, "maxLength": 80 },
         "detail": { "type": "string", "maxLength": 160 },
         "status": { "type": "string", "maxLength": 32 },
+        "imageId": { "$ref": "#/$defs/id" },
         "action": { "$ref": "#/$defs/action" }
       }
     },
@@ -152,6 +202,7 @@
       "additionalProperties": true,
       "properties": {
         "layout": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "imageId": { "$ref": "#/$defs/id" },
         "metrics": {
           "type": "array",
           "maxItems": 6,
@@ -203,12 +254,13 @@
     "flow": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "title", "entryScreenId", "steps", "sourceRefs"],
+      "required": ["id", "title", "entryScreenId", "screenIds", "steps", "sourceRefs"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "title": { "type": "string", "minLength": 1, "maxLength": 100 },
         "actorRoleId": { "type": "string", "minLength": 1, "maxLength": 80 },
         "entryScreenId": { "$ref": "#/$defs/id" },
+        "screenIds": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/id" } },
         "successScreenIds": { "type": "array", "items": { "$ref": "#/$defs/id" } },
         "errorScreenIds": { "type": "array", "items": { "$ref": "#/$defs/id" } },
         "steps": { "type": "array", "maxItems": 12, "items": { "type": "object", "additionalProperties": true } },

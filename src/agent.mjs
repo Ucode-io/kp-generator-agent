@@ -36,6 +36,7 @@ export function agentConfig(env = process.env) {
     KP_REFERENCE_VISION_PROVIDER: env.KP_REFERENCE_VISION_PROVIDER || "openai",
     KP_REFERENCE_VISION_MODEL: env.KP_REFERENCE_VISION_MODEL || "gpt-4.1-mini",
     KP_DYNAMIC_COLOR_PALETTES_ENABLED: env.KP_DYNAMIC_COLOR_PALETTES_ENABLED || "0",
+    KP_PROTOTYPE_DOMAIN_PALETTES_ENABLED: env.KP_PROTOTYPE_DOMAIN_PALETTES_ENABLED || "1",
     KP_REFERENCE_PALETTE_AI_ENABLED: env.KP_REFERENCE_PALETTE_AI_ENABLED || "1",
     KP_REFERENCE_PALETTE_AI_PROVIDER: env.KP_REFERENCE_PALETTE_AI_PROVIDER || "auto",
     KP_REFERENCE_PALETTE_AI_MODEL: env.KP_REFERENCE_PALETTE_AI_MODEL || "",
@@ -174,6 +175,7 @@ export async function generateProposal(input = {}, hooks = {}) {
     qaStatus: null,
     screenCount: null,
     rendererVersion: null,
+    theme: null,
   };
   return {
     ok: true,

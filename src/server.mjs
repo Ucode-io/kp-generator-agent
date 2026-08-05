@@ -5,6 +5,7 @@ import path from "node:path";
 import { generateProposal } from "./agent.mjs";
 import { checkBearerAuthorization, normalizeConfiguredApiKey } from "./auth.mjs";
 import { AGENT_ROOT } from "./root.mjs";
+import { buildPrototypeContentSecurityPolicy } from "./prototype_security.mjs";
 import { resolvePublishedPrototype } from "../scripts/kp_app_prototype_publisher.mjs";
 
 const host = process.env.KP_AGENT_HOST || "127.0.0.1";
@@ -12,7 +13,7 @@ const port = Number(process.env.KP_AGENT_PORT || 8787);
 const maxBodyBytes = Number(process.env.KP_AGENT_MAX_BODY_BYTES || 25 * 1024 * 1024);
 const apiKey = normalizeConfiguredApiKey(process.env.KP_AGENT_API_KEY);
 const outputRoot = path.resolve(process.env.KP_AGENT_OUTPUT_ROOT || path.join(AGENT_ROOT, "reports", "agent-kp"));
-const prototypeFrameAncestors = normalizeFrameAncestors(process.env.KP_PROTOTYPE_FRAME_ANCESTORS);
+const prototypeContentSecurityPolicy = buildPrototypeContentSecurityPolicy(process.env.KP_PROTOTYPE_FRAME_ANCESTORS);
 let queue = Promise.resolve();
 const generatedPdfArtifacts = new Map();
 const frontendPath = new URL("../public/index.html", import.meta.url);
@@ -36,7 +37,7 @@ const server = http.createServer(async (request, response) => {
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
-        "content-security-policy": `default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors ${prototypeFrameAncestors}`,
+        "content-security-policy": prototypeContentSecurityPolicy,
         "x-content-type-options": "nosniff",
         "referrer-policy": "no-referrer",
         "x-robots-tag": "noindex, nofollow, noarchive",
@@ -158,12 +159,4 @@ function contentDispositionFilename(value) {
 
 function encodeRFC5987Value(value) {
   return encodeURIComponent(value).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
-}
-
-function normalizeFrameAncestors(value) {
-  const normalized = String(value || "'self' http://127.0.0.1:* http://localhost:* https://professio.ucode.co").trim();
-  if (!normalized || /[\r\n;]/.test(normalized)) {
-    throw new Error("KP_PROTOTYPE_FRAME_ANCESTORS contains invalid CSP characters");
-  }
-  return normalized;
 }

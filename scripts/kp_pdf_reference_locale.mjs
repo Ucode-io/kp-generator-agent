@@ -1657,6 +1657,53 @@ export function localizeRendererText(value, locale) {
   return text;
 }
 
+export function normalizeClientTerminology(value, locale) {
+  let text = String(value ?? "");
+  const normalized = normalizeRendererLocale(locale);
+  const replacements = normalized === "uz-Latn"
+    ? [
+        [/\bMVP\s+scope\b/gi, "boshlang‘ich mahsulot tarkibi"],
+        [/\bsales dashboards?\b/gi, "savdo boshqaruv panellari"],
+        [/\badmin panel navigation\b/gi, "administrator paneli navigatsiyasi"],
+        [/\breporting dashboard\b/gi, "hisobotlar boshqaruv paneli"],
+        [/\bscope\b/gi, "tarkib"],
+        [/\bdiscovery\b/gi, "talablarni aniqlash"],
+        [/\broadmap\b/gi, "yo‘l xaritasi"],
+        [/\bcheckout\b/gi, "buyurtmani rasmiylashtirish"],
+        [/\breconciliation\b/gi, "hisob-kitoblarni solishtirish"],
+        [/\bbenchmark\b/gi, "taqqoslash namunasi"],
+        [/\bmobile[- ]first\b/gi, "mobilga yo‘naltirilgan"],
+        [/\bmobil[- ]first\b/gi, "mobilga yo‘naltirilgan"],
+        [/\bpush(?:-based)?\b/gi, "tezkor bildirishnomalar"],
+        [/\bdashboards?\b/gi, "boshqaruv panellari"],
+        [/\badmin\b/gi, "boshqaruv"],
+        [/\bAI\b/g, "sun’iy intellekt"],
+        [/\bMarketplace\b/g, "Marketpleys"],
+        [/\bMVP\b/g, "boshlang‘ich mahsulot"],
+      ]
+    : normalized === "ru-RU"
+      ? [
+          [/\bMVP\s+scope\b/gi, "состав первого выпуска"],
+          [/\bsales dashboards?\b/gi, "панели продаж"],
+          [/\badmin panel navigation\b/gi, "навигация административной панели"],
+          [/\breporting dashboard\b/gi, "панель отчётности"],
+          [/\bscope\b/gi, "состав"],
+          [/\bdiscovery\b/gi, "предпроектный анализ"],
+          [/\broadmap\b/gi, "дорожная карта"],
+          [/\bcheckout\b/gi, "оформление заказа"],
+          [/\breconciliation\b/gi, "сверка расчётов"],
+          [/\bbenchmark\b/gi, "аналог"],
+          [/\bmobile[- ]first\b/gi, "ориентированный на мобильные устройства"],
+          [/\bpush(?:-based)?\b/gi, "уведомления"],
+          [/\bdashboards?\b/gi, "панели управления"],
+          [/\badmin\b/gi, "администрирование"],
+          [/\bMVP\b/g, "первый выпуск"],
+        ]
+      : [];
+  for (const [pattern, replacement] of replacements) text = text.replace(pattern, replacement);
+  return text;
+}
+
 const LOCALIZED_LIST_FRAGMENT_CACHE = new Map();
 
 function localizedListFragment(text, locale, dictionary, clientDictionary) {

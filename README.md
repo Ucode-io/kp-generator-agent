@@ -35,19 +35,27 @@ deployment, an Anthropic `sk-ant-*` key may remain in this historical variable;
 the palette classifier detects it automatically. `ANTHROPIC_API_KEY` is also
 supported and takes precedence for Anthropic.
 
-Dynamic website palettes are disabled by default:
+Dynamic website palettes remain disabled for PDF proposals:
 
 ```env
 KP_DYNAMIC_COLOR_PALETTES_ENABLED=0
 ```
 
-In this mode every proposal uses the fixed light Udevs palette and the
+In this mode every PDF uses the fixed light Udevs palette and the
 screenshot-derived decorative background system, regardless of the domain in
-the prompt. Set the value to `1` or `on` to restore website palette detection.
-The HTTP request may override the environment for one generation with
-`"dynamicColorPalettesEnabled": true` or `false`.
+the prompt.
 
-When dynamic palettes are enabled, website colors are extracted
+Interactive prototypes use the website palette independently and by default:
+
+```env
+KP_PROTOTYPE_DOMAIN_PALETTES_ENABLED=1
+```
+
+When a safe public URL is present in the prompt, its primary and secondary
+brand colors are applied to the prototype only. Set this value to `0` only to
+disable prototype domain-palette extraction. The PDF palette is unaffected.
+
+For prototype palettes, website colors are extracted
 deterministically first; when the live page is readable, the model may only
 choose from those observed colors. If anti-bot protection prevents a live
 snapshot, the model can return a provisional palette from the public
@@ -91,9 +99,8 @@ npm start
 ```
 
 Open `http://127.0.0.1:8787/` for the single-page API test frontend. It sends
-the prompt to `/v1/proposals`, exposes an Off/On control for dynamic website
-palettes, shows the active palette, and renders the returned proposal HTML in
-an iframe.
+the prompt to `/v1/proposals`, shows the prototype domain palette, and renders
+the returned proposal HTML in an iframe.
 
 Generated proposals also create an interactive app prototype. The PDF footer
 links to the prototype URL, and the local server can serve published prototype
@@ -102,6 +109,25 @@ HTML at:
 ```text
 GET /p/:publicId/
 ```
+
+The prototype is planned from the same project type, functional scope, product
+mind map, task inventory, roles, and user flows that are used in the PDF. A
+validated in-phone action graph makes every generated screen reachable from
+the start screen without relying on the desktop sidebar. A
+separate experience classifier keeps the delivery type (CRM, ERP, SaaS,
+mobile, and so on) while adapting screens to the subject area, such as real
+estate, logistics, healthcare, commerce, or education.
+
+Each prototype includes a curated thematic Unsplash photo pool. To fetch a new
+project-specific pool during generation, configure an Unsplash access key:
+
+```env
+UNSPLASH_ACCESS_KEY=...
+```
+
+`UNSPLASH_ACCESS_KEY` is accepted as a compatibility alias. If search is
+unavailable, generation continues with the built-in thematic pool; image
+elements retain an in-app gradient fallback.
 
 Set `KP_PROTOTYPE_PUBLIC_BASE_URL` to the production HTTPS base URL used in PDF
 links. If omitted, links use `https://kp.udevs.io/p/`.
@@ -113,6 +139,10 @@ viewer is hosted on another origin:
 ```bash
 KP_PROTOTYPE_FRAME_ANCESTORS="'self' https://professio.example.com" npm start
 ```
+
+The public prototype response CSP explicitly allows the curated/API image CDN
+at `https://images.unsplash.com`; keep that source when overriding proxy
+security headers.
 
 Health:
 
@@ -149,27 +179,23 @@ Generate with an uploaded base64 reference:
 
 If `KP_AGENT_API_KEY` is set, send `Authorization: Bearer <key>`.
 
-## Website palette behavior
+## Prototype website palette behavior
 
 - Every safe public URL in the prompt is treated as palette evidence.
 - The agent reads live CSS variables, `theme-color`, visible backgrounds,
   buttons, brand/logo SVG colors, and promo/status accents.
-- The three strongest role-aware colors are passed to the renderer as
-  `primary`, `secondary`, and `accent`; page decorations and gradients use the
-  same tokens.
-- Backgrounds and decorative elements retain the selected brand colors. When
-  that pair is not readable as foreground/background, the text color is
-  dynamically lightened or darkened toward an accessible variant while
-  preserving the original brand hue whenever possible; neutral black/white is
-  used only when no hue-preserving variant clears the contrast gate.
-- Odd pages use `primary` as the background and `secondary` for content. Even
-  pages use a white background and `primary` for content; primary-colored text
-  is darkened dynamically when the original token is not readable on white.
+- The two strongest role-aware colors are passed to the prototype renderer as
+  `primary` and `secondary`; controls, accents, tints, and gradients use these
+  tokens.
+- Backgrounds and decorative elements retain the selected brand colors. Text
+  placed on the primary color automatically switches between a dark and light
+  foreground for contrast.
 - There is no domain-to-color lookup table. If the website cannot be loaded,
   the configured model may supply a provisional `ai_domain_fallback` palette.
   If that result is unavailable or below the confidence threshold, the Udevs
   palette is used. A prompt without a website always uses Udevs.
-- The API response exposes the applied values under `theme.palette`.
+- PDF output keeps the Udevs visual system. The API response exposes the
+  prototype values and source under `prototype.theme`.
 
 ## Response
 
@@ -184,7 +210,13 @@ If `KP_AGENT_API_KEY` is set, send `Authorization: Bearer <key>`.
     "path": "/.../final/prototype/index.html",
     "qaStatus": "PASS",
     "screenCount": 11,
-    "rendererVersion": "app-prototype-v1"
+    "rendererVersion": "app-prototype-v5",
+    "theme": {
+      "source": { "kind": "client_site_url", "reference": "https://texnomart.uz" },
+      "referenceUrl": "https://texnomart.uz",
+      "palette": { "primary": "#FBC100", "secondary": "#333333" },
+      "warnings": []
+    }
   },
   "qaStatus": "PASS",
   "pageCount": 9,

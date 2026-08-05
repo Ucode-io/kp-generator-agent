@@ -12,6 +12,7 @@
     "generate": "node bin/kp-agent.mjs",
     "sync:engine": "node tools/sync-engine.mjs",
     "test": "node test/unit.mjs",
+    "test:prototype-domains": "node test/prototype-domains.mjs",
     "test:smoke": "node test/smoke.mjs"
   },
   "engines": {

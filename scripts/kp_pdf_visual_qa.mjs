@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { localizeRendererText, resolveProposalRendererLocale } from "./kp_pdf_reference_locale.mjs";
+import { localizeRendererText, normalizeClientTerminology, resolveProposalRendererLocale } from "./kp_pdf_reference_locale.mjs";
 import { buildProductDeliveryInventory, decomposeProductMapDetail } from "./kp_product_map_model.mjs";
 
 const DEFAULT_DPI = 120;
@@ -97,7 +97,7 @@ export function buildPdfContentExpectations({
   const lock = commercialLock && typeof commercialLock === "object" ? commercialLock : null;
   const rendererLocale = resolveProposalRendererLocale(proposalModel || {});
   const localizedExpectationText = (value, maxLength) => safeExpectationText(
-    localizeRendererText(value, rendererLocale),
+    normalizeClientTerminology(localizeRendererText(value, rendererLocale), rendererLocale),
     maxLength,
   );
   const currency = String(lock?.currency || proposalModel?.pricing?.currency || "USD").toUpperCase();
