@@ -13,8 +13,13 @@ const maxBodyBytes = Number(process.env.KP_AGENT_MAX_BODY_BYTES || 25 * 1024 * 1
 const apiKey = normalizeConfiguredApiKey(process.env.KP_AGENT_API_KEY);
 const outputRoot = path.resolve(process.env.KP_AGENT_OUTPUT_ROOT || path.join(AGENT_ROOT, "reports", "agent-kp"));
 const prototypeFrameAncestors = normalizeFrameAncestors(process.env.KP_PROTOTYPE_FRAME_ANCESTORS);
+const artifactRetentionMs = Number(process.env.KP_AGENT_ARTIFACT_RETENTION_MS || 2 * 60 * 60 * 1000);
 let queue = Promise.resolve();
 const generatedPdfArtifacts = new Map();
+// Holds the rendered HTML string itself (already in memory from generation), not a
+// path — unlike the PDF map. Swept below since, unlike file paths, each entry costs
+// real memory (a full KP document, ~100-200KB).
+const generatedHtmlArtifacts = new Map();
 const frontendPath = new URL("../public/index.html", import.meta.url);
 
 const server = http.createServer(async (request, response) => {
@@ -58,6 +63,17 @@ const server = http.createServer(async (request, response) => {
       }
       return serveGeneratedPdf(response, pdfMatch[1]);
     }
+    const htmlMatch = parsedUrl.pathname.match(/^\/v1\/proposals\/(KP-[A-Za-z0-9_-]+)\/html$/);
+    if (request.method === "GET" && htmlMatch) {
+      const authorization = checkBearerAuthorization(apiKey, request.headers.authorization);
+      if (!authorization.ok) {
+        const message = authorization.reason === "required"
+          ? "Bearer token is required. Use KP_AGENT_API_KEY from the service environment."
+          : "Bearer token is invalid. Use KP_AGENT_API_KEY, not an application user JWT.";
+        return json(response, 401, { ok: false, error: { code: "UNAUTHORIZED", message } });
+      }
+      return serveGeneratedHtml(response, htmlMatch[1]);
+    }
     if (request.method !== "POST" || request.url !== "/v1/proposals") {
       return json(response, 404, { ok: false, error: { code: "NOT_FOUND", message: "Route not found" } });
     }
@@ -76,7 +92,8 @@ const server = http.createServer(async (request, response) => {
     queue = resultPromise.then(() => undefined, () => undefined);
     const result = await resultPromise;
     const downloadUrl = registerGeneratedPdf(result);
-    return json(response, 200, { ...result, downloadUrl });
+    const htmlDownloadUrl = registerGeneratedHtml(result);
+    return json(response, 200, { ...result, downloadUrl, htmlDownloadUrl });
   } catch (error) {
     const status = Number(error.httpStatus || (error instanceof SyntaxError ? 400 : 500));
     return json(response, status, {
@@ -89,6 +106,13 @@ const server = http.createServer(async (request, response) => {
 server.listen(port, host, () => {
   console.log(`KP Generator Agent listening on http://${host}:${port}`);
 });
+
+setInterval(() => {
+  const cutoff = Date.now() - artifactRetentionMs;
+  for (const [requestId, entry] of generatedHtmlArtifacts) {
+    if (entry.createdAt < cutoff) generatedHtmlArtifacts.delete(requestId);
+  }
+}, Math.min(artifactRetentionMs, 15 * 60 * 1000)).unref();
 
 function readBody(request, limit) {
   return new Promise((resolve, reject) => {
@@ -143,6 +167,31 @@ function registerGeneratedPdf(result = {}) {
     title: String(result.title || requestId).trim().slice(0, 120) || requestId,
   });
   return `/v1/proposals/${encodeURIComponent(requestId)}/pdf`;
+}
+
+async function serveGeneratedHtml(response, requestId) {
+  const artifact = generatedHtmlArtifacts.get(requestId);
+  if (!artifact) {
+    return json(response, 404, { ok: false, error: { code: "HTML_ARTIFACT_NOT_FOUND", message: "Generated HTML artifact is not available in this server process" } });
+  }
+  response.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+  });
+  response.end(artifact.html);
+}
+
+function registerGeneratedHtml(result = {}) {
+  const requestId = String(result.requestId || "");
+  const html = String(result.html || "");
+  if (!/^KP-[A-Za-z0-9_-]+$/.test(requestId) || !html) return null;
+  generatedHtmlArtifacts.set(requestId, {
+    html,
+    title: String(result.title || requestId).trim().slice(0, 120) || requestId,
+    createdAt: Date.now(),
+  });
+  return `/v1/proposals/${encodeURIComponent(requestId)}/html`;
 }
 
 function contentDispositionFilename(value) {
